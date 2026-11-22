@@ -8,18 +8,20 @@ The model corrects two L1 bar-data artifacts of the Nautilus SimulatedExchange:
    With next-bar execution (``NextBarExecutionModule``) that is the bar after the signal,
    emulating a market-on-open order (unsupported by the sim with bar data).
 
-These tests exercise the pure static helpers without the Nautilus engine.
+These tests exercise the decision helpers without running the Nautilus engine.
 """
 
 from types import SimpleNamespace
 
 import pytest
+from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.model.enums import OrderSide, OrderType
+from nautilus_trader.model.identifiers import InstrumentId
 
-from src.core.fill_models import MOO_EXIT_TAG, GapAwareFillModel
+from src.core.fill_models import MOO_EXIT_TAG, GapAwareFillModel, bind_fill_model
 
 
-@pytest.mark.unit
+@pytest.mark.component
 class TestStopFillPrice:
     """Stop fills at the trigger intrabar, but at the open on a gap through."""
 
@@ -41,7 +43,7 @@ class TestStopFillPrice:
         assert GapAwareFillModel._stop_fill_price(OrderSide.BUY, 105.0, 100.0) == 105.0
 
 
-@pytest.mark.unit
+@pytest.mark.component
 class TestBarOpenLookup:
     """Current-bar and next-bar open lookups against sorted (ts, open) series."""
 
@@ -58,7 +60,7 @@ class TestBarOpenLookup:
         assert GapAwareFillModel._open_at([], [], 100) is None
 
 
-@pytest.mark.unit
+@pytest.mark.component
 def test_moo_exit_tag_is_stable():
     """Strategies tag exit orders with this constant; it must not drift."""
     assert MOO_EXIT_TAG == "MOO_EXIT"
@@ -72,10 +74,16 @@ class _Clock:
         return self.ts
 
 
-def _bar(ts: int, open_: float) -> SimpleNamespace:
-    bar_type = SimpleNamespace(instrument_id="AAPL.NASDAQ")
+def _bar(
+    ts: int, open_: float, instrument: str = "AAPL.NASDAQ", ts_event: int | None = None
+) -> SimpleNamespace:
+    """A duck-typed bar; the engine clock reads ``ts_init``, which may differ from ts_event."""
+    bar_type = SimpleNamespace(instrument_id=InstrumentId.from_str(instrument))
     return SimpleNamespace(
-        bar_type=bar_type, ts_event=ts, open=SimpleNamespace(as_double=lambda: open_)
+        bar_type=bar_type,
+        ts_init=ts,
+        ts_event=ts if ts_event is None else ts_event,
+        open=SimpleNamespace(as_double=lambda: open_),
     )
 
 
@@ -83,7 +91,7 @@ def _market(tags: list[str] | None) -> SimpleNamespace:
     return SimpleNamespace(order_type=OrderType.MARKET, tags=tags, instrument_id="AAPL.NASDAQ")
 
 
-@pytest.mark.unit
+@pytest.mark.component
 class TestMooExitPrice:
     """An MOO exit fills at the open of the bar being processed when it executes.
 
@@ -105,6 +113,46 @@ class TestMooExitPrice:
     def test_no_bar_at_the_clock_uses_the_default_fill(self):
         assert self._model(250)._fill_price_for(_market([MOO_EXIT_TAG])) is None
 
+    def test_bars_are_keyed_by_ts_init_the_clock_reads(self):
+        # The engine clock is set to each bar's ts_init; a ts_event lookup would miss.
+        model = GapAwareFillModel()
+        model.register_clock(_Clock(200))
+        model.register_bars([_bar(100, 10.0, ts_event=99), _bar(200, 11.0, ts_event=199)])
+        assert model._fill_price_for(_market([MOO_EXIT_TAG])) == 11.0
+
     def test_an_untagged_market_order_uses_the_default_fill(self):
         assert self._model(200)._fill_price_for(_market(None)) is None
         assert self._model(200)._fill_price_for(_market(["OTHER"])) is None
+
+
+@pytest.mark.component
+class TestBindFillModel:
+    """Next-bar execution releases a whole venue's commands on any of its bars.
+
+    So every instrument on one gap-aware venue must have bars at the same timestamps,
+    or an MOO exit would be released, and filled at a stale price, on another
+    instrument's bar.
+    """
+
+    @staticmethod
+    def _engine() -> SimpleNamespace:
+        return SimpleNamespace(kernel=SimpleNamespace(clock=_Clock(0)))
+
+    def test_aligned_series_on_one_venue_are_accepted(self):
+        bars = [_bar(ts, 1.0, sym) for ts in (100, 200) for sym in ("AAPL.NASDAQ", "MSFT.NASDAQ")]
+        model = GapAwareFillModel()
+        bind_fill_model(model, self._engine(), bars)
+        assert model._bar_ts["MSFT.NASDAQ"] == [100, 200]
+
+    def test_misaligned_series_on_one_venue_are_rejected(self):
+        bars = [_bar(100, 1.0), _bar(200, 1.0), _bar(100, 1.0, "MSFT.NASDAQ")]
+        with pytest.raises(ValueError, match="same timestamps"):
+            bind_fill_model(GapAwareFillModel(), self._engine(), bars)
+
+    def test_series_on_different_venues_may_differ(self):
+        bars = [_bar(100, 1.0), _bar(200, 1.0), _bar(150, 1.0, "ES.CME")]
+        bind_fill_model(GapAwareFillModel(), self._engine(), bars)
+
+    def test_a_default_model_is_not_checked(self):
+        bars = [_bar(100, 1.0), _bar(200, 1.0), _bar(100, 1.0, "MSFT.NASDAQ")]
+        bind_fill_model(FillModel(), self._engine(), bars)

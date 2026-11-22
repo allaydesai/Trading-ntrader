@@ -15,7 +15,7 @@ _SETTINGS = SimpleNamespace(
 )
 
 
-@pytest.mark.unit
+@pytest.mark.component
 class TestFromSettings:
     """``from_settings`` carries every cost term, scaled together."""
 

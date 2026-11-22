@@ -39,6 +39,10 @@ engine, and the strategy lives in a pinned submodule, so the fix has to be at th
 - An MOO exit signalled on the final bar has no next bar and does not fill; the position is
   reported open, as for any order still working at the end of a run.
 - A timer firing between two bars would also release in-flight commands; Riptide sets none.
+- The module releases a whole venue's commands on any of its bars, so every instrument on a
+  gap-aware venue must have bars at the same timestamps; `bind_fill_model` rejects a run
+  whose series differ (review round 1). Bars are keyed by `ts_init`, the time the engine
+  clock is set to.
 
 ## Futures and the slippage drag
 

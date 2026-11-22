@@ -158,6 +158,7 @@ def test_riptide_exit_paths(exit_path):
 
     # Every path yields exactly one closed round trip (entry + exit fills).
     assert len(positions) == 1
+    assert engine.cache.positions_open() == []
     assert len(fills) == 2
     assert {"BUY", "SELL"} == set(fills["side"])
 

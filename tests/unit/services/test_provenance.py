@@ -166,13 +166,15 @@ class TestCostMultiplier:
 class TestFillModel:
     """A non-default fill model is part of a run's identity; the default changes nothing."""
 
-    def test_the_default_model_leaves_every_existing_hash_unchanged(self):
-        assert compute_config_hash(_request(fill_model="default")) == compute_config_hash(
-            _request()
-        )
-        assert compute_candidate_hash(_request(fill_model="default")) == compute_candidate_hash(
-            _request()
-        )
+    # Digests of this fixture under the implementation before `fill_model` existed (main at
+    # 38f7985): a default run must keep naming the same run, implicitly or explicitly.
+    CONFIG_HASH = "41d57eef4bb517db2233e0aa35d5d3383cb497ba49ab94afeec7ef1fecd90b27"
+    CANDIDATE_HASH = "5eb60cc6772b7e380786124f3269b03abe24095656f695a39efcd1e68bf19746"
+
+    @pytest.mark.parametrize("overrides", [{}, {"fill_model": "default"}])
+    def test_the_default_model_leaves_every_existing_hash_unchanged(self, overrides):
+        assert compute_config_hash(_request(**overrides)) == self.CONFIG_HASH
+        assert compute_candidate_hash(_request(**overrides)) == self.CANDIDATE_HASH
 
     def test_a_gap_aware_run_is_a_different_run(self):
         assert compute_config_hash(_request(fill_model="gap_aware")) != compute_config_hash(
