@@ -592,13 +592,11 @@ async def export_trades(
     end_date = backtest.end_date.strftime("%Y-%m-%d")
     base_filename = f"{strategy_name}_{instrument}_{start_date}_to_{end_date}_trades"
 
-    rows = _with_futures_columns(
-        backtest.config_snapshot, [_export_row(trade) for trade in pydantic_trades]
-    )
+    rows = _with_futures_columns(backtest.config_snapshot, pydantic_trades)
     if format == "csv":
         # Create CSV in memory; a futures run adds its columns after the equity ones
         output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=list(rows[0]) if rows else EXPORT_COLUMNS)
+        writer = csv.DictWriter(output, fieldnames=_export_columns(backtest.config_snapshot))
         writer.writeheader()
         for row in rows:
             writer.writerow({k: _csv_cell(k, v) for k, v in row.items()})
@@ -666,9 +664,20 @@ def _csv_cell(column: str, value):
     return "" if value is None or (column == HOLD and not value) else value
 
 
-def _with_futures_columns(snapshot, rows: list[dict]) -> list[dict]:
-    """Rows of a futures run gain contracts, notional, margin, points and returns (M4)."""
+def _export_columns(snapshot) -> list[str]:
+    """The CSV header: the equity columns, plus the futures ones for a futures run."""
+    futures = list(FUTURES_TRADE_COLUMNS) if terms_from_snapshot(snapshot) else []
+    return EXPORT_COLUMNS + futures
+
+
+def _with_futures_columns(snapshot, trades) -> list[dict]:
+    """Export rows; a futures run's gain contracts, notional, margin, points and returns (M4).
+
+    The futures figures come from the stored trades, not the export rows, so a flat trade's
+    zero P&L (exported as empty) still gives zero returns rather than none.
+    """
+    rows = [_export_row(trade) for trade in trades]
     if not terms_from_snapshot(snapshot):
         return rows
     blank = dict.fromkeys(FUTURES_TRADE_COLUMNS)
-    return [{**row, **blank, **cols} for row, cols in zip(rows, trade_rows(snapshot, rows))]
+    return [{**row, **blank, **cols} for row, cols in zip(rows, trade_rows(snapshot, trades))]

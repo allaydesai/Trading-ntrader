@@ -70,6 +70,8 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: ``list_fragment.html``) and the CLI comparison (``compare.py``). 60 files. Equity pages
 #: render byte for byte as before: ``tests/component/api/test_futures_dashboard.py``
 #: pins them against goldens captured from the pre-M4 tree. Nothing else was unfrozen.
+#: Refreshed under the same ruling for src/api/rest/trades.py only (code review: the
+#: export keeps a flat trade's zero returns and a trade-less futures run's header).
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -132,7 +134,7 @@ FROZEN_VIEWS: dict[str, str] = {
     "src/api/rest/timeseries.py": (
         "b038af31a01132ff4b4a878d3cc70a9ce9e9fb4388b014a0427a8cf4228a4a5d"
     ),
-    "src/api/rest/trades.py": "660d183885a95bac08007bbfc7faf021d1c322fc985505e53b3e324bd23bbd4e",
+    "src/api/rest/trades.py": "fd0142ff5df34cfc701250faaf401d24a3c8a9fb1f020500bb66ed3d790a2557",
     "src/api/stats_service.py": "aebe188728379366b365c1a12993b3817b5a2cdd8c7aaee09b46712e7cc35fa9",
     "src/api/supplementary_service.py": (
         "4ae532d4155697d67b30fb436635576b3f30385ad6acea87f5139cc9da050f9a"

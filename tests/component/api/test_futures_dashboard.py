@@ -283,6 +283,28 @@ class TestFuturesExport:
         assert rows[1]["return_on_underlying_pct"] == "-0.1988"
 
 
+class TestFuturesExportEdgeCases:
+    """CodeRabbit round 2 on PR #53."""
+
+    def test_a_flat_trade_keeps_its_zero_returns(self):
+        import csv
+        import io
+
+        run = futures_run()
+        run.trades = [_trade(3, "ES.CME", "BUY", "1", "5000.00", "5000.09", "0", "0.0018", 0, 1)]
+        (row,) = list(csv.DictReader(io.StringIO(render(run)["export.csv"])))
+        assert row["profit_loss"] == ""  # the equity column's existing convention
+        assert row["return_on_margin_pct"] == "0.0000"
+        assert row["points_adjusted"] == "0.09"
+
+    def test_a_futures_run_without_trades_keeps_the_futures_header(self):
+        run = futures_run()
+        run.trades = []
+        header = render(run)["export.csv"].splitlines()[0]
+        assert header.endswith("return_on_underlying_pct,return_on_margin_pct")
+        assert header.startswith("instrument_id,trade_id")
+
+
 class TestFuturesList:
     def test_list_row_shows_asset_class_and_return_on_margin(self):
         text = _text(render(futures_run())["list_fragment.html"])
