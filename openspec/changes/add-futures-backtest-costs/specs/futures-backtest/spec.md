@@ -33,6 +33,11 @@ be denied for margin.
 - **THEN** the modify is rejected (`OrderModifyRejected`, reason prefix
   `FUTURES_QTY_INCREASE_NOT_SUPPORTED`) and the order stays at 1 lot
 
+#### Scenario: a second quantity modify before the first resolves
+- **WHEN** a 3-lot ES limit is modified to 2 and, before that applies, to 1
+- **THEN** the second is rejected (reason prefix `FUTURES_MODIFY_PENDING`); once the first has
+  applied, a new modify to 1 is applied
+
 #### Scenario: lowering or re-pricing a working order
 - **WHEN** a working ES limit is modified to fewer lots, or to a new price only
 - **THEN** the modify is applied as Nautilus would apply it without the gate

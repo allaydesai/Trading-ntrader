@@ -16,7 +16,12 @@ from nautilus_trader.model.enums import OrderSide, OrderStatus
 from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId
 
 from src.core.futures_costs import FuturesTerms
-from src.core.futures_margin_gate import DENIAL_REASON, QTY_INCREASE_REASON, FuturesMarginGate
+from src.core.futures_margin_gate import (
+    DENIAL_REASON,
+    MODIFY_PENDING_REASON,
+    QTY_INCREASE_REASON,
+    FuturesMarginGate,
+)
 
 pytestmark = pytest.mark.component
 
@@ -52,6 +57,7 @@ def _order(instrument=ES, side=OrderSide.BUY, qty=1, status=OrderStatus.INITIALI
         is_open=status in open_states,
         is_inflight=status in {OrderStatus.SUBMITTED, OrderStatus.PENDING_UPDATE},
         is_closed=status in {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED},
+        events=list(kw.get("events", [])),
     )
 
 
@@ -291,3 +297,87 @@ class TestNoPendingModifyState:
         risk = _Risk(on_execute=lambda: pytest.fail("an increase must not be forwarded"))
         _gate(_Cache(free=10_000_000, orders=[working]), risk).execute(_modify_command(working, 4))
         assert len(risk.rejected) == 1
+
+
+def _event(kind, qty=None):
+    """A real order event of ``kind`` ("pending", "updated" or "rejected")."""
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.events import OrderModifyRejected, OrderPendingUpdate, OrderUpdated
+    from nautilus_trader.model.identifiers import ClientOrderId, StrategyId, TraderId
+    from nautilus_trader.model.objects import Quantity
+
+    ids = (TraderId("T-001"), StrategyId("S-001"), ES, ClientOrderId("O-1"))
+    if kind == "pending":
+        return OrderPendingUpdate(*ids, None, None, UUID4(), 0, 0)
+    if kind == "updated":
+        return OrderUpdated(*ids, None, None, Quantity.from_int(qty), None, None, UUID4(), 0, 0)
+    return OrderModifyRejected(*ids, None, None, "rejected", UUID4(), 0, 0)
+
+
+def _strategy_modify(gate, working, qty):
+    """What ``Strategy.modify_order`` does: apply ``OrderPendingUpdate``, then send."""
+    working.events.append(_event("pending"))
+    working.status = OrderStatus.PENDING_UPDATE
+    gate.execute(_modify_command(working, qty))
+
+
+class TestOneQuantityModifyAtATime:
+    """A quantity-setting modify waits until the order's earlier modify has resolved."""
+
+    def _setup(self, qty=3):
+        working = _working(qty)
+        risk = _Risk()
+        return _gate(_Cache(free=0, orders=[working]), risk), risk, working
+
+    def test_a_second_quantity_modify_before_the_first_applies_is_denied(self):
+        """3 -> 1 forwarded; 3 -> 2 before it applies would end at 2 after 1: denied."""
+        gate, risk, working = self._setup()
+        _strategy_modify(gate, working, 1)
+        _strategy_modify(gate, working, 2)
+        assert len(risk.forwarded) == 1
+        assert len(risk.rejected) == 1 and risk.rejected[0].startswith(MODIFY_PENDING_REASON)
+
+    def test_the_first_modify_is_not_blocked_by_its_own_pending_event(self):
+        gate, risk, working = self._setup()
+        _strategy_modify(gate, working, 1)
+        assert len(risk.forwarded) == 1 and risk.rejected == []
+
+    @pytest.mark.parametrize("resolution", ["updated", "rejected"])
+    def test_once_the_earlier_modify_resolves_the_next_may_go(self, resolution):
+        gate, risk, working = self._setup()
+        _strategy_modify(gate, working, 2)
+        working.events.append(_event(resolution, qty=2))
+        working.status = OrderStatus.ACCEPTED
+        _strategy_modify(gate, working, 1)
+        assert len(risk.forwarded) == 2 and risk.rejected == []
+
+    def test_the_gates_own_rejection_does_not_count_as_the_earlier_modify_resolving(self):
+        """Nautilus' status flips back on any rejection; the event count does not."""
+        gate, risk, working = self._setup()
+        _strategy_modify(gate, working, 1)  # forwarded, outstanding
+        _strategy_modify(gate, working, 2)  # denied: the gate's rejection lands here
+        working.events.append(_event("rejected"))  # what _reject_modify_order applies
+        working.status = OrderStatus.ACCEPTED  # Nautilus: back to the previous status
+        _strategy_modify(gate, working, 2)  # still denied: 3 -> 1 is still outstanding
+        assert len(risk.forwarded) == 1 and len(risk.rejected) == 2
+
+    def test_a_price_only_modify_may_follow_a_pending_quantity_modify(self):
+        """The venue applies it to whatever the quantity is by then (command.quantity None)."""
+        gate, risk, working = self._setup()
+        _strategy_modify(gate, working, 1)
+        _strategy_modify(gate, working, None)
+        assert len(risk.forwarded) == 2 and risk.rejected == []
+
+    def test_restating_the_current_quantity_while_pending_is_denied_too(self):
+        """3 -> 1 pending, then quantity=3 (+ a price) would undo the decrease: denied."""
+        gate, risk, working = self._setup()
+        _strategy_modify(gate, working, 1)
+        _strategy_modify(gate, working, 3)
+        assert len(risk.rejected) == 1 and risk.rejected[0].startswith(MODIFY_PENDING_REASON)
+
+    def test_pending_without_this_commands_own_event_means_an_earlier_modify(self):
+        """A command that did not come through Strategy.modify_order finds the order pending."""
+        gate, risk, working = self._setup()
+        working.status = OrderStatus.PENDING_UPDATE
+        gate.execute(_modify_command(working, 1))
+        assert len(risk.rejected) == 1 and risk.rejected[0].startswith(MODIFY_PENDING_REASON)

@@ -31,7 +31,11 @@ from nautilus_trader.trading.strategy import Strategy
 from src.core.backtest_venue import setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
-from src.core.futures_margin_gate import DENIAL_REASON, QTY_INCREASE_REASON
+from src.core.futures_margin_gate import (
+    DENIAL_REASON,
+    MODIFY_PENDING_REASON,
+    QTY_INCREASE_REASON,
+)
 from src.models.backtest_request import BacktestRequest
 from src.services.firstrate.parsers.firstrate_futures_parser import FirstRateFuturesParser
 from src.services.futures.contract_specs import get_contract_spec
@@ -371,5 +375,66 @@ def test_separate_closing_submits_cannot_reopen_short_unmargined():
         assert len(strategy.denials) == 2
         assert all(reason.startswith(DENIAL_REASON) for reason in strategy.denials)
         assert engine.cache.positions_open() == []  # closed, never flipped short
+    finally:
+        engine.dispose()
+
+
+class _QueuedModifiesConfig(StrategyConfig, frozen=True):
+    bar_type: str
+
+
+class _QueuedModifies(Strategy):
+    """Rest 3 lots; on bar 2 send 3 -> 2 and 3 -> 1 back to back; on bar 3 send 2 -> 1."""
+
+    def __init__(self, config: _QueuedModifiesConfig) -> None:
+        super().__init__(config)
+        self._bar = 0
+        self.order = None
+        self.modify_rejections: list[str] = []
+
+    def on_start(self) -> None:
+        self.subscribe_bars(BarType.from_str(self.config.bar_type))
+
+    def on_bar(self, bar: Bar) -> None:
+        self._bar += 1
+        instrument = self.cache.instrument(bar.bar_type.instrument_id)
+        if self._bar == 1:
+            price = instrument.make_price(Decimal("5000.00"))
+            self.order = self.order_factory.limit(
+                instrument.id, OrderSide.BUY, Quantity.from_int(3), price
+            )
+            self.submit_order(self.order)
+        elif self._bar == 2:
+            self.modify_order(self.order, quantity=Quantity.from_int(2))
+            self.modify_order(self.order, quantity=Quantity.from_int(1))  # first not applied yet
+        elif self._bar == 3:
+            self.modify_order(self.order, quantity=Quantity.from_int(1))  # first has resolved
+
+    def on_order_modify_rejected(self, event) -> None:
+        self.modify_rejections.append(event.reason)
+
+
+def test_a_quantity_modify_waits_for_the_previous_one_to_resolve():
+    es = build_futures_contract(ES)
+    engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
+    try:
+        setup_backtest_venues(
+            engine,
+            {es.id.venue: [es]},
+            starting_balance=10_000_000,
+            fill_model=make_fill_model(42),
+            equity_fee_model=IBKRCommissionModel(),
+        )
+        engine.add_instrument(es)
+        bars = _bars(es, ["6000.00"] * 4)
+        engine.add_data(bars)
+        strategy = _QueuedModifies(_QueuedModifiesConfig(bar_type=str(bars[0].bar_type)))
+        engine.add_strategy(strategy)
+        engine.run()
+
+        assert len(strategy.modify_rejections) == 1
+        assert strategy.modify_rejections[0].startswith(MODIFY_PENDING_REASON)
+        # 3 -> 2 applied on bar 2, then 2 -> 1 on bar 3 once it had resolved.
+        assert engine.cache.order(strategy.order.client_order_id).quantity == 1
     finally:
         engine.dispose()

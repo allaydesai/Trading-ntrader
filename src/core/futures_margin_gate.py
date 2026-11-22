@@ -15,7 +15,11 @@ normal ``OrderDenied``/``OrderModifyRejected``):
   venue account has free;
 - any modify that raises a working futures order's quantity (reason
   ``FUTURES_QTY_INCREASE_NOT_SUPPORTED``): cancel and resubmit instead, so the new size
-  gets a fresh margin check.
+  gets a fresh margin check;
+- any modify that sets a futures order's quantity while an earlier modify of that order is
+  still outstanding (reason ``FUTURES_MODIFY_PENDING``). Each check compares against the
+  cached quantity, which an outstanding modify has not changed yet, so two queued modifies
+  (3 -> 1, then 3 -> 2) would otherwise together raise 1 -> 2 unchecked.
 
 Quantity-reducing and price-only modifies, and everything else, go straight on to the risk
 engine unchanged. The gate keeps no pending-modify state: margin checks read only orders'
@@ -38,6 +42,7 @@ from decimal import Decimal
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.execution.messages import ModifyOrder, SubmitOrder, SubmitOrderList
 from nautilus_trader.model.enums import OrderSide, OrderStatus
+from nautilus_trader.model.events import OrderModifyRejected, OrderPendingUpdate, OrderUpdated
 from nautilus_trader.model.identifiers import InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import Order
@@ -47,6 +52,7 @@ from src.core.futures_costs import FuturesTerms, terms_by_instrument
 RISK_ENDPOINT = "RiskEngine.execute"
 DENIAL_REASON = "MARGIN_EXCEEDS_FREE_BALANCE"
 QTY_INCREASE_REASON = "FUTURES_QTY_INCREASE_NOT_SUPPORTED"
+MODIFY_PENDING_REASON = "FUTURES_MODIFY_PENDING"
 ZERO = Decimal(0)
 
 
@@ -127,10 +133,18 @@ class FuturesMarginGate:
         A futures order's quantity may not be raised by a modify, whatever the margin: an
         increase would need margin held for a change the venue has not applied yet. Cancel
         and resubmit instead. Decreases and price-only modifies (``new_quantity`` is
-        ``None``) pass; Nautilus releases margin only once a decrease is applied.
+        ``None``) pass; Nautilus releases margin only once a decrease is applied. A modify
+        that sets a quantity is also refused while an earlier modify of the order is still
+        outstanding; price-only modifies are not (the venue applies them to whatever the
+        quantity is by then).
         """
         if order.instrument_id not in self._terms or new_quantity is None:
             return None
+        if _earlier_modifies_outstanding(order) > 0:
+            return (
+                f"{MODIFY_PENDING_REASON}: an earlier modify of {order.client_order_id} is "
+                "not applied or rejected yet; wait for it to resolve"
+            )
         current, new = order.quantity.as_decimal(), new_quantity.as_decimal()
         if new <= current:
             return None
@@ -172,6 +186,31 @@ def _closing_credit(cache, position, submitting: set) -> Decimal:
         if order.is_open or order.is_inflight:
             credit -= order.leaves_qty.as_decimal()
     return max(credit, ZERO)
+
+
+def _earlier_modifies_outstanding(order: Order) -> int:
+    """Modifies of ``order`` sent before this one that the venue has not resolved yet.
+
+    Read from the order's own events in the cache (no gate state). Nautilus' status alone
+    cannot say: ``Strategy.modify_order`` sets ``PENDING_UPDATE`` before sending the command,
+    and the first ``OrderUpdated``/``OrderModifyRejected`` clears it even while a second
+    modify is queued. So: each ``OrderPendingUpdate`` opens a modify, each
+    ``OrderModifyRejected`` (venue, risk engine or this gate) closes one, and an
+    ``OrderUpdated`` closes one while any is open. This command's own ``OrderPendingUpdate``
+    (the order's latest event when it came through ``Strategy.modify_order``) is not counted.
+    """
+    events = list(order.events)
+    if events and isinstance(events[-1], OrderPendingUpdate):
+        events.pop()  # this modify's own pending event
+    elif order.status == OrderStatus.PENDING_UPDATE:
+        return 1  # pending, but not because of this command: an earlier modify is open
+    outstanding = 0
+    for event in events:
+        if isinstance(event, OrderPendingUpdate):
+            outstanding += 1
+        elif isinstance(event, (OrderModifyRejected, OrderUpdated)) and outstanding:
+            outstanding -= 1
+    return outstanding
 
 
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:

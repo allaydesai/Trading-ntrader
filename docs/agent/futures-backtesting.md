@@ -39,9 +39,22 @@ futures contract gets exactly the `add_venue` call it always had.
   its price, but never raise its quantity: any size increase is rejected
   (`OrderModifyRejected`, reason `FUTURES_QTY_INCREASE_NOT_SUPPORTED`), whatever the
   margin, and for entries, children and reduce-only orders alike. To trade a larger size,
-  cancel the order and submit a new one; the new order gets the normal margin check. This
-  keeps the gate stateless: it never has to hold margin for a change the venue has not
-  applied yet. A decrease releases margin only once Nautilus applies it.
+  cancel the order, **wait for its `OrderCanceled`** (in `on_order_canceled`), then submit
+  the new one. Until the cancel is applied the original order's margin stays reserved, so a
+  replacement sent straight after `cancel_order` can be denied even when the account will
+  have the funds. The new order gets the normal margin check. This keeps the gate
+  stateless: it never has to hold margin for a change the venue has not applied yet. A
+  decrease releases margin only once Nautilus applies it.
+- **One quantity modify at a time.** A modify that sets a quantity is rejected (reason
+  `FUTURES_MODIFY_PENDING`) while an earlier modify of the same order has not been applied
+  (`OrderUpdated`) or rejected (`OrderModifyRejected`) yet; wait for it, then modify again.
+  Each check compares against the order's current quantity, which a queued modify has not
+  changed yet: 3 -> 1 and then 3 -> 2, sent back to back, would otherwise end at 2 after 1,
+  an unchecked increase. Price-only modifies may still follow, because the venue applies
+  them to whatever the quantity is by then. The gate counts outstanding modifies from the
+  order's own events in the cache. Nautilus' `PENDING_UPDATE` status alone can't tell,
+  because `Strategy.modify_order` sets it before sending and the first resolution clears
+  it.
 - **Free balance** is the venue account's realised cash minus locked margin (initial for
   working orders, maintenance for positions), minus the initial margin of every futures
   order on that venue that is submitted but not yet accepted (each at its own contract's

@@ -61,7 +61,23 @@ releasing margin early. Refusing increases removes the pending state entirely. T
 keeps no per-order bookkeeping, and every check reads only orders' actual current
 quantities and open positions from the cache. A decrease's margin is released only when
 Nautilus applies it, so a pending reduction can never free margin early. Cancel and
-resubmit gives a larger size the same check as any new order.
+resubmit gives a larger size the same check as any new order; the resubmit should wait for
+`OrderCanceled`, since the original's margin stays reserved until then.
+
+Review round 5 found that two queued quantity modifies could still raise a size: each is
+compared with the cached quantity, which neither has changed yet (3 -> 1, then 3 -> 2, ends
+at 2 after 1). So a quantity-setting modify is also rejected (`FUTURES_MODIFY_PENDING`) while
+an earlier modify of the order is outstanding. Price-only modifies pass, because the
+simulated exchange applies `command.quantity or order.quantity` at apply time. Outstanding is
+counted from the order's own events in the cache, so there is still no gate state. Each
+`OrderPendingUpdate` opens one, each `OrderModifyRejected` (venue, risk engine or gate)
+closes one, and an `OrderUpdated` closes one while any is open. This command's own pending
+event is excluded. Nautilus' `PENDING_UPDATE` status is not enough on its own:
+`Strategy.modify_order` applies it before sending, and the order's state machine leaves it on
+the first resolution even with a second modify queued, including the gate's own rejection.
+An engine-driven `OrderUpdated` (a trailing stop's move) arriving while a modify is
+outstanding would be counted as that modify's resolution; no strategy here uses trailing
+stops.
 
 **Known limits** (documented):
 - unrealised P&L is not counted;
