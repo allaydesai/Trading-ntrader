@@ -21,9 +21,11 @@ pytestmark = pytest.mark.component
 
 ES = InstrumentId.from_str("ES.CME")
 NQ = InstrumentId.from_str("NQ.CME")
+CL = InstrumentId.from_str("CL.NYMEX")
 TERMS = {
     ES: FuturesTerms(Decimal(50), Decimal(27500), Decimal(25000), Decimal("2.25")),
     NQ: FuturesTerms(Decimal(20), Decimal(39600), Decimal(36000), Decimal("2.25")),
+    CL: FuturesTerms(Decimal(1000), Decimal(6600), Decimal(6000), Decimal("2.37")),
 }
 POSITION_ID = PositionId("ES.CME-1")
 
@@ -111,9 +113,13 @@ class TestSubmit:
 
 class TestPendingMargin:
     def test_submitted_orders_on_other_instruments_of_the_venue_are_reserved(self):
-        """An NQ order in flight on CME holds 39,600 the ES check must not spend again."""
+        """An NQ order in flight on CME holds 39,600 (at NQ's rate, not ES's 27,500).
+
+        60,000 free: ES 27,500 + NQ 39,600 = 67,100 does not fit, but would if the pending
+        NQ order were charged at ES's rate (60,000 - 27,500 = 32,500 >= 27,500).
+        """
         pending_nq = _order(instrument=NQ, status=OrderStatus.SUBMITTED)
-        gate = _gate(_Cache(free=39_600, inflight=[pending_nq]))
+        gate = _gate(_Cache(free=60_000, inflight=[pending_nq]))
         assert gate.denial_reason([_order(qty=1)], None) is not None
 
     def test_pending_cancel_and_update_are_already_reserved(self):
@@ -124,13 +130,10 @@ class TestPendingMargin:
         assert gate.denial_reason([_order(qty=1)], None) is None
 
     def test_other_venues_are_separate(self):
-        pending_cl = _order(
-            instrument=InstrumentId.from_str("CL.NYMEX"), status=OrderStatus.SUBMITTED
-        )
-        assert (
-            _gate(_Cache(free=27_500, inflight=[pending_cl])).denial_reason([_order()], None)
-            is None
-        )
+        """A margined CL order in flight on NYMEX does not spend CME's free balance."""
+        pending_cl = _order(instrument=CL, status=OrderStatus.SUBMITTED)
+        cache = _Cache(free=27_500, inflight=[pending_cl])
+        assert _gate(cache).denial_reason([_order()], None) is None
 
 
 class TestModify:
