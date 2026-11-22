@@ -94,8 +94,9 @@ class SMACrossover(Strategy):
         # Strategy configuration
         self.instrument_id = config.instrument_id
         self.bar_type = config.bar_type
-        self.portfolio_value = config.portfolio_value
-        self.position_size_pct = config.position_size_pct
+        # Config files pass YAML floats/strings through uncoerced; sizing needs Decimals.
+        self.portfolio_value = Decimal(str(config.portfolio_value))
+        self.position_size_pct = Decimal(str(config.position_size_pct))
 
         # Initialize indicators
         self.fast_sma = SimpleMovingAverage(period=config.fast_period, price_type=PriceType.LAST)
