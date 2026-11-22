@@ -1,0 +1,30 @@
+[
+  {
+    "instrument_id": "AAPL.NASDAQ",
+    "trade_id": "T-1",
+    "order_side": "BUY",
+    "entry_timestamp": "2024-03-01T14:00:00+00:00",
+    "entry_price": "170.00",
+    "exit_timestamp": "2024-03-01T19:00:00+00:00",
+    "exit_price": "172.00",
+    "quantity": "600",
+    "profit_loss": "1195.50",
+    "profit_pct": "1.1765",
+    "commission_amount": "4.50",
+    "holding_period_seconds": 18000
+  },
+  {
+    "instrument_id": "AAPL.NASDAQ",
+    "trade_id": "T-2",
+    "order_side": "BUY",
+    "entry_timestamp": "2024-03-01T20:00:00+00:00",
+    "entry_price": "173.00",
+    "exit_timestamp": "2024-03-01T23:00:00+00:00",
+    "exit_price": "171.50",
+    "quantity": "600",
+    "profit_loss": "-904.50",
+    "profit_pct": "-0.8671",
+    "commission_amount": "4.50",
+    "holding_period_seconds": 10800
+  }
+]

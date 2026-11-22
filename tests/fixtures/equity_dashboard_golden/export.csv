@@ -1,0 +1,3 @@
+instrument_id,trade_id,order_side,entry_timestamp,entry_price,exit_timestamp,exit_price,quantity,profit_loss,profit_pct,commission_amount,holding_period_seconds
+AAPL.NASDAQ,T-1,BUY,2024-03-01T14:00:00+00:00,170.00,2024-03-01T19:00:00+00:00,172.00,600,1195.50,1.1765,4.50,18000
+AAPL.NASDAQ,T-2,BUY,2024-03-01T20:00:00+00:00,173.00,2024-03-01T23:00:00+00:00,171.50,600,-904.50,-0.8671,4.50,10800
