@@ -38,6 +38,13 @@ _UPSERT_FIELDS = (
         for prefix in ("date_range_start", "date_range_end", "bar_count")
         for suffix in _TIMEFRAME_SUFFIXES
     ),
+    # Futures columns (migration 3f56b46c78eb); NULL on equity rows.
+    "multiplier",
+    "tick_size",
+    "currency",
+    "contract_kind",
+    "expiry",
+    "roll_rule",
 )
 
 
