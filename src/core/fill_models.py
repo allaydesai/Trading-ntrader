@@ -23,8 +23,9 @@ when matching against L1 daily-bar data (verified against nautilus_trader 1.220)
    Limit, stop and cancel commands behave as before: when they are released the book
    still holds T's close, and nothing has traded since. An *untagged* market order on
    a gap-aware venue fills at T's close but is stamped on T+1. An MOO exit signalled
-   on the final bar has no next bar and does not fill. Every instrument on a gap-aware
-   venue must have bars at the same timestamps (``bind_fill_model`` checks).
+   on the final bar has no next bar and does not fill. Nautilus processes every venue
+   after each data point, so every instrument in a gap-aware run must have bars at the
+   same timestamps (``bind_fill_model`` checks).
 
 ``bind_fill_model`` registers what the model needs before the run (the orchestrator
 calls it): the engine clock (to know which bar is being matched) and the bar series
@@ -208,26 +209,24 @@ def bind_fill_model(fill_model: FillModel, engine: BacktestEngine, bars: Sequenc
     """Register the engine clock and ``bars`` with a gap-aware model; no-op for others.
 
     Raises:
-        ValueError: Two instruments on one venue have bars at different timestamps. Next-bar
-            execution releases a venue's commands on any of its bars, so an MOO exit would
-            be released on another instrument's bar and filled at a stale price.
+        ValueError: Two instruments in the run have bars at different timestamps. Nautilus
+            processes every venue after each data point, so any bar releases in-flight
+            commands; an MOO exit would be released on another instrument's bar (even on
+            another venue) and filled at a stale price.
     """
     if isinstance(fill_model, GapAwareFillModel):
-        _check_venue_alignment(bars)
+        _check_alignment(bars)
         fill_model.register_clock(engine.kernel.clock)
         fill_model.register_bars(bars)
 
 
-def _check_venue_alignment(bars: Sequence[Bar]) -> None:
-    """Every instrument on a venue must have bars at the same ``ts_init`` timestamps."""
-    by_venue: dict[str, dict[str, set[int]]] = defaultdict(lambda: defaultdict(set))
+def _check_alignment(bars: Sequence[Bar]) -> None:
+    """Every instrument in the run must have bars at the same ``ts_init`` timestamps."""
+    series: dict[str, set[int]] = defaultdict(set)
     for bar in bars:
-        instrument_id = bar.bar_type.instrument_id
-        by_venue[str(instrument_id.venue)][str(instrument_id)].add(bar.ts_init)
-    for venue, series in by_venue.items():
-        if len({frozenset(ts) for ts in series.values()}) > 1:
-            raise ValueError(
-                f"fill_model gap_aware needs every instrument on venue {venue} to have bars at "
-                f"the same timestamps ({', '.join(sorted(series))} differ); use the default "
-                "fill model for this run"
-            )
+        series[str(bar.bar_type.instrument_id)].add(bar.ts_init)
+    if len({frozenset(ts) for ts in series.values()}) > 1:
+        raise ValueError(
+            "fill_model gap_aware needs every instrument in the run to have bars at the same "
+            f"timestamps ({', '.join(sorted(series))} differ); use the default fill model"
+        )

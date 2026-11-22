@@ -127,11 +127,12 @@ class TestMooExitPrice:
 
 @pytest.mark.component
 class TestBindFillModel:
-    """Next-bar execution releases a whole venue's commands on any of its bars.
+    """In-flight commands are released by any bar in the engine.
 
-    So every instrument on one gap-aware venue must have bars at the same timestamps,
-    or an MOO exit would be released, and filled at a stale price, on another
-    instrument's bar.
+    Nautilus processes every venue after each data point, so a bar on one venue releases
+    another venue's commands too. Every instrument in a gap-aware run must therefore have
+    bars at the same timestamps, or an MOO exit would be released, and filled at a stale
+    price, on another instrument's bar.
     """
 
     @staticmethod
@@ -149,8 +150,14 @@ class TestBindFillModel:
         with pytest.raises(ValueError, match="same timestamps"):
             bind_fill_model(GapAwareFillModel(), self._engine(), bars)
 
-    def test_series_on_different_venues_may_differ(self):
+    def test_misaligned_series_on_different_venues_are_rejected(self):
+        # An ES bar at 150 would release an AAPL exit sent at 100 before AAPL's 200 bar.
         bars = [_bar(100, 1.0), _bar(200, 1.0), _bar(150, 1.0, "ES.CME")]
+        with pytest.raises(ValueError, match="same timestamps"):
+            bind_fill_model(GapAwareFillModel(), self._engine(), bars)
+
+    def test_aligned_series_on_different_venues_are_accepted(self):
+        bars = [_bar(ts, 1.0, sym) for ts in (100, 200) for sym in ("AAPL.NASDAQ", "ES.CME")]
         bind_fill_model(GapAwareFillModel(), self._engine(), bars)
 
     def test_a_default_model_is_not_checked(self):
