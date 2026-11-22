@@ -34,7 +34,8 @@ from decimal import Decimal
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.execution.messages import ModifyOrder, SubmitOrder, SubmitOrderList
 from nautilus_trader.model.enums import OrderSide, OrderStatus
-from nautilus_trader.model.identifiers import InstrumentId, PositionId, Venue
+from nautilus_trader.model.events import OrderModifyRejected
+from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import Order
 
@@ -54,6 +55,7 @@ class FuturesMarginGate:
         self._cache = cache
         self._msgbus = msgbus
         self._terms = dict(terms)
+        self._approved_targets: dict[ClientOrderId, Decimal] = {}
         self.denied_count = 0
 
     def install(self) -> None:
@@ -89,7 +91,8 @@ class FuturesMarginGate:
         """Why submitting ``orders`` must be denied, or ``None`` when the margin is there.
 
         Only orders without a parent (entries) count. What they close of the targeted
-        position is credited once across the whole list, not once per order.
+        position is credited once across the whole list, net of what other working orders on
+        that position already claim to close.
         """
         entries = [
             o for o in orders if o.parent_order_id is None and o.instrument_id in self._terms
@@ -97,7 +100,7 @@ class FuturesMarginGate:
         if not entries:
             return None
         position = self._cache.position(position_id) if position_id is not None else None
-        credit = position.quantity.as_decimal() if position and position.is_open else ZERO
+        credit = _closing_credit(self._cache, position, {o.client_order_id for o in orders})
         required = ZERO
         contracts = ZERO
         for order in entries:
@@ -119,19 +122,21 @@ class FuturesMarginGate:
         """Why raising ``order`` to ``new_quantity`` must be rejected, or ``None``.
 
         Price-only and quantity-reducing modifies always pass; the order's current quantity
-        is already reserved (or counted as in flight), so only the increase is checked.
+        is already reserved (or counted as in flight), so only the increase is checked. Child
+        orders are checked too unless reduce-only. An approved increase is held against free
+        balance until the exchange applies or rejects it.
         """
         terms = self._terms.get(order.instrument_id)
-        if terms is None or new_quantity is None:
-            return None
-        if order.is_reduce_only or order.parent_order_id is not None:
+        if terms is None or new_quantity is None or order.is_reduce_only:
             return None
         added = new_quantity.as_decimal() - order.quantity.as_decimal()
         if added <= 0:
             return None
+        self._approved_targets.pop(order.client_order_id, None)  # superseded by this modify
         required = added * terms.initial_margin_usd
         free = self._free_usd(order.instrument_id)
         if required <= free:
+            self._approved_targets[order.client_order_id] = new_quantity.as_decimal()
             return None
         return (
             f"{DENIAL_REASON}: modify adds {added} {order.instrument_id} contract(s) needing "
@@ -154,7 +159,44 @@ class FuturesMarginGate:
                 continue
             if not order.is_reduce_only and order.parent_order_id is None:
                 free -= order.leaves_qty.as_decimal() * terms.initial_margin_usd
-        return free
+        targets = self._approved_targets
+        return free - _unapplied_increases_usd(self._cache, targets, self._terms, venue)
+
+
+def _closing_credit(cache, position, submitting: set) -> Decimal:
+    """Contracts of ``position`` still free to close: its size less what working opposite
+    orders on it (other than ``submitting``) already claim. Fills and cancels release
+    their claim as soon as Nautilus updates the cache."""
+    if position is None or not position.is_open:
+        return ZERO
+    credit = position.quantity.as_decimal()
+    closing_side = OrderSide.SELL if position.is_long else OrderSide.BUY
+    for order in cache.orders_for_position(position.id):
+        if order.client_order_id in submitting or order.side != closing_side:
+            continue
+        if order.is_open or order.is_inflight:
+            credit -= order.leaves_qty.as_decimal()
+    return max(credit, ZERO)
+
+
+def _unapplied_increases_usd(
+    cache, targets: dict, terms: Mapping[InstrumentId, FuturesTerms], venue: Venue
+) -> Decimal:
+    """Margin of approved quantity increases the exchange has not applied yet.
+
+    Prunes ``targets`` (client order id -> approved quantity) once an increase is applied,
+    rejected (``OrderModifyRejected``) or its order closes."""
+    total = ZERO
+    for client_order_id, target in list(targets.items()):
+        order = cache.order(client_order_id)
+        if order is None or order.is_closed or order.quantity.as_decimal() >= target:
+            del targets[client_order_id]
+        elif isinstance(order.last_event, OrderModifyRejected):
+            del targets[client_order_id]
+        elif order.instrument_id.venue == venue:
+            added = target - order.quantity.as_decimal()
+            total += added * terms[order.instrument_id].initial_margin_usd
+    return total
 
 
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:

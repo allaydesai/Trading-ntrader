@@ -68,3 +68,16 @@ class TestFuturesContractSizing:
         )
 
         assert int(str(SMACrossover._calculate_position_size(sizing_self))) == 606
+
+
+@pytest.mark.component
+def test_the_logged_notional_is_the_order_not_the_budget():
+    """2 ES contracts at 7000 are $700,000 of exposure, not the $1,000,000 budget."""
+    sizing_self = _futures_sizing_self(
+        multiplier="50", close_price=7000.0, portfolio_value="1000000", pct="100"
+    )
+
+    SMACrossover._calculate_position_size(sizing_self)
+
+    message = sizing_self.log.info.call_args[0][0]
+    assert "~$700,000 notional" in message

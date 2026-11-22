@@ -142,7 +142,9 @@ class PositionSizingLogic:
             return Decimal("0")
 
         position_size = risk_amount / price_risk
-        return position_size.quantize(Decimal("0.01"))
+        # Contracts are floored by the caller (whole_contracts): never round them up first.
+        rounding = ROUND_FLOOR if multiplier != ONE else None
+        return position_size.quantize(Decimal("0.01"), rounding=rounding)
 
     def calculate_kelly_size(
         self,

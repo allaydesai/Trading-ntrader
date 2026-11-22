@@ -34,7 +34,11 @@ def _qty(value) -> SimpleNamespace:
     return SimpleNamespace(as_decimal=lambda: Decimal(value))
 
 
+_IDS = iter(range(1, 10_000))
+
+
 def _order(instrument=ES, side=OrderSide.BUY, qty=1, status=OrderStatus.INITIALIZED, **kw):
+    open_states = {OrderStatus.ACCEPTED, OrderStatus.PENDING_UPDATE, OrderStatus.PENDING_CANCEL}
     return SimpleNamespace(
         instrument_id=instrument,
         side=side,
@@ -43,15 +47,27 @@ def _order(instrument=ES, side=OrderSide.BUY, qty=1, status=OrderStatus.INITIALI
         status=status,
         is_reduce_only=kw.get("reduce_only", False),
         parent_order_id=kw.get("parent"),
-        client_order_id=kw.get("client_order_id"),
+        client_order_id=kw.get("client_order_id", f"O-{next(_IDS)}"),
+        is_open=status in open_states,
+        is_inflight=status in {OrderStatus.SUBMITTED, OrderStatus.PENDING_UPDATE},
+        is_closed=status in {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED},
+        last_event=kw.get("last_event"),
     )
 
 
 class _Cache:
-    def __init__(self, free, inflight=(), position=None):
+    def __init__(self, free, inflight=(), position=None, for_position=(), orders=()):
         self._free = free
         self._inflight = list(inflight)
         self._position = position
+        self._for_position = list(for_position)
+        self._orders = {o.client_order_id: o for o in orders}
+
+    def orders_for_position(self, position_id):
+        return self._for_position
+
+    def order(self, client_order_id):
+        return self._orders.get(client_order_id)
 
     def account_for_venue(self, venue):
         return SimpleNamespace(
@@ -73,7 +89,9 @@ def _gate(cache) -> FuturesMarginGate:
 
 
 def _long_es(qty=1):
-    return SimpleNamespace(instrument_id=ES, is_open=True, is_long=True, quantity=_qty(qty))
+    return SimpleNamespace(
+        id=POSITION_ID, instrument_id=ES, is_open=True, is_long=True, quantity=_qty(qty)
+    )
 
 
 class TestSubmit:
@@ -104,6 +122,24 @@ class TestSubmit:
         sells = [_order(side=OrderSide.SELL, qty=1), _order(side=OrderSide.SELL, qty=1)]
         reason = gate.denial_reason(sells, POSITION_ID)
         assert reason is not None and "27500" in reason
+
+    def test_separate_submits_share_the_position_credit(self):
+        """A working 1-lot sell already claims the 1-lot long: a second sell opens a short."""
+        working_close = _order(side=OrderSide.SELL, qty=1, status=OrderStatus.ACCEPTED)
+        cache = _Cache(free=25_000, position=_long_es(1), for_position=[working_close])
+        reason = _gate(cache).denial_reason([_order(side=OrderSide.SELL, qty=1)], POSITION_ID)
+        assert reason is not None and "27500" in reason
+
+    def test_filled_or_cancelled_closes_release_their_claim(self):
+        done = _order(side=OrderSide.SELL, qty=1, status=OrderStatus.CANCELED)
+        cache = _Cache(free=0, position=_long_es(1), for_position=[done])
+        assert _gate(cache).denial_reason([_order(side=OrderSide.SELL)], POSITION_ID) is None
+
+    def test_the_order_being_submitted_does_not_claim_against_itself(self):
+        """Strategy.submit_order caches the order with its position before the gate runs."""
+        sell = _order(side=OrderSide.SELL, qty=1)
+        cache = _Cache(free=0, position=_long_es(1), for_position=[sell])
+        assert _gate(cache).denial_reason([sell], POSITION_ID) is None
 
     def test_bracket_children_are_not_counted(self):
         entry = _order(qty=1)
@@ -152,9 +188,45 @@ class TestModify:
         quantity = None if new_qty is None else _qty(str(new_qty))
         assert _gate(_Cache(free=0)).modify_denial_reason(working, quantity) is None
 
-    def test_reduce_only_and_child_orders_are_never_rejected(self):
-        stop = _order(side=OrderSide.SELL, qty=1, parent="O-1")
-        closer = _order(side=OrderSide.SELL, qty=1, reduce_only=True)
-        gate = _gate(_Cache(free=0))
-        assert gate.modify_denial_reason(stop, _qty(5)) is None
-        assert gate.modify_denial_reason(closer, _qty(5)) is None
+    def test_reduce_only_orders_are_never_rejected(self):
+        closer = _order(side=OrderSide.SELL, qty=1, reduce_only=True, status=OrderStatus.ACCEPTED)
+        assert _gate(_Cache(free=0)).modify_denial_reason(closer, _qty(5)) is None
+
+    def test_a_non_reduce_only_child_increase_is_checked(self):
+        """A child sell grown from 1 to 5 could open a 4-lot short: it needs the margin."""
+        child = _order(side=OrderSide.SELL, qty=1, parent="O-1", status=OrderStatus.ACCEPTED)
+        reason = _gate(_Cache(free=27_500)).modify_denial_reason(child, _qty(5))
+        assert reason is not None and "110000" in reason
+
+
+class TestApprovedIncreases:
+    def _approve(self, free=60_000):
+        working = _order(qty=1, status=OrderStatus.ACCEPTED)
+        cache = _Cache(free=free, orders=[working])
+        gate = _gate(cache)
+        assert gate.modify_denial_reason(working, _qty(2)) is None  # approved: +27,500
+        return gate, cache, working
+
+    def test_an_approved_increase_is_held_until_the_exchange_applies_it(self):
+        gate, _, _ = self._approve()
+        # 60,000 free less the unapplied +1 lot (27,500) leaves 32,500: one more lot fits,
+        # two do not.
+        assert gate.denial_reason([_order(qty=1)], None) is None
+        assert gate.denial_reason([_order(qty=2)], None) is not None
+
+    def test_the_hold_ends_once_applied(self):
+        gate, _, working = self._approve()
+        working.quantity = _qty(2)  # the exchange applied it; balance_free now reserves it
+        assert gate.denial_reason([_order(qty=2)], None) is None
+
+    def test_the_hold_ends_on_rejection(self):
+        from nautilus_trader.model.events import OrderModifyRejected
+
+        gate, _, working = self._approve()
+        working.last_event = OrderModifyRejected.__new__(OrderModifyRejected)
+        assert gate.denial_reason([_order(qty=2)], None) is None
+
+    def test_the_hold_ends_when_the_order_closes(self):
+        gate, _, working = self._approve()
+        working.is_closed = True
+        assert gate.denial_reason([_order(qty=2)], None) is None

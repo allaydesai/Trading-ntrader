@@ -29,13 +29,17 @@ futures contract gets exactly the `add_venue` call it always had.
   the free balance. Strategies see it in `on_order_denied`.
 - **What counts as new exposure.** A reduce-only order (`close_position`,
   `close_all_positions`) needs none. A plain order needs margin on its full quantity, less
-  whatever it closes of the position it targets (`position_id`). In an order list that
-  credit is spent once across the list, not once per order. The venue is HEDGING, so an
+  whatever it closes of the position it targets (`position_id`). That closing credit is the
+  position's size less what working opposite orders on it already claim, so it is spent
+  once whether the closes arrive in one order list or as separate submits; fills and
+  cancels release it. The venue is HEDGING, so an
   untargeted opposite order opens a second position and is margined like one. In a bracket,
   only the entry is checked; children have a parent.
-- **Modifies.** A `modify_order` that raises a working entry's quantity is rejected
-  (`OrderModifyRejected`, same reason prefix) when the added contracts' initial margin
-  exceeds free balance. Price-only and quantity-reducing modifies always pass.
+- **Modifies.** A `modify_order` that raises a working order's quantity (entry or
+  non-reduce-only child) is rejected (`OrderModifyRejected`, same reason prefix) when the
+  added contracts' initial margin exceeds free balance. Price-only, quantity-reducing and
+  reduce-only modifies always pass. An approved increase is held against free balance until
+  the exchange applies it, rejects it or the order closes.
 - **Free balance** is the venue account's realised cash minus locked margin (initial for
   working orders, maintenance for positions), minus the initial margin of every futures
   order on that venue that is submitted but not yet accepted (each at its own contract's

@@ -220,7 +220,7 @@ class SMACrossover(Strategy):
             self.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
             return None
 
-        notional = float(contract_notional(raw_qty, current_price, multiplier))
+        notional = contract_notional(Decimal(str(quantity)), current_price, multiplier)
         self.log.info(
             f"Position sizing: Portfolio=${self.portfolio_value:,.0f}, "
             f"Size%={self.position_size_pct}%, "

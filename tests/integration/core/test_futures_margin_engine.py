@@ -290,3 +290,62 @@ def test_raising_a_working_order_past_free_margin_is_rejected(raise_to, rejected
             assert engine.cache.order(strategy.order.client_order_id).quantity == 1
     finally:
         engine.dispose()
+
+
+class _TripleCloseConfig(StrategyConfig, frozen=True):
+    bar_type: str
+
+
+class _TripleClose(Strategy):
+    """Buy 1 on bar 1; on bar 2 send three separate plain 1-lot sells at that position."""
+
+    def __init__(self, config: _TripleCloseConfig) -> None:
+        super().__init__(config)
+        self._bar = 0
+        self.denials: list[str] = []
+
+    def on_start(self) -> None:
+        self.subscribe_bars(BarType.from_str(self.config.bar_type))
+
+    def on_bar(self, bar: Bar) -> None:
+        self._bar += 1
+        instrument_id = bar.bar_type.instrument_id
+        if self._bar == 1:
+            buy = self.order_factory.market(instrument_id, OrderSide.BUY, Quantity.from_int(1))
+            self.submit_order(buy)
+        elif self._bar == 2:
+            position = self.cache.positions_open(instrument_id=instrument_id)[0]
+            for _ in range(3):
+                sell = self.order_factory.market(
+                    instrument_id, OrderSide.SELL, Quantity.from_int(1)
+                )
+                self.submit_order(sell, position_id=position.id)
+
+    def on_order_denied(self, event: OrderDenied) -> None:
+        self.denials.append(event.reason)
+
+
+def test_separate_closing_submits_cannot_reopen_short_unmargined():
+    """Only one of three 1-lot sells closes the 1-lot long; the others would open a short."""
+    es = build_futures_contract(ES)
+    engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
+    try:
+        setup_backtest_venues(
+            engine,
+            {es.id.venue: [es]},
+            starting_balance=50_000,
+            fill_model=make_fill_model(42),
+            equity_fee_model=IBKRCommissionModel(),
+        )
+        engine.add_instrument(es)
+        bars = _bars(es, ["6000.00"] * 4)
+        engine.add_data(bars)
+        strategy = _TripleClose(_TripleCloseConfig(bar_type=str(bars[0].bar_type)))
+        engine.add_strategy(strategy)
+        engine.run()
+
+        assert len(strategy.denials) == 2
+        assert all(reason.startswith(DENIAL_REASON) for reason in strategy.denials)
+        assert engine.cache.positions_open() == []  # closed, never flipped short
+    finally:
+        engine.dispose()

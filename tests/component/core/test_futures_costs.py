@@ -162,3 +162,33 @@ class TestFuturesSnapshot:
         dumped = StrategyConfigSnapshot(**base, **futures_snapshot([_contract("ES")])).model_dump()
         assert dumped["futures_contracts"]["ES.CME"]["multiplier"] == "50"
         assert dumped["profit_pct_basis"] == "underlying"
+
+
+class TestRunnerSnapshot:
+    """The legacy runner's catalog path persists the same futures keys as the orchestrator."""
+
+    def test_futures_runs_carry_the_contract_terms(self):
+        from types import SimpleNamespace
+
+        from src.core.backtest_runner import _runtime_config_snapshot
+
+        engine = SimpleNamespace(cache=SimpleNamespace(instruments=lambda: [_contract("ES")]))
+        snapshot = _runtime_config_snapshot("sma_crossover", {"a": 1}, engine)
+        assert snapshot["futures_contracts"]["ES.CME"]["multiplier"] == "50"
+        assert snapshot["profit_pct_basis"] == "underlying"
+        assert snapshot["config"] == {"a": 1}
+
+    def test_equity_and_engineless_runs_are_unchanged(self, equity):
+        from types import SimpleNamespace
+
+        from src.core.backtest_runner import _runtime_config_snapshot
+
+        expected = {
+            "strategy_path": "src.core.strategies.sma_crossover",
+            "config_path": "runtime_config",
+            "version": "1.0",
+            "config": {"a": 1},
+        }
+        engine = SimpleNamespace(cache=SimpleNamespace(instruments=lambda: [equity]))
+        assert _runtime_config_snapshot("sma_crossover", {"a": 1}, engine) == expected
+        assert _runtime_config_snapshot("sma_crossover", {"a": 1}, None) == expected

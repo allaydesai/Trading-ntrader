@@ -376,3 +376,17 @@ class TestContractMultiplierHelpers:
             logic.calculate_risk_based_size(
                 Decimal("10000"), Decimal("0.02"), Decimal("100"), Decimal("95"), Decimal("0")
             )
+
+
+@pytest.mark.unit
+def test_risk_based_futures_size_is_never_rounded_up_before_flooring():
+    """3.999 contracts must stay below 4: half-even rounding to 0.01 would make it 4.00."""
+    from src.core.position_sizing import whole_contracts
+
+    logic = PositionSizingLogic()
+    # risk $1,999.50 / (10 points x $50) = 3.999 contracts
+    size = logic.calculate_risk_based_size(
+        Decimal("99975"), Decimal("0.02"), Decimal("7000"), Decimal("6990"), Decimal("50")
+    )
+    assert size == Decimal("3.99")
+    assert whole_contracts(size) == 3

@@ -41,14 +41,17 @@ exactly as long as the run.
 in-flight state filter and modifies). Required = new-exposure contracts x initial margin. New exposure is 0 for
 reduce-only orders and the full quantity otherwise, less what the order closes of its
 targeted position (`position_id`), since the venue is HEDGING. In a list, only orders without
-a parent are counted, and the targeted position's closing credit is spent once across the
-list. Free = the venue account's `balance_free(USD)` minus the initial margin of every
+a parent are counted. The targeted position's closing credit is its size less what
+working opposite orders on that position already claim (review round 2), so it is spent
+once across a list and across separate submits. Free = the venue account's `balance_free(USD)` minus the initial margin of every
 futures order on that venue in state `SUBMITTED` (not yet accepted, so not yet locked; each
 at its own contract's rate). `PENDING_UPDATE`/`PENDING_CANCEL` are in flight too but already
 reserved, so they are not subtracted again. The order is denied when required > free. A
-`ModifyOrder` that raises a working entry's quantity is rejected through
-`_reject_modify_order` when the added contracts' margin exceeds free; price-only and reducing
-modifies pass.
+`ModifyOrder` that raises a working order's quantity (entry, or child unless reduce-only)
+is rejected through `_reject_modify_order` when the added contracts' margin exceeds free;
+price-only and reducing modifies pass. An approved increase is remembered and subtracted from
+free until the order's quantity reaches it, its last event is `OrderModifyRejected` or it
+closes (round 2).
 
 **Known limits** (documented):
 - unrealised P&L is not counted;

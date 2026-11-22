@@ -170,6 +170,8 @@ class TestPersistBacktestResultsEquityCurve:
             returns = pd.Series([0.01, 0.02, -0.005], index=dates)
             mock_analyzer.returns.return_value = returns
             mock_engine.portfolio.analyzer = mock_analyzer
+            # An equity run: no futures contracts, so the snapshot gains no futures keys.
+            mock_engine.cache.instruments.return_value = []
 
             runner.engine = mock_engine
             return runner
