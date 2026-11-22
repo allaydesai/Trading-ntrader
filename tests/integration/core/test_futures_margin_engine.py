@@ -229,6 +229,7 @@ class _ModifyConfig(StrategyConfig, frozen=True):
     bar_type: str
     limit_price: str
     raise_to: int
+    buy_on_bar_3: bool = False
 
 
 class _RaiseWorkingOrder(Strategy):
@@ -256,6 +257,12 @@ class _RaiseWorkingOrder(Strategy):
             self.submit_order(self.order)
         elif self._bar == 2:
             self.modify_order(self.order, quantity=Quantity.from_int(self.config.raise_to))
+        elif self._bar == 3 and self.config.buy_on_bar_3:
+            buy = self.order_factory.market(instrument.id, OrderSide.BUY, Quantity.from_int(1))
+            self.submit_order(buy)
+
+    def on_order_denied(self, event: OrderDenied) -> None:
+        self.modify_rejections.append(f"denied: {event.reason}")
 
     def on_order_modify_rejected(self, event) -> None:
         self.modify_rejections.append(event.reason)
@@ -347,5 +354,39 @@ def test_separate_closing_submits_cannot_reopen_short_unmargined():
         assert len(strategy.denials) == 2
         assert all(reason.startswith(DENIAL_REASON) for reason in strategy.denials)
         assert engine.cache.positions_open() == []  # closed, never flipped short
+    finally:
+        engine.dispose()
+
+
+def test_an_applied_increase_releases_its_hold():
+    """$100K: 1 -> 2 lots approved and applied (55,000 reserved); a 1-lot buy then fits.
+
+    Had the hold survived the exchange's OrderUpdated, free would read 45,000 - 27,500
+    = 17,500 and the buy would be denied.
+    """
+    es = build_futures_contract(ES)
+    engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
+    try:
+        gate = setup_backtest_venues(
+            engine,
+            {es.id.venue: [es]},
+            starting_balance=100_000,
+            fill_model=make_fill_model(42),
+            equity_fee_model=IBKRCommissionModel(),
+        )
+        engine.add_instrument(es)
+        bars = _bars(es, ["6000.00"] * 4)
+        engine.add_data(bars)
+        config = _ModifyConfig(
+            bar_type=str(bars[0].bar_type), limit_price="5000.00", raise_to=2, buy_on_bar_3=True
+        )
+        strategy = _RaiseWorkingOrder(config)
+        engine.add_strategy(strategy)
+        engine.run()
+
+        assert strategy.modify_rejections == []
+        assert engine.cache.order(strategy.order.client_order_id).quantity == 2
+        assert gate is not None and gate.denied_count == 0
+        assert len(engine.cache.positions()) == 1  # the bar-3 market buy filled
     finally:
         engine.dispose()

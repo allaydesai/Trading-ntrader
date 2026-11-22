@@ -34,7 +34,7 @@ from decimal import Decimal
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.execution.messages import ModifyOrder, SubmitOrder, SubmitOrderList
 from nautilus_trader.model.enums import OrderSide, OrderStatus
-from nautilus_trader.model.events import OrderModifyRejected
+from nautilus_trader.model.events import OrderModifyRejected, OrderUpdated
 from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import Order
@@ -55,7 +55,9 @@ class FuturesMarginGate:
         self._cache = cache
         self._msgbus = msgbus
         self._terms = dict(terms)
-        self._approved_targets: dict[ClientOrderId, Decimal] = {}
+        # client order id -> (approved quantity, its modify's ticket); see _unapplied_holds_usd
+        self._holds: dict[ClientOrderId, tuple[Decimal, int]] = {}
+        self._modifies_seen: dict[ClientOrderId, int] = {}
         self.denied_count = 0
 
     def install(self) -> None:
@@ -124,26 +126,28 @@ class FuturesMarginGate:
         Price-only and quantity-reducing modifies always pass; the order's current quantity
         is already reserved (or counted as in flight), so only the increase is checked. Child
         orders are checked too unless reduce-only. An approved increase is held against free
-        balance until the exchange applies or rejects it.
+        balance until the exchange resolves that modify; a denied one leaves an earlier hold.
         """
+        ticket = self._modifies_seen.get(order.client_order_id, 0) + 1
+        self._modifies_seen[order.client_order_id] = ticket
         terms = self._terms.get(order.instrument_id)
         if terms is None or new_quantity is None or order.is_reduce_only:
             return None
         added = new_quantity.as_decimal() - order.quantity.as_decimal()
         if added <= 0:
             return None
-        self._approved_targets.pop(order.client_order_id, None)  # superseded by this modify
         required = added * terms.initial_margin_usd
-        free = self._free_usd(order.instrument_id)
+        # This order's own earlier hold overlaps the new target: check without it.
+        free = self._free_usd(order.instrument_id, exclude=order.client_order_id)
         if required <= free:
-            self._approved_targets[order.client_order_id] = new_quantity.as_decimal()
+            self._holds[order.client_order_id] = (new_quantity.as_decimal(), ticket)
             return None
         return (
             f"{DENIAL_REASON}: modify adds {added} {order.instrument_id} contract(s) needing "
             f"{required} USD initial margin, free={free} USD"
         )
 
-    def _free_usd(self, instrument_id: InstrumentId) -> Decimal:
+    def _free_usd(self, instrument_id: InstrumentId, exclude=None) -> Decimal:
         """Venue free balance less the margin of its submitted-but-unaccepted orders."""
         venue: Venue = instrument_id.venue
         account = self._cache.account_for_venue(venue)
@@ -159,8 +163,7 @@ class FuturesMarginGate:
                 continue
             if not order.is_reduce_only and order.parent_order_id is None:
                 free -= order.leaves_qty.as_decimal() * terms.initial_margin_usd
-        targets = self._approved_targets
-        return free - _unapplied_increases_usd(self._cache, targets, self._terms, venue)
+        return free - _unapplied_holds_usd(self._cache, self._holds, self._terms, venue, exclude)
 
 
 def _closing_credit(cache, position, submitting: set) -> Decimal:
@@ -179,24 +182,33 @@ def _closing_credit(cache, position, submitting: set) -> Decimal:
     return max(credit, ZERO)
 
 
-def _unapplied_increases_usd(
-    cache, targets: dict, terms: Mapping[InstrumentId, FuturesTerms], venue: Venue
+def _unapplied_holds_usd(
+    cache,
+    holds: dict,
+    terms: Mapping[InstrumentId, FuturesTerms],
+    venue: Venue,
+    exclude: ClientOrderId | None = None,
 ) -> Decimal:
-    """Margin of approved quantity increases the exchange has not applied yet.
+    """Margin of approved quantity increases the exchange has not resolved yet.
 
-    Prunes ``targets`` (client order id -> approved quantity) once an increase is applied,
-    rejected (``OrderModifyRejected``) or its order closes."""
+    Every ``ModifyOrder`` passes through the gate and the venue resolves an order's
+    modifies in order, each with one ``OrderUpdated`` or ``OrderModifyRejected``. A hold
+    whose ticket is the n-th modify of its order is therefore released once that order
+    has n resolutions (applied or rejected), or when it closes. ``holds`` is pruned.
+    """
     total = ZERO
-    for client_order_id, target in list(targets.items()):
+    for client_order_id, (target, ticket) in list(holds.items()):
         order = cache.order(client_order_id)
-        if order is None or order.is_closed or order.quantity.as_decimal() >= target:
-            del targets[client_order_id]
-        elif isinstance(order.last_event, OrderModifyRejected):
-            del targets[client_order_id]
-        elif order.instrument_id.venue == venue:
-            added = target - order.quantity.as_decimal()
+        if order is None or order.is_closed or _modify_resolutions(order) >= ticket:
+            del holds[client_order_id]
+        elif order.instrument_id.venue == venue and client_order_id != exclude:
+            added = max(target - order.quantity.as_decimal(), ZERO)
             total += added * terms[order.instrument_id].initial_margin_usd
     return total
+
+
+def _modify_resolutions(order: Order) -> int:
+    return sum(isinstance(e, (OrderUpdated, OrderModifyRejected)) for e in order.events)
 
 
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:

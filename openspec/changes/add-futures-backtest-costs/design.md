@@ -49,9 +49,12 @@ at its own contract's rate). `PENDING_UPDATE`/`PENDING_CANCEL` are in flight too
 reserved, so they are not subtracted again. The order is denied when required > free. A
 `ModifyOrder` that raises a working order's quantity (entry, or child unless reduce-only)
 is rejected through `_reject_modify_order` when the added contracts' margin exceeds free;
-price-only and reducing modifies pass. An approved increase is remembered and subtracted from
-free until the order's quantity reaches it, its last event is `OrderModifyRejected` or it
-closes (round 2).
+price-only and reducing modifies pass. An approved increase is held (subtracted from free)
+with a ticket: its ordinal among that order's modifies, all of which pass through the gate.
+The venue resolves an order's modifies in order, one `OrderUpdated` or `OrderModifyRejected`
+each, so the hold is released once the order has that many resolutions, or when it closes.
+A later modify is checked without the order's own hold and replaces it only if approved
+(review rounds 2 and 3).
 
 **Known limits** (documented):
 - unrealised P&L is not counted;

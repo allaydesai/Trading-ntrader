@@ -39,7 +39,9 @@ futures contract gets exactly the `add_venue` call it always had.
   non-reduce-only child) is rejected (`OrderModifyRejected`, same reason prefix) when the
   added contracts' initial margin exceeds free balance. Price-only, quantity-reducing and
   reduce-only modifies always pass. An approved increase is held against free balance until
-  the exchange applies it, rejects it or the order closes.
+  the venue resolves *that* modify (its own `OrderUpdated` or `OrderModifyRejected`; modifies
+  of one order resolve in order) or the order closes. A later modify of the same order is
+  checked without the earlier hold and replaces it only if approved.
 - **Free balance** is the venue account's realised cash minus locked margin (initial for
   working orders, maintenance for positions), minus the initial margin of every futures
   order on that venue that is submitted but not yet accepted (each at its own contract's

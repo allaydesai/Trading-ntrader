@@ -51,7 +51,7 @@ def _order(instrument=ES, side=OrderSide.BUY, qty=1, status=OrderStatus.INITIALI
         is_open=status in open_states,
         is_inflight=status in {OrderStatus.SUBMITTED, OrderStatus.PENDING_UPDATE},
         is_closed=status in {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED},
-        last_event=kw.get("last_event"),
+        events=list(kw.get("events", [])),
     )
 
 
@@ -199,9 +199,21 @@ class TestModify:
         assert reason is not None and "110000" in reason
 
 
+def _rejected():
+    from nautilus_trader.model.events import OrderModifyRejected
+
+    return OrderModifyRejected.__new__(OrderModifyRejected)
+
+
+def _updated():
+    from nautilus_trader.model.events import OrderUpdated
+
+    return OrderUpdated.__new__(OrderUpdated)
+
+
 class TestApprovedIncreases:
-    def _approve(self, free=60_000):
-        working = _order(qty=1, status=OrderStatus.ACCEPTED)
+    def _approve(self, free=60_000, working=None):
+        working = working or _order(qty=1, status=OrderStatus.ACCEPTED)
         cache = _Cache(free=free, orders=[working])
         gate = _gate(cache)
         assert gate.modify_denial_reason(working, _qty(2)) is None  # approved: +27,500
@@ -217,14 +229,38 @@ class TestApprovedIncreases:
     def test_the_hold_ends_once_applied(self):
         gate, _, working = self._approve()
         working.quantity = _qty(2)  # the exchange applied it; balance_free now reserves it
+        working.events.append(_updated())
         assert gate.denial_reason([_order(qty=2)], None) is None
 
-    def test_the_hold_ends_on_rejection(self):
-        from nautilus_trader.model.events import OrderModifyRejected
-
+    def test_the_hold_ends_on_its_own_rejection(self):
         gate, _, working = self._approve()
-        working.last_event = OrderModifyRejected.__new__(OrderModifyRejected)
+        working.events.append(_rejected())
         assert gate.denial_reason([_order(qty=2)], None) is None
+
+    def test_an_earlier_modifys_rejection_does_not_release_a_later_hold(self):
+        """A price-only modify sent first is resolved first; the increase is still pending."""
+        working = _order(qty=1, status=OrderStatus.ACCEPTED)
+        gate = _gate(_Cache(free=60_000, orders=[working]))
+        assert gate.modify_denial_reason(working, None) is None  # price-only, modify #1
+        assert gate.modify_denial_reason(working, _qty(2)) is None  # increase, modify #2
+        working.events.append(_rejected())  # resolves modify #1 only
+        assert gate.denial_reason([_order(qty=2)], None) is not None
+
+    def test_a_denied_later_modify_keeps_the_earlier_hold(self):
+        gate, _, working = self._approve()  # +1 lot held (27,500)
+        assert gate.modify_denial_reason(working, _qty(4)) is not None  # +3 = 82,500 > 60,000
+        # The +1 hold must survive: 60,000 - 27,500 = 32,500 < 2 lots (55,000).
+        assert gate.denial_reason([_order(qty=2)], None) is not None
+        assert gate.denial_reason([_order(qty=1)], None) is None
+
+    def test_an_approved_later_modify_replaces_rather_than_stacks_the_hold(self):
+        gate, _, working = self._approve()  # 1 -> 2 held
+        assert gate.modify_denial_reason(working, _qty(3)) is None  # 1 -> 3: +2 = 55,000
+        # Hold is now 55,000, not 27,500 + 55,000: 5,000 free, so no lot fits.
+        assert gate.denial_reason([_order(qty=1)], None) is not None
+        working.events.extend([_updated(), _updated()])  # both resolved
+        working.quantity = _qty(3)
+        assert gate.denial_reason([_order(qty=1)], None) is None
 
     def test_the_hold_ends_when_the_order_closes(self):
         gate, _, working = self._approve()
