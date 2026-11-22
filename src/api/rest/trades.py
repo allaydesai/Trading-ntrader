@@ -26,6 +26,8 @@ from src.models.trade import (
     TradeListResponse,
     TradeStatistics,
 )
+from src.services.futures.returns import TRADE_COLUMNS as FUTURES_TRADE_COLUMNS
+from src.services.futures.returns import terms_from_snapshot, trade_rows
 from src.services.trade_analytics import (
     calculate_drawdowns,
     calculate_trade_statistics,
@@ -590,50 +592,16 @@ async def export_trades(
     end_date = backtest.end_date.strftime("%Y-%m-%d")
     base_filename = f"{strategy_name}_{instrument}_{start_date}_to_{end_date}_trades"
 
+    rows = _with_futures_columns(
+        backtest.config_snapshot, [_export_row(trade) for trade in pydantic_trades]
+    )
     if format == "csv":
-        # Create CSV in memory
+        # Create CSV in memory; a futures run adds its columns after the equity ones
         output = io.StringIO()
-        writer = csv.DictWriter(
-            output,
-            fieldnames=[
-                "instrument_id",
-                "trade_id",
-                "order_side",
-                "entry_timestamp",
-                "entry_price",
-                "exit_timestamp",
-                "exit_price",
-                "quantity",
-                "profit_loss",
-                "profit_pct",
-                "commission_amount",
-                "holding_period_seconds",
-            ],
-        )
-
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]) if rows else EXPORT_COLUMNS)
         writer.writeheader()
-
-        for trade in pydantic_trades:
-            writer.writerow(
-                {
-                    "instrument_id": trade.instrument_id,
-                    "trade_id": trade.trade_id,
-                    "order_side": trade.order_side,
-                    "entry_timestamp": trade.entry_timestamp.isoformat(),
-                    "entry_price": str(trade.entry_price),
-                    "exit_timestamp": trade.exit_timestamp.isoformat()
-                    if trade.exit_timestamp
-                    else "",
-                    "exit_price": str(trade.exit_price) if trade.exit_price else "",
-                    "quantity": str(trade.quantity),
-                    "profit_loss": str(trade.profit_loss) if trade.profit_loss else "",
-                    "profit_pct": str(trade.profit_pct) if trade.profit_pct else "",
-                    "commission_amount": str(trade.commission_amount)
-                    if trade.commission_amount
-                    else "",
-                    "holding_period_seconds": trade.holding_period_seconds or "",
-                }
-            )
+        for row in rows:
+            writer.writerow({k: _csv_cell(k, v) for k, v in row.items()})
 
         csv_content = output.getvalue()
 
@@ -644,27 +612,7 @@ async def export_trades(
         )
     else:  # format == "json"
         # Export as JSON array
-        json_trades = [
-            {
-                "instrument_id": trade.instrument_id,
-                "trade_id": trade.trade_id,
-                "order_side": trade.order_side,
-                "entry_timestamp": trade.entry_timestamp.isoformat(),
-                "entry_price": str(trade.entry_price),
-                "exit_timestamp": trade.exit_timestamp.isoformat()
-                if trade.exit_timestamp
-                else None,
-                "exit_price": str(trade.exit_price) if trade.exit_price else None,
-                "quantity": str(trade.quantity),
-                "profit_loss": str(trade.profit_loss) if trade.profit_loss else None,
-                "profit_pct": str(trade.profit_pct) if trade.profit_pct else None,
-                "commission_amount": str(trade.commission_amount)
-                if trade.commission_amount
-                else None,
-                "holding_period_seconds": trade.holding_period_seconds,
-            }
-            for trade in pydantic_trades
-        ]
+        json_trades = rows
 
         import json
 
@@ -675,3 +623,52 @@ async def export_trades(
             media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="{base_filename}.json"'},
         )
+
+
+HOLD = "holding_period_seconds"
+#: The export's equity columns, in order; a futures run appends ``returns.TRADE_COLUMNS``.
+EXPORT_COLUMNS = [
+    "instrument_id",
+    "trade_id",
+    "order_side",
+    "entry_timestamp",
+    "entry_price",
+    "exit_timestamp",
+    "exit_price",
+    "quantity",
+    "profit_loss",
+    "profit_pct",
+    "commission_amount",
+    "holding_period_seconds",
+]
+
+
+def _export_row(trade) -> dict:
+    """One trade as exported (JSON values; the CSV writes ``None`` as empty)."""
+    return {
+        "instrument_id": trade.instrument_id,
+        "trade_id": trade.trade_id,
+        "order_side": trade.order_side,
+        "entry_timestamp": trade.entry_timestamp.isoformat(),
+        "entry_price": str(trade.entry_price),
+        "exit_timestamp": trade.exit_timestamp.isoformat() if trade.exit_timestamp else None,
+        "exit_price": str(trade.exit_price) if trade.exit_price else None,
+        "quantity": str(trade.quantity),
+        "profit_loss": str(trade.profit_loss) if trade.profit_loss else None,
+        "profit_pct": str(trade.profit_pct) if trade.profit_pct else None,
+        "commission_amount": str(trade.commission_amount) if trade.commission_amount else None,
+        "holding_period_seconds": trade.holding_period_seconds,
+    }
+
+
+def _csv_cell(column: str, value):
+    """CSV text: ``None`` is empty, and so is a 0-second hold (the CSV always wrote ``or ""``)."""
+    return "" if value is None or (column == HOLD and not value) else value
+
+
+def _with_futures_columns(snapshot, rows: list[dict]) -> list[dict]:
+    """Rows of a futures run gain contracts, notional, margin, points and returns (M4)."""
+    if not terms_from_snapshot(snapshot):
+        return rows
+    blank = dict.fromkeys(FUTURES_TRADE_COLUMNS)
+    return [{**row, **blank, **cols} for row, cols in zip(rows, trade_rows(snapshot, rows))]

@@ -61,6 +61,15 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: pinned — ``src/api/rest/equity.py`` reads the curve via the new
 #: ``BacktestQueryService.get_equity_curve`` (the ``run_equity_curves`` table). No
 #: paper view changed; a sealed session still gets the 2-point fallback curve.
+#: **Regenerated 2026-11-22 by PO ruling (Allay, futures dashboard, M4)**, for exactly
+#: the files ``openspec/changes/add-futures-reporting/design.md`` lists: the futures
+#: panel (new ``templates/partials/futures_panel.html``, ``backtest_detail.py``,
+#: ``detail.html``), the trades table (``ui/backtests.py``'s trades-table route, now
+#: in-process instead of a hardcoded ``localhost:8000``, and ``trades_table.html``), the
+#: export (``rest/trades.py``), the run list (``backtest_list.py``,
+#: ``list_fragment.html``) and the CLI comparison (``compare.py``). 60 files. Equity pages
+#: render byte for byte as before: ``tests/component/api/test_futures_dashboard.py``
+#: pins them against goldens captured from the pre-M4 tree. Nothing else was unfrozen.
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -75,10 +84,10 @@ FROZEN_VIEWS: dict[str, str] = {
         "24111e8724ac4804fa632c0f7d2bab5b54608e65b389e4d8211ffec07e5e67a5"
     ),
     "src/api/models/backtest_detail.py": (
-        "a6ce6dbd169ce6ccf024fc361a2f1c7a3ef5f09a5059b3840ef3475a76112e0a"
+        "8b970f4eb02d5d72ed35f373017e08c786cea7ac8c53fe28e95b23ac092e4221"
     ),
     "src/api/models/backtest_list.py": (
-        "fb8f17848fd9b3ed1be633f5472627f367ae87ff8b4c3a095cfcfb9b3f22cffe"
+        "553f6107bee0af178bf080637425f0951833eff5f6fa2e7a8d52a15a0d776fba"
     ),
     "src/api/models/chart_equity.py": (
         "612c65768abd41994fcd7f6c02abafb939802ca5d13b9132dfb416cb484488b2"
@@ -123,24 +132,24 @@ FROZEN_VIEWS: dict[str, str] = {
     "src/api/rest/timeseries.py": (
         "b038af31a01132ff4b4a878d3cc70a9ce9e9fb4388b014a0427a8cf4228a4a5d"
     ),
-    "src/api/rest/trades.py": "842b916180c4e81dab9a185b3291e44cf742e1a5b5a71da32f77d2bf9e197837",
+    "src/api/rest/trades.py": "660d183885a95bac08007bbfc7faf021d1c322fc985505e53b3e324bd23bbd4e",
     "src/api/stats_service.py": "aebe188728379366b365c1a12993b3817b5a2cdd8c7aaee09b46712e7cc35fa9",
     "src/api/supplementary_service.py": (
         "4ae532d4155697d67b30fb436635576b3f30385ad6acea87f5139cc9da050f9a"
     ),
     "src/api/ui/__init__.py": "4eb820a851a97b3242ffeabe826021b52ed9ed8243e92839829086c05bd74457",
-    "src/api/ui/backtests.py": "ef02660f3a4940015cfa025e809e6f74477ac3fcb41a671c3b60c527a0025606",
+    "src/api/ui/backtests.py": "95babc1c85d729394d0748d34a4d0732eed1b30bf63b3c550571a1f212c9ef3a",
     "src/api/ui/dashboard.py": "56e5152ebf0123debc0ce4e11f70036d5a5b69c6d4e6da58034731b7575fd5b6",
     "src/api/ui/explorer.py": "601685c8c98d90ff3aad21733709a6caebc0cbf7a54e1e6e6ff2a7ab2d141444",
     "src/api/web.py": "881521499c53a6ac85cf2a46e5a94cf6f5a4a0ce4238927c92ab6a5c2fbd7dd0",
     "templates/backtests/detail.html": (
-        "d4ab0653454adab2a64feac2f5b4c2567d9abd806291be554ecf011728416980"
+        "7e75a8c5eca3af99f7b99c057e020d8ece9d2f5bee45b5951b0761cfe638251e"
     ),
     "templates/backtests/list.html": (
         "8088f00de4a8bcd6b28b3f4db93b6773209ea216440003f19253084da0c0fe84"
     ),
     "templates/backtests/list_fragment.html": (
-        "f0730662a142dfc8b577c2770a43fb070ad76f796c080b386903d45865d48591"
+        "8495f4f13ec006628c53e4b9cbf981ea307a22e9417d947779957555e91bc336"
     ),
     "templates/backtests/partials/strategy_params.html": (
         "5b4df67383ab929545d6c48777df3bd445d5ec6dde1dbb966a66efd33f8e2a48"
@@ -186,6 +195,9 @@ FROZEN_VIEWS: dict[str, str] = {
     "templates/partials/footer.html": (
         "5c6153ee9b7e7981776ac769e79150a27806bfe0527055d6f5ba4337b13adbfa"
     ),
+    "templates/partials/futures_panel.html": (
+        "7a732306e8b745244408a9fcc397b454f8c1891625dfa322bf4fa02afe9d62f2"
+    ),
     "templates/partials/htmx_error_handler.html": (
         "2dd569882b9c1213812dfd6508378e0eedbac1dcbfaadfc1360a46f76edc14bb"
     ),
@@ -196,7 +208,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "dbc124eb8c2c42947f04708009f2ea971a72e675f2095c1f2c93858a140f44d2"
     ),
     "templates/partials/trades_table.html": (
-        "d8d012553f453aa00465ad8ec0c169c8871c5e98feeefb621c07a83a19a95adf"
+        "4473858579df5edc06389036e8cd39dfa61432576e391498bf95f73be6332684"
     ),
     "templates/partials/trading_summary.html": (
         "354c60d895f95c731f917942bb6c50fe4e8a06067cda11d13571bfba3b784a65"
@@ -205,7 +217,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "2d27d4ad648bbb0a8d4dccab913283f0a67c65866308aedbbcc8610022cd0db0"
     ),
     "src/cli/commands/compare.py": (
-        "ae73dccbd662c4797a9778f1b2cbf9287fb13556d100af1857438286a9455fea"
+        "9e208c2a8d8b3724c2c2b0a3358ca621536ccd0108965e4da4feeb77e9c489bd"
     ),
 }
 

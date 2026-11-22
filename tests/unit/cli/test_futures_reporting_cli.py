@@ -214,3 +214,23 @@ class TestFuturesFirst:
             report._generate_text_report(_run(ES_SNAPSHOT), str(path))
         text = path.read_text()
         assert text.index("Return on margin (headline)") < text.index("Total Return")
+
+
+class TestCompare:
+    def _compare(self, runs):
+        from src.cli.commands import compare
+
+        with _captured(compare) as out:
+            compare._display_comparison_table(runs)
+        return out.getvalue()
+
+    def test_futures_comparison_adds_asset_class_and_return_on_margin(self):
+        text = self._compare([_run(EQUITY_SNAPSHOT, symbol="AAPL"), _run(ES_SNAPSHOT)])
+        assert "Asset Class" in text and "futures" in text and "equity" in text
+        assert "Return on Margin" in text and "+2.70%" in text
+        assert "Return on Underl" in text
+
+    def test_equity_only_comparison_has_no_futures_rows(self):
+        text = self._compare([_run(EQUITY_SNAPSHOT, symbol="AAPL")] * 2)
+        assert "Asset Class" not in text
+        assert "Return on Margin" not in text

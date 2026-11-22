@@ -464,117 +464,73 @@ def test_export_backtest_returns_404_for_nonexistent():
 
 
 # ========== Get Trades Table Tests ==========
+#
+# The route calls the trades API endpoint in-process (M4: it used to fetch a hardcoded
+# ``http://localhost:8000``), so these override the service and the DB session instead of
+# patching httpx. Equity-vs-futures rendering: tests/component/api/test_futures_dashboard.py.
 
 
-@pytest.fixture
-def mock_httpx_client():
-    """Mock httpx client for trades table endpoint."""
-    return AsyncMock()
+def _trades_table_client(backtest, executed):
+    """A client whose DB answers the count and the page query with no trades."""
+    from src.api.dependencies import get_db
+
+    service = AsyncMock(spec=BacktestQueryService)
+    service.get_backtest_by_internal_id = AsyncMock(return_value=backtest)
+    result = MagicMock()
+    result.scalar.return_value = 0
+    result.scalars.return_value.all.return_value = []
+    db = MagicMock()
+
+    async def execute(statement, *args, **kwargs):
+        executed.append(str(statement))
+        return result
+
+    db.execute = execute
+
+    async def override_db():
+        yield db
+
+    app.dependency_overrides[get_backtest_query_service] = lambda: service
+    app.dependency_overrides[get_db] = override_db
+    return TestClient(app)
 
 
-def test_get_trades_table_returns_200_on_success(client_for_detail: TestClient, monkeypatch):
-    """Get trades table returns 200 when backtest exists."""
-    backtest_id = 1
-
-    # Mock httpx.AsyncClient to return successful response
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "backtest_id": backtest_id,
-        "trades": [],
-        "pagination": {
-            "total_items": 0,
-            "total_pages": 0,
-            "current_page": 1,
-            "page_size": 20,
-            "has_next": False,
-            "has_prev": False,
-        },
-        "sorting": {"sort_by": "entry_timestamp", "sort_order": "asc"},
-    }
-
-    async def mock_get(*args, **kwargs):
-        return mock_response
-
-    mock_client = MagicMock()
-    mock_client.get = mock_get
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    import httpx
-
-    monkeypatch.setattr(httpx, "AsyncClient", lambda: mock_client)
-
-    response = client_for_detail.get(f"/backtests/{backtest_id}/trades-table")
-    assert response.status_code == 200
+def test_get_trades_table_returns_200_on_success():
+    """Get trades table returns 200 when backtest exists, with no HTTP call."""
+    backtest = MagicMock(config_snapshot={"config": {}})
+    try:
+        response = _trades_table_client(backtest, []).get("/backtests/1/trades-table")
+        assert response.status_code == 200
+        assert "No trades executed" in response.text
+    finally:
+        app.dependency_overrides.clear()
 
 
-def test_get_trades_table_returns_404_when_backtest_not_found(
-    client_for_detail: TestClient, monkeypatch
-):
+def test_get_trades_table_returns_404_when_backtest_not_found():
     """Get trades table returns 404 when backtest doesn't exist."""
-    backtest_id = 999
-
-    # Mock httpx.AsyncClient to return 404
-    mock_response = MagicMock()
-    mock_response.status_code = 404
-
-    async def mock_get(*args, **kwargs):
-        return mock_response
-
-    mock_client = MagicMock()
-    mock_client.get = mock_get
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    import httpx
-
-    monkeypatch.setattr(httpx, "AsyncClient", lambda: mock_client)
-
-    response = client_for_detail.get(f"/backtests/{backtest_id}/trades-table")
-    assert response.status_code == 404
+    try:
+        response = _trades_table_client(None, []).get("/backtests/999/trades-table")
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
 
 
-def test_get_trades_table_accepts_pagination_params(client_for_detail: TestClient, monkeypatch):
-    """Get trades table accepts pagination parameters."""
-    backtest_id = 1
+def test_get_trades_table_accepts_pagination_params():
+    """Paging and sorting reach the in-process query; an unknown sort field falls back."""
+    backtest = MagicMock(config_snapshot={"config": {}})
+    executed: list[str] = []
+    try:
+        client = _trades_table_client(backtest, executed)
+        response = client.get(
+            "/backtests/1/trades-table?page=2&page_size=50&sort_by=profit_loss&sort_order=desc"
+        )
+        assert response.status_code == 200
+        page_query = executed[-1]
+        assert "ORDER BY trades.profit_loss DESC" in page_query
+        assert "LIMIT" in page_query and "OFFSET" in page_query
 
-    # Mock httpx.AsyncClient to capture request params
-    captured_params = {}
-
-    async def mock_get(*args, **kwargs):
-        nonlocal captured_params
-        captured_params = kwargs.get("params", {})
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "trades": [],
-            "pagination": {
-                "total_items": 0,
-                "total_pages": 0,
-                "current_page": 2,
-                "page_size": 50,
-                "has_next": False,
-                "has_prev": True,
-            },
-            "sorting": {"sort_by": "pnl", "sort_order": "desc"},
-        }
-        return mock_response
-
-    mock_client = MagicMock()
-    mock_client.get = mock_get
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    import httpx
-
-    monkeypatch.setattr(httpx, "AsyncClient", lambda: mock_client)
-
-    response = client_for_detail.get(
-        f"/backtests/{backtest_id}/trades-table?page=2&page_size=50&sort_by=pnl&sort_order=desc"
-    )
-    assert response.status_code == 200
-    assert captured_params["page"] == 2
-    assert captured_params["page_size"] == 50
-    assert captured_params["sort_by"] == "pnl"
-    assert captured_params["sort_order"] == "desc"
+        executed.clear()
+        assert client.get("/backtests/1/trades-table?sort_by=pnl").status_code == 200
+        assert "ORDER BY trades.entry_timestamp ASC" in executed[-1]
+    finally:
+        app.dependency_overrides.clear()

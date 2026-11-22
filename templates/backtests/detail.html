@@ -115,7 +115,7 @@
     </div>
 
     {% if view.is_successful and view.metrics_panel %}
-    <!-- Metrics Panel -->
+    <!-- Metrics Panel -->{% if view.futures %}{% include "partials/futures_panel.html" %}{% endif %}
     {% include "partials/metrics_panel.html" %}
 
     <!-- Trading Summary -->

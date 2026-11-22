@@ -93,7 +93,6 @@ FILE_ALLOWLIST: dict[str, int] = {
 SIZE_BASELINE: dict[str, int] = {
     "src/api/models/backtest_detail.py::build_metrics_panel": 99,
     "src/api/rest/indicators.py::_compute_bollinger_indicators": 54,
-    "src/api/rest/trades.py::export_trades": 93,
     "src/api/stats_service.py::_build_ticker_stats": 72,
     "src/api/ui/backtests.py::backtest_list": 64,
     "src/api/ui/backtests.py::backtest_list_fragment": 58,
@@ -105,7 +104,7 @@ SIZE_BASELINE: dict[str, int] = {
     "src/cli/commands/backtest.py::run_multi_backtest": 93,
     "src/cli/commands/catalog.py::restamp_venues": 63,
     "src/cli/commands/compare.py::_compare_backtests_sync": 60,
-    "src/cli/commands/compare.py::_display_comparison_table": 61,
+    "src/cli/commands/compare.py::_display_comparison_table": 58,
     "src/cli/commands/data.py::check_data": 83,
     "src/cli/commands/data.py::fetch": 64,
     "src/cli/commands/data.py::import_data": 73,

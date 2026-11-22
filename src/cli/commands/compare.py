@@ -15,6 +15,7 @@ from rich.text import Text
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.futures.display import run_summary, signed_pct
 
 console = Console()
 
@@ -169,12 +170,7 @@ def _display_comparison_table(backtests: List):
 
     # Add column for each backtest (truncated UUID)
     for bt in backtests:
-        table.add_column(
-            str(bt.run_id)[:8] + "...",
-            justify="right",
-            style="white",
-            width=15,
-        )
+        table.add_column(str(bt.run_id)[:8] + "...", justify="right", style="white", width=15)
 
     # Helper function to format metric row
     def add_metric_row(metric_name: str, extractor, formatter=str):
@@ -192,6 +188,8 @@ def _display_comparison_table(backtests: List):
     add_metric_row("Strategy", lambda bt: bt.strategy_name, lambda x: x)
     add_metric_row("Symbol", lambda bt: bt.instrument_symbol, lambda x: x)
     add_metric_row("Date", lambda bt: bt.created_at, lambda x: x.strftime("%Y-%m-%d"))
+    for row in _futures_rows(backtests):  # only when a compared run is futures (M4)
+        table.add_row(*row)
 
     # Performance metric rows
     add_metric_row(
@@ -231,6 +229,24 @@ def _display_comparison_table(backtests: List):
     _highlight_best_performer(backtests)
 
     console.print()  # Add blank line at end
+
+
+def _futures_rows(backtests: List) -> list[list[str]]:
+    """Asset class, return on margin and on the underlying; none for an all-equity set."""
+    summaries = [run_summary(bt) for bt in backtests]
+    if not any(summaries):
+        return []
+    return [
+        ["Asset Class", *(s.asset_class if s else "equity" for s in summaries)],
+        [
+            "Return on Margin",
+            *(signed_pct(s.return_on_margin_pct) if s else "-" for s in summaries),
+        ],
+        [
+            "Return on Underlying",
+            *(signed_pct(s.return_on_underlying_pct) if s else "-" for s in summaries),
+        ],
+    ]
 
 
 def _highlight_best_performer(backtests: List):
