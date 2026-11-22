@@ -180,7 +180,7 @@ SIZE_BASELINE: dict[str, int] = {
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
     # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106
     # (shrank): the own-book read is `positions_open(...)`, no `is_open` re-checks.
-    "src/core/strategies/sma_crossover.py::SMACrossover": 106,
+    "src/core/strategies/sma_crossover.py::SMACrossover": 101,
     # Story 4.4, 58 -> 52 (shrank): registered SMAs replaced the deque average.
     # Story 4.5, 52 -> 51 (shrank): the own-book net replaced three portfolio reads.
     "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 51,
