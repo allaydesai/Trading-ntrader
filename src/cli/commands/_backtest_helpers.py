@@ -376,18 +376,13 @@ def _resolve_cli_mode(
         Decimal(str(starting_balance)) if starting_balance else portfolio_value
     )
 
-    # Build strategy parameters based on strategy type
-    if resolved_strategy in ["sma", "sma_crossover", "sma_crossover_long_only"]:
-        strategy_params = {
-            "portfolio_value": portfolio_value,
-            "position_size_pct": Decimal("10.0"),
-            "fast_period": resolved_fast_period,
-            "slow_period": resolved_slow_period,
-        }
-    elif resolved_strategy == "bollinger_reversal":
-        strategy_params = {"portfolio_value": portfolio_value}
-    else:
-        strategy_params = {"trade_size": resolved_trade_size}
+    strategy_params = _cli_strategy_params(
+        resolved_strategy,
+        portfolio_value,
+        resolved_trade_size,
+        resolved_fast_period,
+        resolved_slow_period,
+    )
 
     # Build BacktestRequest from CLI args
     request = BacktestRequest.from_cli_args(
@@ -404,6 +399,40 @@ def _resolve_cli_mode(
     )
 
     return request, resolved_data_source
+
+
+#: CLI-mode strategies that also take the SMA ``--fast-period``/``--slow-period`` flags.
+_SMA_CLI_STRATEGIES = ("sma", "sma_crossover", "sma_crossover_long_only")
+
+
+def _cli_strategy_params(
+    strategy: str,
+    portfolio_value: Decimal,
+    trade_size: int,
+    fast_period: int,
+    slow_period: int,
+) -> dict:
+    """CLI-mode strategy params: size from the account for any config with ``portfolio_value``.
+
+    The account starts at ``portfolio_value``; a config left on its own default would size
+    every trade off a different amount. Configs without the field get the legacy
+    ``trade_size``. An unknown strategy falls through to ``trade_size`` and is refused by
+    :meth:`BacktestRequest.from_cli_args`.
+    """
+    from src.core.strategy_registry import StrategyRegistry
+
+    try:
+        config_path = StrategyRegistry.get(strategy).config_path
+    except KeyError:
+        config_path = None
+    if not _config_declares(config_path, "portfolio_value"):
+        return {"trade_size": trade_size}
+    params: dict = {"portfolio_value": portfolio_value}
+    if strategy in _SMA_CLI_STRATEGIES:
+        params.update(
+            position_size_pct=Decimal("10.0"), fast_period=fast_period, slow_period=slow_period
+        )
+    return params
 
 
 def _resolve_named_catalog_loader():

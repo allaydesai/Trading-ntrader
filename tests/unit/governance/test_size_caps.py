@@ -99,7 +99,7 @@ SIZE_BASELINE: dict[str, int] = {
     "src/api/ui/backtests.py::run_backtest_submit": 126,
     "src/api/ui/explorer.py::chart_panel_fragment": 89,
     "src/cli/commands/_backtest_helpers.py::_load_catalog_data": 74,
-    "src/cli/commands/_backtest_helpers.py::_resolve_cli_mode": 66,
+    "src/cli/commands/_backtest_helpers.py::_resolve_cli_mode": 63,
     "src/cli/commands/backtest.py::run_backtest": 173,
     "src/cli/commands/backtest.py::run_multi_backtest": 93,
     "src/cli/commands/catalog.py::restamp_venues": 63,

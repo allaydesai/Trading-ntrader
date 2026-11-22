@@ -1161,6 +1161,61 @@ backtest:
         assert request.bar_type == "1-HOUR-LAST"
 
 
+def _resolve_cli(strategy: str, trade_size: int | None = None):
+    from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+    request, _ = resolve_backtest_request(
+        config_file=None,
+        symbol="AAPL",
+        strategy=strategy,
+        start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        end=datetime(2024, 6, 30, tzinfo=timezone.utc),
+        data_source=None,
+        starting_balance=None,
+        persist=False,
+        console=Console(),
+        trade_size=trade_size,
+    )
+    return request
+
+
+class TestCliModePortfolioValue:
+    """CLI mode sizes any strategy whose config has ``portfolio_value`` from the account.
+
+    The account starts at ``trade_size x 10``; a strategy left on its config default
+    ($1M) would size every trade off a tenth of the money it actually has.
+    """
+
+    def test_riptide_gets_the_account_portfolio_value(self):
+        pytest.importorskip("src.core.strategies.custom.riptide")
+        request = _resolve_cli("riptide")
+        assert request.strategy_config["portfolio_value"] == Decimal("10000000")
+        assert request.starting_balance == Decimal("10000000")
+        assert "trade_size" not in request.strategy_config
+
+    def test_portfolio_value_follows_trade_size(self):
+        pytest.importorskip("src.core.strategies.custom.riptide")
+        request = _resolve_cli("riptide", trade_size=50_000)
+        assert request.strategy_config["portfolio_value"] == Decimal("500000")
+
+    def test_alias_resolves_to_the_config(self):
+        pytest.importorskip("src.core.strategies.custom.riptide")
+        assert _resolve_cli("rip").strategy_config["portfolio_value"] == Decimal("10000000")
+
+    def test_sma_crossover_keeps_its_periods_and_pct(self):
+        config = _resolve_cli("sma_crossover").strategy_config
+        assert config == {
+            "portfolio_value": Decimal("10000000"),
+            "position_size_pct": Decimal("10.0"),
+            "fast_period": 10,
+            "slow_period": 20,
+        }
+
+    def test_strategy_without_portfolio_value_gets_trade_size(self):
+        config = _resolve_cli("sma_momentum").strategy_config
+        assert config == {"trade_size": 1000000}
+
+
 class _FakePrice:
     """Fake price object that returns a specific string representation."""
 
