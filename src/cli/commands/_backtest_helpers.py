@@ -18,6 +18,11 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from src.cli.commands._strategy_params import (
+    _cli_strategy_params,
+    apply_contracts,
+    check_contracts_instrument,
+)
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
@@ -183,73 +188,6 @@ def resolve_backtest_request(
     return apply_contracts(request, contracts), source
 
 
-#: The setting ``--contracts`` writes into a strategy's config (``SMAConfig.contracts``).
-CONTRACTS_KEY = "contracts"
-
-
-def _config_declares(config_path: str | None, field_name: str) -> bool:
-    """Whether the strategy config class at ``module:Class`` has ``field_name``."""
-    if not config_path or ":" not in config_path:
-        return False
-    import importlib
-
-    module_name, class_name = config_path.split(":", 1)
-    config_cls = getattr(importlib.import_module(module_name), class_name, None)
-    return field_name in getattr(config_cls, "__struct_fields__", ())
-
-
-def _is_futures_symbol(symbol: str) -> bool:
-    """A root in the futures contract specs (ES, NQ, CL, GC, ZN), dotted or not."""
-    from src.services.futures.contract_specs import load_contract_specs
-
-    return symbol.split(".")[0].upper() in load_contract_specs().roots
-
-
-def apply_contracts(request: BacktestRequest, contracts: int | None) -> BacktestRequest:
-    """``--contracts N``: set the strategy's whole-contract size; ``None`` changes nothing.
-
-    Raises:
-        click.UsageError: The strategy's config has no ``contracts`` setting, or the symbol
-            is not a futures root (a symbol that only collides with one, an equity ``CL``,
-            is caught after the instrument loads: :func:`check_contracts_instrument`).
-    """
-    if contracts is None:
-        return request
-    if not _config_declares(request.config_path, CONTRACTS_KEY):
-        raise click.UsageError(
-            f"--contracts is not supported by strategy '{request.strategy_type}': its config "
-            "has no 'contracts' setting (sma_crossover has one)."
-        )
-    if not _is_futures_symbol(request.symbol):
-        raise click.UsageError(
-            f"--contracts applies to futures only; '{request.symbol}' is not a futures root "
-            "(ES, NQ, CL, GC, ZN in catalog firstrate-futures)."
-        )
-    config = {**request.strategy_config, CONTRACTS_KEY: contracts}
-    return request.model_copy(update={"strategy_config": config})
-
-
-def check_contracts_instrument(strategy_config: dict, instrument: object) -> None:
-    """Refuse a ``contracts`` size (flag or config file) that isn't N >= 1 on a futures contract.
-
-    Raises:
-        ValueError: ``contracts`` is not a positive whole number, or the instrument has no
-            multiplier (not futures).
-    """
-    contracts = strategy_config.get(CONTRACTS_KEY)
-    if contracts is None:
-        return
-    if isinstance(contracts, bool) or not isinstance(contracts, int) or contracts < 1:
-        raise ValueError(f"contracts must be a positive whole number, got {contracts!r}")
-    from src.core.position_sizing import instrument_multiplier
-
-    if instrument_multiplier(instrument) == 1:
-        raise ValueError(
-            f"contracts applies to futures only; {getattr(instrument, 'id', instrument)} "
-            "is not a futures contract"
-        )
-
-
 def _resolve_config_mode(
     *,
     config_file: str,
@@ -368,26 +306,16 @@ def _resolve_cli_mode(
     resolved_slow_period = slow_period or 20
     resolved_trade_size = trade_size or 1000000
 
-    # Calculate portfolio value and starting balance
-    # Constants for portfolio sizing (10x multiplier for percentage-based sizing)
-    portfolio_size_multiplier = 10
-    portfolio_value = Decimal(str(resolved_trade_size * portfolio_size_multiplier))
-    resolved_starting_balance = (
-        Decimal(str(starting_balance)) if starting_balance else portfolio_value
-    )
+    # The account: --starting-balance, else trade_size x 10. Strategies size off it too.
+    resolved_starting_balance = Decimal(str(starting_balance or resolved_trade_size * 10))
 
-    # Build strategy parameters based on strategy type
-    if resolved_strategy in ["sma", "sma_crossover", "sma_crossover_long_only"]:
-        strategy_params = {
-            "portfolio_value": portfolio_value,
-            "position_size_pct": Decimal("10.0"),
-            "fast_period": resolved_fast_period,
-            "slow_period": resolved_slow_period,
-        }
-    elif resolved_strategy == "bollinger_reversal":
-        strategy_params = {"portfolio_value": portfolio_value}
-    else:
-        strategy_params = {"trade_size": resolved_trade_size}
+    strategy_params = _cli_strategy_params(
+        resolved_strategy,
+        resolved_starting_balance,
+        resolved_trade_size,
+        resolved_fast_period,
+        resolved_slow_period,
+    )
 
     # Build BacktestRequest from CLI args
     request = BacktestRequest.from_cli_args(

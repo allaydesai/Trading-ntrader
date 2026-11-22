@@ -134,8 +134,9 @@ def backtest():
     default=None,
     help=(
         "Futures only: trade exactly N whole contracts per entry instead of sizing by "
-        "notional (a small budget floors ES to 0 contracts). For strategies with a "
-        "'contracts' setting (sma_crossover); overrides a config file's 'contracts'."
+        "notional (a small budget floors ES to 0 contracts). Applies to any strategy "
+        "whose config has a 'contracts' setting (others are refused); overrides a config "
+        "file's 'contracts'."
     ),
 )
 @click.option(

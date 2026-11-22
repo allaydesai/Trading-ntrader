@@ -76,6 +76,8 @@ Market data stored as Parquet files under Nautilus catalog structure.
 - Returns `(bars: List[Bar], instrument: Instrument)`
 - Handles symbol resolution via DataCatalogService
 - Rich progress bars for long operations; quiet mode for web UI
+- `_strategy_params.py` sets strategy-config params by what the config class declares:
+  CLI-mode `portfolio_value` (account = `trade_size` x 10) and `--contracts`
 
 ## Futures instruments (futures M1)
 

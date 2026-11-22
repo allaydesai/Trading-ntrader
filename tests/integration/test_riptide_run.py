@@ -6,6 +6,11 @@ buy-limit entry that fills on the next bar's dip, then a green candle flattens
 the position at the following open. Compact indicator periods keep the scenario
 small while exercising the real order/fill/position wiring.
 
+The venue is the production backtest venue (``add_backtest_venue``: HEDGING, MARGIN). On a
+NETTING venue a reduce-only stop without a ``position_id`` is accepted, which hid that
+HEDGING rejected Riptide's ATR stop on every trade; every run here asserts no order was
+rejected.
+
 Runs under ``--forked`` (Nautilus C extensions corrupt state across fork()).
 """
 
@@ -14,15 +19,17 @@ from decimal import Decimal
 import pandas as pd
 import pytest
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
+from nautilus_trader.backtest.models import FillModel, MakerTakerFeeModel
 from nautilus_trader.config import LoggingConfig
-from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import AccountType, OmsType
+from nautilus_trader.model.enums import OrderStatus, OrderType
+from nautilus_trader.model.events import OrderRejected
 from nautilus_trader.model.identifiers import TraderId, Venue
-from nautilus_trader.model.objects import Money, Price, Quantity
+from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
-from src.core.fill_models import GapAwareFillModel, bind_fill_model, gap_aware_venue_options
+from src.core.backtest_venue import add_backtest_venue
+from src.core.fill_models import GapAwareFillModel, bind_fill_model
 
 riptide = pytest.importorskip(
     "src.core.strategies.custom.riptide", reason="private strategies submodule not checked out"
@@ -68,6 +75,38 @@ def _bars_from_closes(bar_type: BarType, closes: list[float]) -> list[Bar]:
     return bars
 
 
+def _add_production_venue(engine: BacktestEngine, instrument, fill_model) -> None:
+    """The venue every NTrader backtest runs on (HEDGING, MARGIN), with the instrument's fees."""
+    add_backtest_venue(
+        engine,
+        instrument.id.venue,
+        [instrument],
+        starting_balance=1_000_000,
+        fill_model=fill_model,
+        equity_fee_model=MakerTakerFeeModel(),
+    )
+
+
+def _assert_no_rejections(engine: BacktestEngine) -> None:
+    """No order was rejected (HEDGING rejected the ATR stop without its position id)."""
+    rejected = [
+        event
+        for order in engine.cache.orders()
+        for event in order.events
+        if isinstance(event, OrderRejected)
+    ]
+    assert rejected == []
+
+
+def _stop_fills(engine: BacktestEngine) -> int:
+    """How many ATR stop orders filled (the trade stopped out)."""
+    return sum(
+        1
+        for order in engine.cache.orders()
+        if order.order_type == OrderType.STOP_MARKET and order.status == OrderStatus.FILLED
+    )
+
+
 def _run(
     bars: list[Bar],
     instrument,
@@ -80,19 +119,12 @@ def _run(
             logging=LoggingConfig(bypass_logging=True),
         )
     )
-    # Mirror production wiring (backtest_venue + orchestrator): gap-aware fills so stops
-    # gapped through overnight fill at the open, and next-bar execution so MOO-tagged
-    # exits fill on the bar after the signal, at its open.
+    # Production wiring (backtest_venue + orchestrator): a HEDGING margin venue, gap-aware
+    # fills so stops gapped through overnight fill at the open, and next-bar execution so
+    # MOO-tagged exits fill on the bar after the signal, at its open.
     fill_model = GapAwareFillModel()
     bind_fill_model(fill_model, engine, bars)
-    engine.add_venue(
-        venue=instrument.id.venue,
-        oms_type=OmsType.NETTING,
-        account_type=AccountType.CASH,
-        starting_balances=[Money(1_000_000, USD)],
-        fill_model=fill_model,
-        **gap_aware_venue_options(fill_model),
-    )
+    _add_production_venue(engine, instrument, fill_model)
     engine.add_instrument(instrument)
     engine.add_data(bars)
 
@@ -113,6 +145,7 @@ def _run(
     )
     engine.add_strategy(Riptide(config=config))
     engine.run()
+    _assert_no_rejections(engine)
     return engine
 
 
@@ -168,6 +201,8 @@ def test_riptide_exit_paths(exit_path):
         assert exit_px > entry_px  # exited into strength at a profit
     elif exit_path == "atr_stop":
         assert exit_px < entry_px  # stopped out below entry
+    # Only the crash tail stops out; the other exits cancel the resting stop.
+    assert _stop_fills(engine) == (1 if exit_path == "atr_stop" else 0)
 
     engine.dispose()
 
@@ -189,12 +224,7 @@ def test_riptide_accepts_float_config_params():
             logging=LoggingConfig(bypass_logging=True),
         )
     )
-    engine.add_venue(
-        venue=instrument.id.venue,
-        oms_type=OmsType.NETTING,
-        account_type=AccountType.CASH,
-        starting_balances=[Money(1_000_000, USD)],
-    )
+    _add_production_venue(engine, instrument, FillModel())
     engine.add_instrument(instrument)
     engine.add_data(_bars_from_closes(bar_type, _PREFIX_CLOSES + _EXIT_TAILS["green"]))
 
@@ -218,6 +248,7 @@ def test_riptide_accepts_float_config_params():
     engine.run()  # would raise float/Decimal TypeError before the coercion fix
 
     assert len(engine.trader.generate_positions_report()) == 1
+    _assert_no_rejections(engine)
     engine.dispose()
 
 
@@ -280,6 +311,7 @@ def test_riptide_stop_gapped_through_fills_at_open():
     assert float(fills[fills["side"] == "BUY"].iloc[0]["avg_px"]) == pytest.approx(115.64)
     # Stop fill at the gap open, not at the ~110 trigger.
     assert float(fills[fills["side"] == "SELL"].iloc[0]["avg_px"]) == pytest.approx(90.00)
+    assert _stop_fills(engine) == 1
 
     engine.dispose()
 
@@ -414,6 +446,7 @@ async def test_orchestrator_runs_a_gap_aware_request_with_next_bar_exits():
         price, filled_at, closed_at = _sell_fill_and_close(orchestrator.engine)
         assert price == pytest.approx(125.00)
         assert filled_at == closed_at == bars[-2].ts_event
+        _assert_no_rejections(orchestrator.engine)
     finally:
         orchestrator.dispose()
 
