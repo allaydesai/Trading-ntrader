@@ -320,12 +320,21 @@ class TestContractMultiplierHelpers:
         assert units == Decimal("2")
         assert units_for_notional(Decimal("1500"), Decimal("150")) == Decimal("10")
 
-    @pytest.mark.parametrize("price,multiplier", [("0", "50"), ("7000", "0"), ("-1", "1")])
-    def test_units_for_notional_rejects_non_positive_inputs(self, price, multiplier):
+    @pytest.mark.parametrize("price,multiplier", [("7000", "0"), ("7000", "-1"), ("-1", "1")])
+    def test_units_for_notional_rejects_bad_inputs(self, price, multiplier):
         from src.core.position_sizing import units_for_notional
 
         with pytest.raises(ValueError):
             units_for_notional(Decimal("1000"), Decimal(price), Decimal(multiplier))
+
+    def test_a_zero_price_keeps_the_plain_division_error(self):
+        """Live failure-guard tests pin a zero-price bar's failure as DivisionByZero."""
+        from decimal import DivisionByZero
+
+        from src.core.position_sizing import units_for_notional
+
+        with pytest.raises(DivisionByZero):
+            units_for_notional(Decimal("1000"), Decimal("0"))
 
     @pytest.mark.parametrize(
         "units,expected", [("0.29", 0), ("1", 1), ("2.99", 2), ("0", 0), ("-3", 0)]

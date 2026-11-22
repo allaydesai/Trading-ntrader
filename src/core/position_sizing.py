@@ -19,10 +19,13 @@ def units_for_notional(notional: Decimal, price: Decimal, multiplier: Decimal = 
     """Unrounded units that buy ``notional`` of exposure (``notional / (price x multiplier)``).
 
     Raises:
-        ValueError: If ``price`` or ``multiplier`` is not positive.
+        ValueError: If ``price`` is negative or ``multiplier`` is not positive.
+        decimal.DivisionByZero: If ``price`` is zero. Deliberately the plain division's own
+            error: the live strategy-failure guard tests pin a zero-price bar's failure as
+            ``DivisionByZero`` (``tests/component/core/test_session_runner_strategy_failure.py``).
     """
-    if price <= 0 or multiplier <= 0:
-        raise ValueError("price and multiplier must be positive")
+    if price < 0 or multiplier <= 0:
+        raise ValueError("price must not be negative and multiplier must be positive")
     return notional / (price * multiplier)
 
 
