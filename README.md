@@ -180,19 +180,38 @@ and any supplementary dividend/split files it discovers alongside the bars.
 | `import --format firstrate --catalog <name> --asset-class stock --timeframe daily <dir>` | Import a FirstRate directory into a named catalog |
 | `import ... --timeframe daily,hourly,1min,5min <dir>` | Import multiple timeframes in one pass |
 | `import ... --dividends-dir <dir> --splits-dir <dir>` | Override auto-discovery of supplementary data |
+| `import --format firstrate --catalog firstrate-futures --asset-class futures <dir>` | Import FirstRate continuous futures (ES, NQ, CL, GC, ZN); see below |
 
 Key options:
 
 - `--format firstrate` (required) — only FirstRate is supported today
 - `--catalog <name>` (required) — target catalog under `CATALOG_BASE_PATH`
 - `--asset-class` — `etf` (import default) · `stock` · `futures` · `fx` · `crypto` · `index` (`--dry-run` defaults to `stock`)
-- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min` (default `daily`)
+- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min`, `30min` (default: all five for `etf` and `futures`, `daily` otherwise)
 - `--dividends-dir` / `--splits-dir` — explicit supplementary sources (auto-discovered from the source tree when omitted)
 - `--dry-run` — scan and report only; writes nothing to the catalog or DB
 
 Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad path, DB not configured, missing profiles). Supplementary (dividend/split) failures are reported but never change the exit code.
 
 > A `company_profiles.csv` must be loadable for the target catalog. The importer looks for it inside the source directory and its parent. Without it (e.g. the ETF bundle, which ships none) the import aborts with exit code 2.
+
+**Futures** (`--asset-class futures`) need no `company_profiles.csv`: each root's identity
+and contract fields come from `src/services/futures/contract_specs.yaml`, and the
+`catalog_instruments` row (`ticker` = root, `nautilus_id` = `ES.CME`, `asset_class` `FUTURES`,
+multiplier, tick size, currency, `contract_kind` `continuous`, `roll_rule`
+`firstrate-ratio-adjusted`) is written from it. The source is a flat directory of
+`{ROOT}_full_{1min|5min|30min|1hour|1day}_continuous_ratio_adjusted.txt` files; daily files'
+open-interest column is dropped. Files are streamed in 250k-row chunks (one Parquet part
+each), so a 6M-row 1-minute file imports in well under 1 GB of RAM, and every price of a root
+is stored at one fixed precision (ES/NQ 2, CL 3, GC 1, ZN 6). The target catalog directory is
+created on first use, and re-runs skip series that are already complete.
+
+```bash
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-futures \
+  --asset-class futures --dry-run /srv/market-data/raw/futures
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-futures \
+  --asset-class futures --timeframe daily,hourly /srv/market-data/raw/futures
+```
 
 ### Data Commands
 
