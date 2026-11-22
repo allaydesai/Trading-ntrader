@@ -30,6 +30,12 @@
       flagged).
 - [x] 4.2 `docs/agent/futures-backtesting.md` (margin, ticks, sizing guide for external
       strategies, `profit_pct` semantics, stored fields); index in `architecture.md`.
-- [ ] 4.3 Manual smoke: `backtest run` ES 1-hour, about 3 months, persisted; one trade
-      hand-checked; a short CL or GC run; dashboard run page returns 200.
+- [x] 4.3 Manual smoke: `backtest run` ES 1-hour, about 3 months, persisted; one trade
+      hand-checked; a short CL run; the run pages render 200 in-process (the port-3000
+      dashboard was not running).
+- [x] 4.5 Found by the smoke: `StrategyConfigSnapshot` drops undeclared keys, so declare
+      `futures_contracts`/`profit_pct_basis` (omitted when unset; equity rows unchanged),
+      test `tests/unit/models/test_config_snapshot_futures.py`; config-file YAML floats
+      reached `SMACrossover` uncoerced (`float / Decimal`), coerced in `__init__`, test
+      `tests/component/core/test_sma_config_coercion.py`.
 - [x] 4.4 Size-cap baseline lowered for the shrunken entries.
