@@ -53,6 +53,12 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
     with ``read_text()`` — intraday minute-bar CSVs can be multi-hundred-MB
     and loading them whole would balloon RSS on batch re-runs.
 
+    ``YYYY-MM-DD[ HH:MM:SS]`` stamps sort lexicographically in wall-clock order,
+    and the ET->UTC conversion never reorders two wall-clock times, so the scan
+    keeps the largest well-shaped stamp string and parses only that one. Parsing
+    every row cost ~60 s on a 6.4M-row futures file. If the largest string does
+    not parse (e.g. ``2025-13-45``), the probe falls back to parsing every row.
+
     Args:
         file_path: Path to the source ``.txt`` file.
 
@@ -61,21 +67,12 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         if the file is missing, unreadable, empty, or contains no row
         whose first column parses as a FirstRate timestamp.
     """
-    max_dt: datetime | None = None
     try:
-        with file_path.open("r", encoding="utf-8", errors="replace") as fh:
-            for raw in fh:
-                stripped = raw.strip()
-                if not stripped:
-                    continue
-                parts = stripped.split(",")
-                if len(parts) not in _ACCEPTED_COLUMNS:
-                    continue
-                dt = _parse_timestamp(parts[0].strip())
-                if dt is None:
-                    continue
-                if max_dt is None or dt > max_dt:
-                    max_dt = dt
+        best = _max_stamp_text(file_path)
+        if best is None:
+            return None
+        parsed = _parse_timestamp(best)
+        return parsed if parsed is not None else _max_parsed_stamp(file_path)
     except FileNotFoundError:
         return None
     except (PermissionError, OSError) as exc:
@@ -86,8 +83,40 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         )
         return None
 
-    if max_dt is None:
-        return None
+
+def _first_columns(file_path: Path):
+    """Yield the stripped first column of every row with an accepted column count."""
+    with file_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            parts = stripped.split(",")
+            if len(parts) in _ACCEPTED_COLUMNS:
+                yield parts[0].strip()
+
+
+def _well_shaped(stamp: str) -> bool:
+    """``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM:SS`` by shape (digits checked by parsing)."""
+    if len(stamp) not in (10, 19) or stamp[4] != "-" or stamp[7] != "-":
+        return False
+    return len(stamp) == 10 or (stamp[10] == " " and stamp[13] == ":" and stamp[16] == ":")
+
+
+def _max_stamp_text(file_path: Path) -> str | None:
+    best: str | None = None
+    for stamp in _first_columns(file_path):
+        if (best is None or stamp > best) and _well_shaped(stamp):
+            best = stamp
+    return best
+
+
+def _max_parsed_stamp(file_path: Path) -> datetime | None:
+    max_dt: datetime | None = None
+    for stamp in _first_columns(file_path):
+        dt = _parse_timestamp(stamp)
+        if dt is not None and (max_dt is None or dt > max_dt):
+            max_dt = dt
     return max_dt
 
 
