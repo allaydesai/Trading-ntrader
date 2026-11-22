@@ -153,3 +153,12 @@ class TestFuturesSnapshot:
         assert es["multiplier"] == "50"
         assert es["margin_initial_usd"] == str(get_contract_spec("ES").margin.initial_usd)
         assert es["commission_per_contract_usd"] == "2.25"
+
+    def test_the_snapshot_survives_the_persisted_snapshot_model(self):
+        """Persistence keeps only declared keys: the futures ones must be declared."""
+        from src.models.config_snapshot import StrategyConfigSnapshot
+
+        base = {"strategy_path": "src.x:Y", "config_path": "x.yaml"}
+        dumped = StrategyConfigSnapshot(**base, **futures_snapshot([_contract("ES")])).model_dump()
+        assert dumped["futures_contracts"]["ES.CME"]["multiplier"] == "50"
+        assert dumped["profit_pct_basis"] == "underlying"
