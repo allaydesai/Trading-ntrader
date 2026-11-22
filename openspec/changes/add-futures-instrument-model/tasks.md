@@ -8,14 +8,14 @@
 - [x] 1.2 Add `contract_specs.yaml` and pydantic loader `contract_specs.py`.
 
 ## 2. Instrument builder
-- [x] 2.1 Unit (failing first): `tests/unit/services/futures/test_instrument_builder.py`:
+- [x] 2.1 Component (failing first): `tests/component/services/futures/test_instrument_builder.py`:
       each root builds a valid `FuturesContract` (id, multiplier, increment, precision,
       asset class, never-expiring window, info), precision follows bars, margin conversion
       with a reference price, venue mismatch rejected.
 - [x] 2.2 Implement `build_futures_contract()`.
 
 ## 3. Dispatcher
-- [x] 3.1 Unit (failing first): `tests/unit/services/firstrate/test_build_instrument.py`:
+- [x] 3.1 Component (failing first): `tests/component/services/firstrate/test_build_instrument.py`:
       FUTURES -> `FuturesContract`; STOCK/ETF/None -> identical result to `build_equity`.
 - [x] 3.2 Component: `load_from_catalog` with a FUTURES row returns a `FuturesContract`
       (`tests/component/services/firstrate/test_catalog_backtest_loader.py`).

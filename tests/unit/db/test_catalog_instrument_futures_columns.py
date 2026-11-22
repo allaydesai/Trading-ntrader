@@ -60,10 +60,50 @@ def test_migration_chains_off_previous_head():
     assert module.down_revision == "dc41856246ad"
 
 
-def test_migration_adds_and_drops_every_column():
-    text = _MIGRATION.read_text(encoding="utf-8")
-    for name in FUTURES_COLUMNS:
-        assert f'"{name}"' in text
-    assert "op.drop_column(_TABLE, column)" in text
-    assert "ck_catalog_instruments_contract_kind" in text
-    assert 'type_="check"' in text
+class _RecordingOp:
+    """Stands in for ``alembic.op`` and records every call."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self.calls.append((name, args, kwargs))
+
+
+def _run(direction):
+    module = _migration_module()
+    recorder = _RecordingOp()
+    module.op = recorder
+    getattr(module, direction)()
+    return recorder.calls
+
+
+def test_upgrade_adds_every_column_nullable_with_its_type():
+    added = {
+        args[1].name: args[1]
+        for name, args, _ in _run("upgrade")
+        if name == "add_column" and args[0] == "catalog_instruments"
+    }
+    assert set(added) == set(FUTURES_COLUMNS)
+    for col_name, col in added.items():
+        assert col.nullable, col_name
+        assert isinstance(col.type, FUTURES_COLUMNS[col_name]), col_name
+        model_type = CatalogInstrument.__table__.columns[col_name].type
+        assert repr(col.type) == repr(model_type), col_name
+
+
+def test_upgrade_adds_the_contract_kind_check():
+    checks = [args for name, args, _ in _run("upgrade") if name == "create_check_constraint"]
+    assert len(checks) == 1
+    constraint, table, condition = checks[0]
+    assert (constraint, table) == ("ck_catalog_instruments_contract_kind", "catalog_instruments")
+    assert "'continuous'" in condition and "'specific'" in condition
+
+
+def test_downgrade_drops_every_column_and_the_check():
+    calls = _run("downgrade")
+    dropped = {args[1] for name, args, _ in calls if name == "drop_column"}
+    assert dropped == set(FUTURES_COLUMNS)
+    (drop_check,) = [(args, kw) for name, args, kw in calls if name == "drop_constraint"]
+    assert drop_check[0][0] == "ck_catalog_instruments_contract_kind"
+    assert drop_check[1] == {"type_": "check"}

@@ -10,7 +10,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from src.services.firstrate.backtest_loader import build_equity, build_instrument
 from src.services.futures.contract_specs import FuturesSpecError
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.component
 
 
 def _bars(nautilus_id: str, price: str, count: int = 2) -> list[Bar]:

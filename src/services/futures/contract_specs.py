@@ -72,7 +72,7 @@ class IBContractSpec(_Strict):
     multiplier: str = Field(pattern=r"^\d+(\.\d+)?$")
 
 
-def _decimals(value: Decimal) -> int:
+def decimal_places(value: Decimal) -> int:
     """Number of significant decimal places (``0.10`` -> 1, ``50`` -> 0)."""
     exponent = value.normalize().as_tuple().exponent
     return max(0, -int(exponent))
@@ -99,7 +99,7 @@ class FuturesContractSpec(_Strict):
     @model_validator(mode="after")
     def _consistent(self) -> FuturesContractSpec:
         problems = []
-        if _decimals(self.tick_size) > self.price_precision:
+        if decimal_places(self.tick_size) > self.price_precision:
             problems.append(
                 f"tick_size {self.tick_size} needs more decimals than "
                 f"price_precision {self.price_precision}"
@@ -120,6 +120,16 @@ class FuturesContractSpec(_Strict):
         return self
 
 
+def _with_root(key: str, value: object) -> object:
+    """Inject the registry key as ``root``; an explicit, different ``root`` is an error."""
+    if not isinstance(value, dict):
+        return value
+    explicit = value.get("root", key)
+    if explicit != key:
+        raise ValueError(f"roots.{key}.root '{explicit}' does not match its key '{key}'")
+    return {**value, "root": key}
+
+
 class ContractSpecRegistry(_Strict):
     """The whole spec file."""
 
@@ -133,10 +143,7 @@ class ContractSpecRegistry(_Strict):
         """Let the YAML key be the root so entries don't repeat it."""
         if isinstance(data, dict) and isinstance(data.get("roots"), dict):
             data = dict(data)
-            data["roots"] = {
-                key: {"root": key, **value} if isinstance(value, dict) else value
-                for key, value in data["roots"].items()
-            }
+            data["roots"] = {key: _with_root(key, value) for key, value in data["roots"].items()}
         return data
 
     @model_validator(mode="after")

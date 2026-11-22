@@ -152,3 +152,16 @@ class TestValidation:
         path.write_text("roots: {ES: [unclosed\n")
         with pytest.raises(FuturesSpecError, match="YAML"):
             load_contract_specs(path)
+
+
+class TestRootKey:
+    def test_explicit_matching_root_is_accepted(self, tmp_path):
+        data = _raw()
+        data["roots"]["ES"]["root"] = "ES"
+        assert load_contract_specs(_write(tmp_path, data)).roots["ES"].root == "ES"
+
+    def test_explicit_root_disagreeing_with_key_is_rejected(self, tmp_path):
+        data = _raw()
+        data["roots"]["ES"]["root"] = "NQ"
+        with pytest.raises(FuturesSpecError, match=r"roots\.ES\.root"):
+            load_contract_specs(_write(tmp_path, data))

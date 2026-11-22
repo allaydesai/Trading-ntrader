@@ -18,7 +18,7 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.instruments import FuturesContract
 from nautilus_trader.model.objects import Price, Quantity
 
-from src.services.futures.contract_specs import FuturesContractSpec
+from src.services.futures.contract_specs import FuturesContractSpec, decimal_places
 
 CONTINUOUS_ACTIVATION_NS = 0
 CONTINUOUS_EXPIRATION_NS = pd.Timestamp("2100-01-01", tz="UTC").value
@@ -101,7 +101,7 @@ def build_futures_contract(
         currency=Currency.from_str(spec.currency),
         price_precision=precision,
         price_increment=_increment(precision),
-        multiplier=Quantity(spec.multiplier, 0),
+        multiplier=Quantity(spec.multiplier, decimal_places(spec.multiplier)),
         lot_size=Quantity.from_int(1),
         underlying=spec.underlying,
         activation_ns=CONTINUOUS_ACTIVATION_NS,

@@ -17,7 +17,7 @@ from src.services.futures.instrument_builder import (
     continuous_instrument_id,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.component
 
 CASES = {
     # root: (instrument id, nautilus asset class, multiplier, increment)
@@ -123,3 +123,9 @@ def test_bar_at_contract_precision_is_accepted():
     bar = Bar(bar_type, px, px, px, px, Quantity.from_int(837), 0, 0)
     assert bar.open.precision == contract.price_precision
     assert bar.bar_type.instrument_id == contract.id
+
+
+def test_fractional_multiplier_keeps_its_precision():
+    spec = get_contract_spec("ES").model_copy(update={"multiplier": Decimal("12.5")})
+    contract = build_futures_contract(spec)
+    assert contract.multiplier.as_decimal() == Decimal("12.5")
