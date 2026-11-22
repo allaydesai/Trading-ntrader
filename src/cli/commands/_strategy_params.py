@@ -103,9 +103,10 @@ def _cli_strategy_params(
 ) -> dict:
     """CLI-mode strategy params: size from the account for any config with ``portfolio_value``.
 
-    The account starts at ``portfolio_value``; a config left on its own default would size
-    every trade off a different amount. Configs without the field get the legacy
-    ``trade_size``. An unknown strategy falls through to ``trade_size`` and is refused by
+    ``portfolio_value`` is the account's starting balance (``--starting-balance``, else
+    ``trade_size x 10``); a config left on its own default would size every trade off a
+    different amount. Configs without the field get the legacy ``trade_size``. An unknown
+    strategy falls through to ``trade_size`` and is refused by
     :meth:`BacktestRequest.from_cli_args`.
     """
     from src.core.strategy_registry import StrategyRegistry

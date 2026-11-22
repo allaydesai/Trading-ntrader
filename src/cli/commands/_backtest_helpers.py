@@ -306,17 +306,12 @@ def _resolve_cli_mode(
     resolved_slow_period = slow_period or 20
     resolved_trade_size = trade_size or 1000000
 
-    # Calculate portfolio value and starting balance
-    # Constants for portfolio sizing (10x multiplier for percentage-based sizing)
-    portfolio_size_multiplier = 10
-    portfolio_value = Decimal(str(resolved_trade_size * portfolio_size_multiplier))
-    resolved_starting_balance = (
-        Decimal(str(starting_balance)) if starting_balance else portfolio_value
-    )
+    # The account: --starting-balance, else trade_size x 10. Strategies size off it too.
+    resolved_starting_balance = Decimal(str(starting_balance or resolved_trade_size * 10))
 
     strategy_params = _cli_strategy_params(
         resolved_strategy,
-        portfolio_value,
+        resolved_starting_balance,
         resolved_trade_size,
         resolved_fast_period,
         resolved_slow_period,

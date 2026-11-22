@@ -1161,7 +1161,9 @@ backtest:
         assert request.bar_type == "1-HOUR-LAST"
 
 
-def _resolve_cli(strategy: str, trade_size: int | None = None):
+def _resolve_cli(
+    strategy: str, trade_size: int | None = None, starting_balance: float | None = None
+):
     from src.cli.commands._backtest_helpers import resolve_backtest_request
 
     request, _ = resolve_backtest_request(
@@ -1171,7 +1173,7 @@ def _resolve_cli(strategy: str, trade_size: int | None = None):
         start=datetime(2024, 1, 1, tzinfo=timezone.utc),
         end=datetime(2024, 6, 30, tzinfo=timezone.utc),
         data_source=None,
-        starting_balance=None,
+        starting_balance=starting_balance,
         persist=False,
         console=Console(),
         trade_size=trade_size,
@@ -1197,6 +1199,15 @@ class TestCliModePortfolioValue:
         pytest.importorskip("src.core.strategies.custom.riptide")
         request = _resolve_cli("riptide", trade_size=50_000)
         assert request.strategy_config["portfolio_value"] == Decimal("500000")
+
+    @pytest.mark.parametrize("strategy", ["riptide", "sma_crossover"])
+    def test_explicit_starting_balance_is_the_portfolio_value(self, strategy):
+        """``--starting-balance`` is the account, so sizing must use it, not trade_size x 10."""
+        if strategy == "riptide":
+            pytest.importorskip("src.core.strategies.custom.riptide")
+        request = _resolve_cli(strategy, starting_balance=100_000)
+        assert request.starting_balance == Decimal("100000")
+        assert request.strategy_config["portfolio_value"] == Decimal("100000")
 
     def test_alias_resolves_to_the_config(self):
         pytest.importorskip("src.core.strategies.custom.riptide")
