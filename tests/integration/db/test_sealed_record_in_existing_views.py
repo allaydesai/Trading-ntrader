@@ -18,12 +18,10 @@ import re
 from collections import Counter
 from decimal import Decimal
 
-import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.web import app
 from tests.integration.db._sealed_record import (
     INSTRUMENT,
     OPEN_LEGS,
@@ -326,15 +324,9 @@ class TestTheDetailViewRendersTheRecord:
         "including session_conditions",
         SOURCE,
     )
-    async def test_the_trades_table_lists_the_sessions_rows(self, db_session, pair, monkeypatch):
-        """The route calls ``localhost:8000`` itself; it is answered in-process."""
-        real_client = httpx.AsyncClient
-
-        def in_process(*args, **kwargs):
-            return real_client(transport=httpx.ASGITransport(app=app))
-
+    async def test_the_trades_table_lists_the_sessions_rows(self, db_session, pair):
+        """The route reads the trades in-process (M4), from the same session as the page."""
         async with asgi_client(db_session) as client:
-            monkeypatch.setattr(httpx, "AsyncClient", in_process)
             response = await client.get(f"/backtests/{pair.paper_pk}/trades-table")
 
         assert response.status_code == 200

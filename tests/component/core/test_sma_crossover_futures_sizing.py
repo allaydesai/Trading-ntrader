@@ -15,7 +15,12 @@ from tests.unit.strategies.test_sma_crossover_position_sizing import _build_sizi
 
 
 def _futures_sizing_self(
-    *, multiplier: str, close_price: float, portfolio_value: str, pct: str = "10"
+    *,
+    multiplier: str,
+    close_price: float,
+    portfolio_value: str,
+    pct: str = "10",
+    contracts: int | None = None,
 ):
     """A sizing ``self`` whose instrument is a multiplied contract (futures M3)."""
     sizing_self = _build_sizing_self(
@@ -23,6 +28,7 @@ def _futures_sizing_self(
         close_price=close_price,
         portfolio_value=Decimal(portfolio_value),
         position_size_pct=Decimal(pct),
+        contracts=contracts,
     )
     sizing_self.cache.instrument.return_value = SimpleNamespace(
         size_precision=0, multiplier=Decimal(multiplier)
@@ -81,3 +87,50 @@ def test_the_logged_notional_is_the_order_not_the_budget():
 
     message = sizing_self.log.info.call_args[0][0]
     assert "~$700,000 notional" in message
+
+
+@pytest.mark.component
+class TestFixedContracts:
+    """Futures M4 — ``SMAConfig.contracts`` (``backtest run --contracts N``) trades exactly N."""
+
+    def test_fixed_contracts_override_the_notional_budget(self):
+        """$100K at ES 7000 floors to 0 contracts; ``contracts=1`` trades 1 anyway."""
+        sizing_self = _futures_sizing_self(
+            multiplier="50", close_price=7000.0, portfolio_value="1000000", contracts=1
+        )
+
+        assert str(SMACrossover._calculate_position_size(sizing_self)) == "1"
+
+    def test_fixed_contracts_ignore_a_larger_budget(self):
+        """A budget worth 7 CL contracts still trades the 3 asked for."""
+        sizing_self = _futures_sizing_self(
+            multiplier="1000", close_price=70.0, portfolio_value="500000", pct="100", contracts=3
+        )
+
+        assert str(SMACrossover._calculate_position_size(sizing_self)) == "3"
+
+    def test_fixed_contracts_on_an_equity_raise(self):
+        """``contracts`` is for futures only; the CLI rejects it first, this is the backstop."""
+        sizing_self = _futures_sizing_self(
+            multiplier="1", close_price=165.0, portfolio_value="1000000", contracts=2
+        )
+
+        with pytest.raises(ValueError, match="futures"):
+            SMACrossover._calculate_position_size(sizing_self)
+
+    def test_config_declares_contracts_unset_by_default(self):
+        """Unset (``None``) keeps the notional sizing exactly as before."""
+        from nautilus_trader.model.data import BarType
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        from src.core.strategies.sma_crossover import SMAConfig
+
+        def config(**extra):
+            return SMAConfig(
+                instrument_id=InstrumentId.from_str("ES.CME"),
+                bar_type=BarType.from_str("ES.CME-1-HOUR-LAST-EXTERNAL"),
+                **extra,
+            )
+
+        assert config().contracts is None
+        assert config(contracts=2).contracts == 2

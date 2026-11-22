@@ -30,6 +30,7 @@ from src.mcp_server.jobs.store import utc_now
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.runs import parse_run_ids
 from src.mcp_server.settings import McpSettings
+from src.services.futures.returns import report_fields, summarise_run, trade_rows
 from src.services.provenance import REPO_ROOT, STRATEGIES_SUBMODULE, git_output
 
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,80}$")
@@ -132,6 +133,20 @@ def trade_stats(trades: list[dict[str, Any]], run: dict[str, Any]) -> dict[str, 
     }
 
 
+def futures_trade_fields(
+    row: dict[str, Any], snapshot: dict[str, Any] | None, trades: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """A futures run's trades with their futures columns, and ``row["futures"]`` (M4).
+
+    An equity run's trades come back as they are (the same list) and ``row`` is untouched.
+    """
+    summary = summarise_run(snapshot, trades)
+    if summary is None:
+        return trades
+    row["futures"] = report_fields(summary)
+    return [{**t, **f} for t, f in zip(trades, trade_rows(snapshot, trades))]
+
+
 def git_info() -> dict[str, Any]:
     """Repository state in the runner's ``git`` shape."""
     submodule = REPO_ROOT / STRATEGIES_SUBMODULE
@@ -168,6 +183,7 @@ def load_runs(run_ids: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, 
             )
             trades = [{c: getattr(t, c) for c in TRADE_COLUMNS} for t in session.scalars(stmt)]
             row["trade_stats"] = trade_stats(trades, row)
+            trades = futures_trade_fields(row, run.config_snapshot, trades)
             row.pop("id", None)
             runs.append(row)
             all_trades += [{**t, "run_id": run_id} for t in trades]
@@ -212,7 +228,9 @@ def write_export(
         json_tmp.write_text(text, encoding="utf-8")
         if trades:
             with csv_tmp.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=list(trades[0].keys()))
+                # Every key in first-seen order: futures runs add columns equity rows lack.
+                columns = list(dict.fromkeys(k for t in trades for k in t))
+                writer = csv.DictWriter(handle, fieldnames=columns, restval="")
                 writer.writeheader()
                 writer.writerows(to_jsonable(trades))
             os.replace(csv_tmp, target.csv_path)

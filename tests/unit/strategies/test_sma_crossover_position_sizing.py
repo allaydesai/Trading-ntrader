@@ -28,6 +28,7 @@ def _build_sizing_self(
     close_price: float,
     portfolio_value: Decimal = Decimal("1000000"),
     position_size_pct: Decimal = Decimal("10"),
+    contracts: int | None = None,
 ):
     """Build a duck-typed ``self`` for unbound _calculate_position_size."""
     instrument: object | None
@@ -46,6 +47,7 @@ def _build_sizing_self(
         instrument_id="AAPL.NASDAQ",
         cache=cache,
         log=MagicMock(),
+        config=SimpleNamespace(contracts=contracts),
     )
 
 

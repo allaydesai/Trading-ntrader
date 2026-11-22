@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from rich.console import Console
 
-from src.api.dependencies import BacktestService, get_default_catalog
+from src.api.dependencies import BacktestService, DbSession, get_default_catalog
 from src.api.models.backtest_detail import to_detail_view
 from src.api.models.common import EmptyStateMessage
 from src.api.models.filter_models import (
@@ -33,17 +33,21 @@ from src.api.models.run_backtest import (
     BacktestRunFormData,
     StrategyOption,
 )
+from src.api.rest.trades import get_backtest_trades
 from src.api.ui.explorer import TIMEFRAME_RUN_FORM_TO_EXPLORER
 from src.cli.commands._backtest_helpers import load_backtest_data
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.core.strategy_registry import StrategyRegistry
 from src.models.backtest_request import BacktestRequest
 from src.services.exceptions import DataNotFoundError
+from src.services.futures.display import trade_cells
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
+#: The trades API's sort fields (``get_backtest_trades``); anything else sorts by entry time.
+TRADE_SORT_FIELDS = ("entry_timestamp", "exit_timestamp", "profit_loss")
 
 # Quiet console for suppressing Rich output in web context.
 # TODO: pass console=None if load_backtest_data adds support for it,
@@ -806,6 +810,7 @@ async def get_trades_table(
     request: Request,
     backtest_id: int,
     service: BacktestService,
+    db: DbSession,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     sort_by: str = Query("entry_timestamp", description="Sort field"),
@@ -814,10 +819,16 @@ async def get_trades_table(
     """
     Render trades table partial for HTMX pagination.
 
+    The trades come from the trades API endpoint called in-process, not over HTTP, so the
+    table works on whatever host and port serve the app (it used to fetch a hardcoded
+    ``localhost:8000``). An unknown sort field or order falls back to entry time, ascending.
+    A futures run also gets per-trade contracts, notional, margin, points and returns.
+
     Args:
         request: FastAPI request object
         backtest_id: Backtest run database ID
         service: BacktestQueryService dependency
+        db: Database session dependency
         page: Page number (default: 1)
         page_size: Items per page (default: 20)
         sort_by: Sort field (default: entry_timestamp)
@@ -829,32 +840,19 @@ async def get_trades_table(
     Raises:
         HTTPException: 404 if backtest not found
     """
-    import httpx
-
-    # Call the API endpoint to get the trades data
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"http://localhost:8000/api/backtests/{backtest_id}/trades",
-            params={
-                "page": page,
-                "page_size": page_size,
-                "sort_by": sort_by,
-                "sort_order": sort_order,
-            },
-        )
-
-    if response.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
-
-    # Parse the JSON response
-    trade_data = response.json()
-
-    # Render the partial template
-    context = {
-        "request": request,
-        "backtest_id": backtest_id,
-        "response": trade_data,
-    }
+    trade_list = await get_backtest_trades(
+        backtest_id,
+        service,
+        db,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by if sort_by in TRADE_SORT_FIELDS else "entry_timestamp",  # type: ignore[arg-type]
+        sort_order="desc" if sort_order == "desc" else "asc",
+    )
+    trade_data = trade_list.model_dump(mode="json")
+    backtest = await service.get_backtest_by_internal_id(backtest_id)
+    context = {"request": request, "backtest_id": backtest_id, "response": trade_data}
+    context["futures_cells"] = trade_cells(backtest.config_snapshot, trade_data["trades"])
 
     return templates.TemplateResponse("partials/trades_table.html", context)
 

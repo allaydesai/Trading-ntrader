@@ -98,19 +98,22 @@
                         </span>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
-                        <span class="font-mono text-sm text-slate-300">{{ item.instrument_symbol }}</span>
+                        <span class="font-mono text-sm text-slate-300">{{ item.instrument_symbol }}</span>{% if item.asset_class == "futures" %} <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300" title="Futures run">FUT</span>{% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <span class="font-mono text-xs text-slate-400">{{ item.date_range }}</span>
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right">
+                    <td class="px-6 py-4 whitespace-nowrap text-right">{% if item.return_on_margin_pct is not none %}
+                        <span class="font-mono text-sm {% if item.return_on_margin_pct > 0 %}text-green-400{% elif item.return_on_margin_pct < 0 %}text-red-400{% else %}text-slate-400{% endif %} tabular-nums" title="Return on margin: net P&amp;L / peak initial margin">RoM {% if item.return_on_margin_pct > 0 %}+{% endif %}{{ "%.2f%%"|format(item.return_on_margin_pct) }}</span>
+                        <span class="block font-mono text-xs text-slate-500 tabular-nums" title="Account return (what this column sorts by)">acct {% if item.is_positive_return %}+{% endif %}{{ "%.2f%%"|format(item.return_percentage) }}</span>
+                        {% else %}
                         {% if item.total_return is not none %}
                         <span class="font-mono text-sm {% if item.is_positive_return %}text-green-400{% else %}text-red-400{% endif %} tabular-nums">
                             {% if item.is_positive_return %}+{% endif %}{{ "%.2f%%"|format(item.return_percentage) }}
                         </span>
                         {% else %}
                         <span class="font-mono text-sm text-slate-500">N/A</span>
-                        {% endif %}
+                        {% endif %}{% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-right">
                         {% if item.sharpe_ratio is not none %}

@@ -290,6 +290,7 @@ class TestExecuteBacktest:
         from src.cli.commands._backtest_helpers import execute_backtest
 
         mock_request = MagicMock()
+        mock_request.strategy_config = {}  # no --contracts
         mock_request.persist = True
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()
@@ -327,6 +328,7 @@ class TestExecuteBacktest:
         from src.cli.commands._backtest_helpers import execute_backtest
 
         mock_request = MagicMock()
+        mock_request.strategy_config = {}  # no --contracts
         mock_request.persist = False
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()
@@ -360,6 +362,7 @@ class TestExecuteBacktest:
         from src.cli.commands._backtest_helpers import execute_backtest
 
         mock_request = MagicMock()
+        mock_request.strategy_config = {}  # no --contracts
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()
 
@@ -393,6 +396,7 @@ class TestExecuteBacktest:
         from src.cli.commands._backtest_helpers import execute_backtest
 
         mock_request = MagicMock()
+        mock_request.strategy_config = {}  # no --contracts
         mock_request.persist = False
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()

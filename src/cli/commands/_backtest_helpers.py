@@ -110,6 +110,7 @@ def resolve_backtest_request(
     trade_size: int | None = None,
     timeframe: str | None = None,
     catalog_name: str | None = None,
+    contracts: int | None = None,
 ) -> tuple[BacktestRequest, str]:
     """Resolve inputs into BacktestRequest based on mode (config vs CLI).
 
@@ -130,6 +131,7 @@ def resolve_backtest_request(
         slow_period: Slow SMA period (CLI mode only)
         trade_size: Trade size in shares (CLI mode only)
         timeframe: Bar timeframe (CLI mode only)
+        contracts: Futures only: whole contracts per entry (both modes; see apply_contracts)
 
     Returns:
         Tuple of (BacktestRequest, resolved_data_source)
@@ -145,7 +147,7 @@ def resolve_backtest_request(
     # usage error (exit 2). Convert it here, the single construction chokepoint.
     try:
         if config_file is not None:
-            return _resolve_config_mode(
+            request, source = _resolve_config_mode(
                 config_file=config_file,
                 symbol=symbol,
                 start=start,
@@ -157,7 +159,7 @@ def resolve_backtest_request(
                 catalog_name=catalog_name,
             )
         else:
-            return _resolve_cli_mode(
+            request, source = _resolve_cli_mode(
                 symbol=symbol,
                 strategy=strategy,
                 start=start,
@@ -178,6 +180,74 @@ def resolve_backtest_request(
         messages = "; ".join(err.get("msg", "") for err in e.errors())
         messages = messages.replace("Value error, ", "")
         raise click.UsageError(messages or str(e)) from e
+    return apply_contracts(request, contracts), source
+
+
+#: The setting ``--contracts`` writes into a strategy's config (``SMAConfig.contracts``).
+CONTRACTS_KEY = "contracts"
+
+
+def _config_declares(config_path: str | None, field_name: str) -> bool:
+    """Whether the strategy config class at ``module:Class`` has ``field_name``."""
+    if not config_path or ":" not in config_path:
+        return False
+    import importlib
+
+    module_name, class_name = config_path.split(":", 1)
+    config_cls = getattr(importlib.import_module(module_name), class_name, None)
+    return field_name in getattr(config_cls, "__struct_fields__", ())
+
+
+def _is_futures_symbol(symbol: str) -> bool:
+    """A root in the futures contract specs (ES, NQ, CL, GC, ZN), dotted or not."""
+    from src.services.futures.contract_specs import load_contract_specs
+
+    return symbol.split(".")[0].upper() in load_contract_specs().roots
+
+
+def apply_contracts(request: BacktestRequest, contracts: int | None) -> BacktestRequest:
+    """``--contracts N``: set the strategy's whole-contract size; ``None`` changes nothing.
+
+    Raises:
+        click.UsageError: The strategy's config has no ``contracts`` setting, or the symbol
+            is not a futures root (a symbol that only collides with one, an equity ``CL``,
+            is caught after the instrument loads: :func:`check_contracts_instrument`).
+    """
+    if contracts is None:
+        return request
+    if not _config_declares(request.config_path, CONTRACTS_KEY):
+        raise click.UsageError(
+            f"--contracts is not supported by strategy '{request.strategy_type}': its config "
+            "has no 'contracts' setting (sma_crossover has one)."
+        )
+    if not _is_futures_symbol(request.symbol):
+        raise click.UsageError(
+            f"--contracts applies to futures only; '{request.symbol}' is not a futures root "
+            "(ES, NQ, CL, GC, ZN in catalog firstrate-futures)."
+        )
+    config = {**request.strategy_config, CONTRACTS_KEY: contracts}
+    return request.model_copy(update={"strategy_config": config})
+
+
+def check_contracts_instrument(strategy_config: dict, instrument: object) -> None:
+    """Refuse a ``contracts`` size (flag or config file) that isn't N >= 1 on a futures contract.
+
+    Raises:
+        ValueError: ``contracts`` is not a positive whole number, or the instrument has no
+            multiplier (not futures).
+    """
+    contracts = strategy_config.get(CONTRACTS_KEY)
+    if contracts is None:
+        return
+    if isinstance(contracts, bool) or not isinstance(contracts, int) or contracts < 1:
+        raise ValueError(f"contracts must be a positive whole number, got {contracts!r}")
+    from src.core.position_sizing import instrument_multiplier
+
+    if instrument_multiplier(instrument) == 1:
+        raise ValueError(
+            f"contracts applies to futures only; {getattr(instrument, 'id', instrument)} "
+            "is not a futures contract"
+        )
 
 
 def _resolve_config_mode(
@@ -733,6 +803,7 @@ async def execute_backtest(
     Raises:
         ValueError: If bars are empty or strategy cannot be created
     """
+    check_contracts_instrument(request.strategy_config, instrument)
     orchestrator = BacktestOrchestrator()
 
     try:

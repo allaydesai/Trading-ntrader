@@ -127,4 +127,68 @@ contracts = whole_contracts(units)                         # floor; 0 -> skip th
   CL in 2008 trades at about 3.7x its real price, so both are about 3.7x too.
   `profit_loss_before_fees / (quantity x multiplier)` gives *adjusted* points, not points
   that were really traded. Compare old trades by percentage return; recovering real points
-  needs the adjustment factor or unadjusted prices (M4).
+  needs the adjustment factor or unadjusted prices.
+
+## Fixed contracts: `--contracts N`
+
+`backtest run --contracts N` (N >= 1) trades exactly N whole contracts per entry, ignoring
+the notional budget. It sets `SMAConfig.contracts`; a config file can set `contracts:` in its
+`config:` section, and the flag overrides it. The flag is a usage error (exit 2) for a strategy
+whose config has no `contracts` setting and for a symbol that is not a futures root. If the
+loaded instrument turns out not to be futures, or a config file's value is not an int >= 1,
+the run fails before the engine starts. Margin is still checked by `FuturesMarginGate`: 3 ES
+on a $50k account are denied.
+
+Note the CLI-mode default: without `--contracts`, `position_size_pct` 10% applies to a
+`portfolio_value` of 10 x `--trade-size` (default $10M, not the starting balance), so ES
+sizes to about 3 contracts. Config files, the web form and the MCP default to $1M, which
+floors ES to 0.
+
+## Reporting (M4): return on margin first
+
+`src/services/futures/returns.py` computes everything below from the stored
+`config_snapshot.futures_contracts` and the trade rows. It is pure, and every surface calls
+it, so the figures can't drift. Equity runs get `None` and render as before.
+
+| Figure | Formula |
+|---|---|
+| contracts | `quantity` |
+| notional | `quantity x entry_price x multiplier` |
+| margin used | `quantity x margin_initial_usd` |
+| points (adjusted) | `exit - entry` long, `entry - exit` short |
+| return on the underlying (per trade) | `points / entry x 100`, side-aware (unlike stored `profit_pct`) |
+| return on margin (per trade) | `profit_loss / margin used x 100` (net of commission) |
+| **return on margin (run, headline)** | `sum(closed P&L) / peak concurrent initial margin x 100` |
+| return on the underlying (run) | per-trade returns compounded in exit order |
+
+Peak concurrent margin is `max(contracts) x initial margin` for a one-position strategy. For
+overlapping positions it is the margin tied up at once (exits count before entries on the
+same timestamp).
+
+Where it shows:
+
+- `backtest show <run_id>`: a "Futures" table after the metadata, with the
+  ratio-adjustment note.
+- `history`: `ES (fut)` and `RoM +56.07%` in the Return column. `--sort return` ranks and
+  limits by `total_return` (in SQL), so then the cell leads with it:
+  `15.42% (RoM +56.07%)`.
+- `report summary|generate|export-all`: summary and text lead with the futures section, CSV gets `asset_class` and
+  `futures_*` rows, JSON gets `futures` (run fields, the note, per-trade figures).
+- MCP `get_run`/`compare_runs`: `asset_class`, plus `futures` and a warning for futures
+  runs; `compare_runs` warns when asset classes mix. `export_results`: `futures` per run,
+  and futures trade columns when any exported run is futures.
+- **Web dashboard** (PO ruling, Allay, 2026-11-22):
+  - The run detail page gets a Futures panel above the metrics: return on margin (large),
+    return on the underlying, peak margin, max contracts, largest notional, closed trades,
+    net P&L (ratio-adjusted), points per contract, contract terms, and the note.
+  - The trades table shows Contracts, Notional, Margin, Points (adj.), Underlying % and
+    Return on margin, with dollar P&L dimmed.
+  - The CSV/JSON export adds the futures columns.
+  - The run list shows a `FUT` badge and `RoM +x%`, with the account return (the sort key)
+    underneath.
+  - The CLI `compare` adds asset-class and return rows.
+  - Equity pages are byte-identical (pinned).
+  - The trades table loads in-process, so it works on any port.
+
+Runs made before M3 stored `futures_contracts` (for example the first ES smoke run) have no
+terms, so they report as equity.

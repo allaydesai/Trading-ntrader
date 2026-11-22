@@ -1,5 +1,8 @@
 """Report generation and viewing CLI commands using PostgreSQL storage."""
 
+import json
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -10,6 +13,13 @@ from rich.table import Table
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.futures.display import (
+    flat_report_fields,
+    print_futures,
+    run_summary,
+    summary_text,
+)
+from src.services.futures.returns import RATIO_ADJUSTED_NOTE, report_fields, trade_rows
 from src.services.reports.csv_exporter import CSVExporter
 from src.services.reports.text_report import TextReportGenerator
 
@@ -40,6 +50,9 @@ def summary(result_id: str):
                 console.print(f"❌ Result not found: {result_id}", style="red bold")
                 console.print("\n💡 Use 'backtest history' to see available results")
                 return
+
+            # Futures runs lead with return on margin (headline) and contract terms
+            _display_futures(backtest)
 
             # Display summary using Rich formatting
             _display_summary_panel(backtest)
@@ -197,6 +210,39 @@ def export_all(result_id: str, output_dir: str):
 # Helper functions
 
 
+def _display_futures(backtest):
+    """The futures table for a futures run; nothing for an equity run."""
+    print_futures(console, backtest)
+
+
+def _futures_json(backtest) -> dict:
+    """``{"futures": ...}`` for a futures run's JSON report (with per-trade figures); else {}."""
+    summary = run_summary(backtest)
+    if summary is None:
+        return {}
+    trades = backtest.trades or []
+    rows = [
+        {
+            "trade_id": t.trade_id,
+            "order_side": t.order_side,
+            "entry_timestamp": t.entry_timestamp,
+            "exit_timestamp": t.exit_timestamp,
+            **row,
+        }
+        for t, row in zip(trades, trade_rows(backtest.config_snapshot, trades))
+    ]
+    return {"futures": {**report_fields(summary), "note": RATIO_ADJUSTED_NOTE, "trades": rows}}
+
+
+def _json_default(obj):
+    """JSON serializer for Decimal and datetime values."""
+    if isinstance(obj, Decimal):
+        return str(obj)
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
+
+
 def _display_summary_panel(backtest):
     """Display summary panel with key metrics."""
     metrics = backtest.metrics
@@ -337,6 +383,8 @@ def _generate_text_report(backtest, output_path=None):
 
     # Generate report
     report_content = generator.generate_performance_report(metrics_dict)
+    if futures := run_summary(backtest):
+        report_content = summary_text(futures) + "\n\n" + report_content
 
     if output_path:
         # Save to file
@@ -382,6 +430,9 @@ def _generate_csv_report(backtest, output_path):
         "avg_loss": float(metrics.avg_loss) if metrics.avg_loss else None,
     }
 
+    if futures := run_summary(backtest):
+        metrics_dict.update(flat_report_fields(futures))
+
     success = exporter.export_metrics(metrics_dict, output_path)
 
     if success:
@@ -391,19 +442,7 @@ def _generate_csv_report(backtest, output_path):
 
 
 def _generate_json_report(backtest, output_path):
-    """Generate JSON report."""
-    import json
-    from datetime import datetime
-    from decimal import Decimal
-
-    def json_serializer(obj):
-        """Custom JSON serializer."""
-        if isinstance(obj, Decimal):
-            return str(obj)
-        elif isinstance(obj, datetime):
-            return obj.isoformat()
-        raise TypeError(f"Type {type(obj)} not serializable")
-
+    """Generate JSON report (a futures run adds ``futures``: return on margin, per-trade)."""
     metrics = backtest.metrics
 
     # Build complete result dictionary
@@ -443,11 +482,12 @@ def _generate_json_report(backtest, output_path):
             if metrics
             else None
         ),
+        **_futures_json(backtest),
     }
 
     # Write to JSON file
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(result_data, f, indent=2, default=json_serializer)
+        json.dump(result_data, f, indent=2, default=_json_default)
 
     console.print(f"✅ JSON report exported to {output_path}", style="green")
 
