@@ -46,6 +46,11 @@ Approved decisions (Allay):
     object (the run summary).
   - `export_results` trade CSV gains futures columns only when an exported run is futures.
     The run JSON gains `futures` for futures runs.
+- Dashboard (after the PO ruling): a futures panel on the run detail page, a futures trades
+  table (contracts, notional, margin, points, underlying %, return on margin), futures
+  columns in the CSV/JSON export, and `FUT` plus `RoM` in the run list. The trades table now
+  loads in-process, which fixes the hardcoded `localhost:8000`. Equity pages are
+  byte-identical, pinned against pre-M4 goldens.
 - Docs: `docs/agent/futures-backtesting.md` (reporting section, `--contracts`), README.
 
 ## Interfaces crossed
@@ -60,12 +65,10 @@ Approved decisions (Allay):
 
 ## Guard lists / pinned constants
 
-- **`FROZEN_VIEWS` blocks the dashboard part.** Every dashboard route, view model and
-  template is under `src/api/**` or `templates/**`, which `FROZEN_VIEWS` pins byte for byte
-  (an added file there fails it too), and the run list/comparison read
-  `src/services/backtest_query.py`. Per the task's rule and the guard's own text, this change
-  **does not edit them**. It builds the futures figures where the dashboard can consume them
-  unchanged, and `design.md` lists the exact frozen edits needed, for a PO ruling.
+- **`FROZEN_VIEWS`**: every dashboard route, view model and template is pinned. The first
+  revision stopped at that line. **Allay (PO) approved on 2026-11-22 (futures dashboard)**
+  regenerating it for exactly the files listed in `design.md`; the regeneration, and that
+  nothing else changed, is recorded there.
 - No `src/core/live_*.py` or `src/cli/commands/live*.py` file is touched.
 - `sma_crossover.py` is in the globbed `STRATEGY_MODULES`; no list edit.
 - Size caps: `SMACrossover` (baseline 101) and `_list_history_sync` (106) must not grow; new
@@ -73,7 +76,6 @@ Approved decisions (Allay):
 
 ## Out of scope
 
-- The dashboard edits themselves (blocked on the PO ruling above).
 - Real (unadjusted) points: needs the adjustment factor or unadjusted prices.
 - Return on margin for the equity curve or risk ratios (Sharpe and drawdown stay on the
   account's capital).

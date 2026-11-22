@@ -42,4 +42,11 @@
       `history`, `report` (csv/json) checked. Dashboard pages return 200 equity-style. Found:
       the trades-table fragment calls `localhost:8000` (hardcoded, frozen
       `src/api/ui/backtests.py`), so on port 3000 it 500s unless an 8000 instance runs.
-- [ ] 5.3 Dashboard (blocked): the frozen-view edits in `design.md`, after a PO ruling.
+- [x] 5.3 Dashboard, after the PO ruling (Allay, 2026-11-22), in this order:
+      - goldens of the equity pages first, from the pre-M4 tree;
+      - component tests, red first (`tests/component/api/test_futures_dashboard.py`);
+      - the futures panel, trades table, export, list and compare;
+      - the in-process trades table;
+      - `FROZEN_VIEWS` regenerated for exactly the approved files.
+- [x] 5.4 Manual: the ES and CL run pages and trades tables on 127.0.0.1:3000 (the only
+      instance) return 200 with the futures numbers.

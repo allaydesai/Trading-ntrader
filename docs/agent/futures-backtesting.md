@@ -177,9 +177,18 @@ Where it shows:
 - MCP `get_run`/`compare_runs`: `asset_class`, plus `futures` and a warning for futures
   runs; `compare_runs` warns when asset classes mix. `export_results`: `futures` per run,
   and futures trade columns when any exported run is futures.
-- **Web dashboard: not yet.** Its routes and templates are under `FROZEN_VIEWS`. The edits
-  it needs are listed in `openspec/changes/add-futures-reporting/design.md`, pending a PO
-  ruling.
+- **Web dashboard** (PO ruling, Allay, 2026-11-22):
+  - The run detail page gets a Futures panel above the metrics: return on margin (large),
+    return on the underlying, peak margin, max contracts, largest notional, closed trades,
+    net P&L (ratio-adjusted), points per contract, contract terms, and the note.
+  - The trades table shows Contracts, Notional, Margin, Points (adj.), Underlying % and
+    Return on margin, with dollar P&L dimmed.
+  - The CSV/JSON export adds the futures columns.
+  - The run list shows a `FUT` badge and `RoM +x%`, with the account return (the sort key)
+    underneath.
+  - The CLI `compare` adds asset-class and return rows.
+  - Equity pages are byte-identical (pinned).
+  - The trades table loads in-process, so it works on any port.
 
 Runs made before M3 stored `futures_contracts` (for example the first ES smoke run) have no
 terms, so they report as equity.

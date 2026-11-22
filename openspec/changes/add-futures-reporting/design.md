@@ -70,7 +70,7 @@ points for futures labels them "ratio-adjusted" and prints one explanation line
 - Config files: `contracts:` in the strategy `config:` section reaches `SMAConfig` like any
   other key; `--contracts` overrides it in config mode.
 
-## The dashboard: blocked on `FROZEN_VIEWS`
+## The dashboard and `FROZEN_VIEWS`
 
 `FROZEN_VIEWS` pins every file in `src/api/**` and `templates/**`, plus
 `src/services/backtest_query.py` and `src/cli/commands/compare.py`. Adding a file in those
@@ -93,6 +93,47 @@ it"), this change doesn't touch them. The edits needed once the PO rules:
 Each edit is a branch on `view.futures` / `asset_class`, so equity pages render exactly as now.
 That can be checked by rendering an equity run before and after. The manifest is then
 regenerated under the recorded ruling.
+
+### PO ruling and what was done
+
+**Approved by Allay (product owner), 2026-11-22, "futures dashboard":** regenerate
+`FROZEN_VIEWS` for only the files in the table above, plus `src/api/ui/backtests.py` for the
+trades-table port fix below. Nothing else is unfrozen. The manifest was regenerated with the
+documented `python -m tests.unit.governance.test_ar44_frozen_views --print-manifest`, and its
+diff was checked to be exactly these entries (59 → 60 files):
+
+- changed: `backtest_detail.py`, `backtest_list.py`, `rest/trades.py`, `ui/backtests.py`,
+  `compare.py`, `detail.html`, `list_fragment.html`, `trades_table.html`;
+- added: `templates/partials/futures_panel.html`.
+
+`src/services/backtest_query.py` did **not** need to change and was not touched:
+`BacktestRun.trades` is `lazy="selectin"`, so the list query already loads trades.
+
+Differences from the table, made while implementing:
+
+- `BacktestDetailView.futures` is a display-ready dict (`display.dashboard_panel`), not the
+  raw summary, so the template only prints strings.
+- **Trades-table port fix.** The route used to fetch `http://localhost:8000/api/...` over
+  HTTP, so on any other port the fragment returned 500. It now calls the trades API endpoint
+  function (`get_backtest_trades`) in-process with the request's own service and DB session.
+  An unknown `sort_by`/`sort_order` falls back to entry time ascending; before, it got a 422
+  body the template could not render.
+- The trades table's futures branch is a separate table with these columns: Contracts,
+  Notional, Margin, Points (adj.), Underlying %, Return on margin, then P&L ($, adj.) dimmed,
+  and the ratio-adjustment note below it.
+- The export refactor builds each row once (`_export_row`), and futures runs append
+  `returns.TRADE_COLUMNS`. `export_trades` drops from 93 lines to 41, so its size-cap baseline
+  entry is removed.
+- In the run list, a futures row shows `RoM +x%`, with the account return underneath as
+  `acct +y%` (that is what the column sorts by), and a `FUT` badge by the symbol.
+- `compare` adds Asset Class, Return on Margin and Return on Underlying rows only when a
+  compared run is futures.
+
+**Equity pages are byte-identical.** `tests/component/api/test_futures_dashboard.py` renders
+an equity run's detail page, trades table, run list, CSV and JSON export. It compares each to
+a golden captured from the pre-M4 tree (commits `675982d` and `af8558f`, before any frozen
+file changed). Template branches are written inline on existing lines (`<!-- Metrics Panel
+-->{% if view.futures %}...`), so an equity render emits the same bytes.
 
 ## Alternatives rejected
 
