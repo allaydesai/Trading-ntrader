@@ -12,15 +12,16 @@
 # min_tick:        the IB IDEALPRO tick, kept for live orders only (design section 7).
 # size_increment:  whole base-currency units.
 # min_order_usd:   the IDEALPRO minimum; smaller orders are odd lots (worse fills live).
-# typical_spread_pips: modelled all-in spread, charged as half per side from M4 (D7).
+# typical_spread_pips: modelled all-in spread, charged as half per side (D7, M4).
 # margin_pct / maint_margin_pct: % of notional (D8).
 # data:            "firstrate" when bars exist on the VPS, "none" for a fixture-only spec.
 #
 # PROVENANCE. Every value in SOURCED_FIELDS has a `sources` entry: status VERIFIED (checked)
 # or UNVERIFIED (a best-known public figure). ALL IB ECONOMICS BELOW ARE UNVERIFIED: min tick,
-# size increment, IDEALPRO minimum, spread, margins and the commission schedule. Allay
-# confirms them against the IBKR account before M4 merges (tasks.md 4.7) and updates
-# status/source/as_of here. Pip size and the session are market conventions; data precision
+# size increment, IDEALPRO minimum, spread, margins and the commission schedule
+# (UNVERIFIED, Allay to confirm). From M4 every FX backtest is charged and margined with them
+# (src/core/fx_costs.py, src/core/margin_gate.py). Allay confirms them against the IBKR account
+# (tasks.md 4.7) and updates status/source/as_of here. Pip size and the session are market conventions; data precision
 # is measured from the FirstRate files.
 #
 # Decimal values are quoted so YAML never turns them into floats; times are quoted because

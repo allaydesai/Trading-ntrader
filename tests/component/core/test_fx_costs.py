@@ -45,9 +45,13 @@ EURUSD, GBPUSD, USDJPY, EURGBP = (_pair(n) for n in ("EURUSD", "GBPUSD", "USDJPY
 _IDS = iter(range(1, 10_000))
 
 
-def _order(side=OrderSide.BUY, client_order_id: str | None = None):
+def _qty(units: int) -> Quantity:
+    return Quantity.from_int(units)
+
+
+def _order(side=OrderSide.BUY, client_order_id: str | None = None, quantity: int = 100_000):
     cid = ClientOrderId(client_order_id or f"O-{next(_IDS)}")
-    return SimpleNamespace(side=side, client_order_id=cid)
+    return SimpleNamespace(side=side, client_order_id=cid, quantity=_qty(quantity))
 
 
 def _cache(*instruments, gbpusd: str | None = None) -> Cache:
@@ -244,3 +248,28 @@ class TestSnapshot:
         equity_only = Cache()
         equity_only.add_instrument(TestInstrumentProvider.equity("AAPL", "XNAS"))
         assert cost_snapshot(equity_only) == {}
+
+
+class TestPartialFillsAndOddLots:
+    def test_an_orders_spread_is_rounded_once_not_per_fill(self):
+        # USDJPY 3 x 33,334 at 150.000: 83.335 JPY = 0.5556 USD a fill; per-fill cents would be
+        # 3 x 0.56 = 1.68, the order's exact 250.005 JPY / 150 = 1.6667 is 1.67.
+        model = _model(USDJPY)
+        order = _order()
+        fills = [_charge(model, USDJPY, 33_334, "150.000", order) for _ in range(3)]
+        assert model.costs[str(USDJPY.id)].spread == Decimal("1.67")
+        assert sum(f.as_decimal() for f in fills) == Decimal("2.00") + Decimal("1.67")
+
+    def test_the_odd_lot_check_reads_the_order_size_not_the_fill(self):
+        model = _model(EURUSD)
+        order = SimpleNamespace(
+            side=OrderSide.BUY, client_order_id=ClientOrderId("BIG"), quantity=_qty(100_000)
+        )
+        _charge(model, EURUSD, 10_000, "1.10000", order)  # a 10k fill of a 110k-USD order
+        assert model._odd_lots == set()
+        small = SimpleNamespace(
+            side=OrderSide.BUY, client_order_id=ClientOrderId("SMALL"), quantity=_qty(10_000)
+        )
+        _charge(model, EURUSD, 10_000, "1.10000", small)
+        _charge(model, EURUSD, 10_000, "1.10000", _order(quantity=10_000))
+        assert model._odd_lots == {str(EURUSD.id)}  # once per pair

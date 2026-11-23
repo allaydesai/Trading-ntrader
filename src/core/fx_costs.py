@@ -143,6 +143,35 @@ class FxCosts:
         return {"commission": str(_cents(self.commission)), "spread": str(_cents(self.spread))}
 
 
+@dataclass
+class _OrderCharges:
+    """One order's running totals, so partial fills add up to the order's exact charge.
+
+    The fee model is called per fill; IB charges per order. Each fill adds its USD value and
+    its unrounded USD half-spread, then pays the order's cents-rounded totals so far less what
+    earlier fills paid: ``max(bps, minimum)`` once, and the spread without per-fill rounding.
+    """
+
+    rate_bps: Decimal
+    value_usd: Decimal = ZERO
+    spread_usd: Decimal = ZERO
+    commission_paid: Decimal = ZERO
+    spread_paid: Decimal = ZERO
+
+    def add(self, value_usd: Decimal, spread_usd: Decimal) -> None:
+        """Record one fill's USD trade value and unrounded USD half-spread."""
+        self.value_usd += value_usd
+        self.spread_usd += spread_usd
+
+    def top_up(self, minimum_usd: Decimal, scale: Decimal) -> tuple[Decimal, Decimal]:
+        """``(commission, spread)`` this fill owes: the order's totals so far less paid."""
+        commission_due = _cents(max(self.value_usd * self.rate_bps / BPS, minimum_usd) * scale)
+        spread_due = _cents(self.spread_usd * scale)
+        owed = (commission_due - self.commission_paid, spread_due - self.spread_paid)
+        self.commission_paid, self.spread_paid = commission_due, spread_due
+        return owed
+
+
 class FxCommissionModel(FeeModel):
     """IB spot FX commission (bps, USD minimum per order) plus half the spread, in USD."""
 
@@ -161,7 +190,7 @@ class FxCommissionModel(FeeModel):
         self.costs: dict[str, FxCosts] = {str(iid): FxCosts() for iid in self.terms}
         self.misses: list[str] = []
         self._cache = cache
-        self._orders: dict[str, tuple[Decimal, Decimal]] = {}  # bps so far, commission so far
+        self._orders: dict[str, _OrderCharges] = {}
         self._odd_lots: set[str] = set()
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:  # noqa: D102
@@ -173,33 +202,25 @@ class FxCommissionModel(FeeModel):
         if rate is None:
             self.misses.append(f"{instrument.id} {order.client_order_id}: no {terms.quote}/USD")
             return Money(0, ACCOUNT_CURRENCY)
-        value = qty * px * rate
-        self._warn_odd_lot(instrument, terms, value)
-        commission = self._order_commission(str(order.client_order_id), value, terms)
-        spread = _cents(qty * terms.half_spread * rate * self.scale)
+        self._warn_odd_lot(instrument, terms, order.quantity.as_decimal() * px * rate)
+        charges = self._orders.setdefault(str(order.client_order_id), _OrderCharges(terms.rate_bps))
+        charges.add(qty * px * rate, qty * terms.half_spread * rate)
+        commission, spread = charges.top_up(terms.min_per_order_usd, self.scale)
         costs = self.costs[str(instrument.id)]
         costs.commission += commission
         costs.spread += spread
         self._publish()
         return Money(commission + spread, ACCOUNT_CURRENCY)
 
-    def _order_commission(self, key: str, value_usd: Decimal, terms: FxTerms) -> Decimal:
-        """This fill's share of the order's ``max(bps, minimum)``: the top-up above fills so far."""
-        bps_so_far, charged = self._orders.get(key, (ZERO, ZERO))
-        bps_so_far += value_usd * terms.rate_bps / BPS
-        due = _cents(max(bps_so_far, terms.min_per_order_usd) * self.scale)
-        self._orders[key] = (bps_so_far, due)
-        return due - charged
-
-    def _warn_odd_lot(self, instrument, terms: FxTerms, value_usd: Decimal) -> None:
-        """Once per pair: a fill below the IDEALPRO minimum would be an odd lot live."""
+    def _warn_odd_lot(self, instrument, terms: FxTerms, order_value_usd: Decimal) -> None:
+        """Once per pair: an order below the IDEALPRO minimum would be an odd lot live."""
         iid = str(instrument.id)
-        if value_usd < terms.min_order_usd and iid not in self._odd_lots:
+        if order_value_usd < terms.min_order_usd and iid not in self._odd_lots:
             self._odd_lots.add(iid)
             logger.warning(
                 "fx_odd_lot",
                 instrument_id=iid,
-                trade_value_usd=str(_cents(value_usd)),
+                order_value_usd=str(_cents(order_value_usd)),
                 idealpro_minimum_usd=str(terms.min_order_usd),
             )
 

@@ -5,7 +5,7 @@ IB_SIMPLIFIED symbology produces and parses (``RE_CASH``), so a backtest bar typ
 subscription name the same instrument (decision D1). The price increment is the data grid
 (``10^-precision``), not the IB minimum tick, which stays in ``info`` for live orders.
 Margins are the spec percentages as Nautilus fractions of notional; fees are zero because
-commission comes from the venue fee model (M4).
+commission comes from the venue fee model (``src/core/fx_costs.py``, M4).
 See ``openspec/changes/add-fx-backtesting/design.md`` section 1.
 """
 
