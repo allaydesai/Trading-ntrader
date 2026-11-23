@@ -62,7 +62,8 @@ class TestFxDetail:
     def test_panel_shows_the_fx_figures_after_the_account_return(self):
         text = dash._text(dash.render(fx_run())["detail.html"])
         assert "Spot FX" in text
-        assert "Net P&L (USD) -$180.90" in text
+        assert "Closed-trade P&L (USD) -$180.90" in text
+        assert "Net P&L" not in text  # QA Q5: closed trades only, so not "net"
         assert "Peak notional leverage 0.31x" in text
         assert "Commission $12.00" in text and "Modelled spread $7.10" in text
         assert "Largest position 200,000 (2.00 lots)" in text
