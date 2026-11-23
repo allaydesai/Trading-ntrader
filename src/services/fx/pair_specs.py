@@ -257,3 +257,8 @@ def get_pair_spec(pair: str) -> FxPairSpec:
 def get_commission_spec() -> FxCommissionSpec:
     """Return the shipped IB spot FX commission schedule."""
     return _default_registry().commission
+
+
+def pair_names() -> frozenset[str]:
+    """Every pair the shipped spec file defines (``EURUSD``, ...)."""
+    return frozenset(_default_registry().pairs)
