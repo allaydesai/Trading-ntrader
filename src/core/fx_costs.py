@@ -19,8 +19,11 @@ the accounts manager's own lookup. A cross fill without a rate is charged nothin
 the account misses the same rate, so ``src/core/fx_results.py`` fails the run.
 
 The terms come from the ``CurrencyPair``'s ``info`` (``build_fx_pair`` copies them from
-``pair_specs.yaml``), like the futures models read theirs. **Every value is UNVERIFIED** until
-Allay confirms it against the account (tasks.md 4.7; ``docs/agent/fx-backtesting.md``).
+``pair_specs.yaml``), like the futures models read theirs. The commission schedule is VERIFIED
+against IBKR's published pricing (2026-11-23); the spread and margin are UNVERIFIED until Allay
+confirms them against the account (tasks.md 4.7; ``docs/agent/fx-backtesting.md``). The USD
+minimum is charged once per order; IB also charges it again after a modify or overnight (not
+modelled).
 
 Margin needs no model here: the pair's ``margin_init`` is the spec percentage, which Nautilus'
 default ``LeveragedMarginModel`` applies to notional; ``src/core/margin_gate.py`` enforces it.

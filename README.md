@@ -279,7 +279,8 @@ P&L" (open positions excluded). `backtest show`, `report`, `compare`, the
 MCP run tools (`asset_class: "fx"`, an `fx` object) and the dashboard (a Spot FX panel, an FX
 trades table and export, `FX` in the run list) add pips, units/lots, USD notional, peak
 leverage, commission vs modelled spread and a "financing not modelled" note; `history` marks
-`EURUSD (fx)`. Cost and margin values are UNVERIFIED working defaults; details in
+`EURUSD (fx)`. The commission is verified against IBKR's published pricing; spread and margin
+values are UNVERIFIED working defaults; details in
 `docs/agent/fx-backtesting.md`.
 
 **Execution realism (opt-in).** A config file's `backtest:` section can set

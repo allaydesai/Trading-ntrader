@@ -17,12 +17,18 @@
 # data:            "firstrate" when bars exist on the VPS, "none" for a fixture-only spec.
 #
 # PROVENANCE. Every value in SOURCED_FIELDS has a `sources` entry: status VERIFIED (checked)
-# or UNVERIFIED (a best-known public figure). ALL IB ECONOMICS BELOW ARE UNVERIFIED: min tick,
-# size increment, IDEALPRO minimum, spread, margins and the commission schedule
-# (UNVERIFIED, Allay to confirm). From M4 every FX backtest is charged and margined with them
-# (src/core/fx_costs.py, src/core/margin_gate.py). Allay confirms them against the IBKR account
-# (tasks.md 4.7) and updates status/source/as_of here. Pip size and the session are market conventions; data precision
-# is measured from the FirstRate files.
+# or UNVERIFIED (a best-known public figure). The commission schedule (0.20 bp, USD 2.00 minimum,
+# Tier I) is VERIFIED against IBKR's published spot currency pricing page (2026-11-23). The other
+# IB economics are still UNVERIFIED: min tick, size increment, IDEALPRO minimum, spread and
+# margins (margin depends on the account entity and jurisdiction; Allay to confirm). From M4 every
+# FX backtest is charged and margined with them (src/core/fx_costs.py, src/core/margin_gate.py).
+# Allay confirms them against the IBKR account (tasks.md 4.7) and updates status/source/as_of
+# here. Pip size and the session are market conventions; data precision is measured from the
+# FirstRate files.
+#
+# Known simplification (no code models it): IB counts a modified order as a cancel + replace and
+# an order persisting overnight as a new order for the USD 2.00 minimum; the backtest charges the
+# minimum once per order.
 #
 # Decimal values are quoted so YAML never turns them into floats; times are quoted because
 # unquoted "17:00" is a base-60 integer in YAML 1.1.
@@ -32,11 +38,13 @@ specs_as_of: "2026-11-22"
 commission:
   rate_bps: "0.20"
   min_per_order_usd: "2.00"
-  as_of: "2026-11-22"
-  status: UNVERIFIED
+  as_of: "2026-11-23"
+  status: VERIFIED
   source: >-
-    IBKR Pro "Commissions Spot Currencies" public page (lowest-volume tier 0.20 bp x trade
-    value, USD 2.00 minimum per order); not checked against the account's tier.
+    IBKR "Commissions Spot Currencies" pricing page (fetched 2026-11-23):
+    https://www.interactivebrokers.ca/en/pricing/commissions-spot-currencies.php?region=americas
+    Tier I (monthly trade value <= USD 1B) 0.20 bp x trade value, USD 2.00 minimum
+    per order. Higher tiers (II-IV: 0.15/0.10/0.08 bp, minimums 1.50/1.25/1.00) not modelled.
 
 pairs:
   EURUSD:

@@ -18,6 +18,10 @@ from src.services.fx.pair_specs import (
 
 pytestmark = pytest.mark.unit
 
+COMMISSION_SOURCE_URL = (
+    "https://www.interactivebrokers.ca/en/pricing/commissions-spot-currencies.php?region=americas"
+)
+
 EXPECTED = {
     # pair: (base, quote, pip_size, price_precision, min_tick, data)
     "EURUSD": ("EUR", "USD", Decimal("0.0001"), 5, Decimal("0.00005"), "firstrate"),
@@ -101,9 +105,9 @@ class TestShippedSpecFile:
         commission = get_commission_spec()
         assert commission.rate_bps == Decimal("0.20")
         assert commission.min_per_order_usd == Decimal("2.00")
-        assert commission.status == "UNVERIFIED"
-        assert commission.source
-        assert commission.as_of <= date.today()
+        assert commission.status == "VERIFIED"
+        assert COMMISSION_SOURCE_URL in commission.source
+        assert commission.as_of == date(2026, 11, 23)
 
     def test_lookup_is_case_insensitive(self):
         assert get_pair_spec("eurusd").pair == "EURUSD"
