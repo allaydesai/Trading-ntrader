@@ -1,9 +1,29 @@
 # FX backtesting: pairs, instruments, conversion
 
 Spot FX on IB IDEALPRO, planned in `openspec/changes/add-fx-backtesting/` (M1-M6; decisions
-D1-D16 approved 2026-11-22). **Status: M1 only** (specs, instruments, the engine gate). There
-is no FX importer, catalog, cost model or reporting yet, and `import --asset-class fx` still
-exits 2. The sections marked *(planned)* describe later milestones.
+D1-D16 approved 2026-11-22). **Status: M1-M2** (specs, instruments, the engine gate, the
+FirstRate importer and the `firstrate-fx` catalog). There is no rate conversion, cost model or
+reporting yet, so FX backtests do not run end to end. The sections marked *(planned)* describe
+later milestones.
+
+## Data: the `firstrate-fx` catalog (M2)
+
+`import --format firstrate --asset-class fx --catalog firstrate-fx /srv/market-data/raw/fx`
+(see `docs/agent/data-pipeline.md`). Imported 2026-11-22, row counts equal to the source line
+counts:
+
+| Pair | 1min | 5min | 30min | 1hour | 1day |
+|---|---|---|---|---|---|
+| EURUSD | 6,050,178 | 1,215,629 | 202,793 | 101,471 | 4,241 |
+| GBPUSD | 6,042,317 | 1,214,776 | 202,730 | 101,452 | 4,239 |
+| USDJPY | 6,044,472 | 1,214,696 | 202,756 | 101,468 | 4,240 |
+
+Intraday bars run 2010-01-03 17:00 ET to 2026-04-30 23:59 ET (1-hour to 23:00); daily bars
+open 2010-01-03 17:00 ET (row `20100104`) to 2026-04-30 17:00 ET (row `20260501`, partial).
+Warnings kept on import: USDJPY rounded rows 16 (1h) / 38 (30m) / 215 (5m) / 1,017 (1m);
+session anomalies per intraday timeframe EURUSD 6, GBPUSD 13, USDJPY 7, and Sunday-dated
+daily rows EURUSD 2, USDJPY 1. Volume is FirstRate's (almost certainly a tick count,
+UNVERIFIED).
 
 **Financing is not modelled** (D9): IB charges or pays interest on currency balances, and no
 backtest includes it.
@@ -95,10 +115,8 @@ into M3:
    gate test. USD-quote and USD-base pairs are their own rate source, so rule 3 does not
    apply to them (rule 2's resting-order lag still does).
 
-## Planned (M2-M6)
+## Planned (M3-M6)
 
-- M2: `FirstRateFxParser`/`FxImportService`, catalog `firstrate-fx`, MID bars, daily bars at
-  `D-1 17:00 ET`.
 - M3: `src/core/fx_rates.py` (`FxRateFeeder`), USD venues for FX only, USD `profit_loss`,
   mark-to-market on USD equity.
 - M4: `FxCommissionModel` (bps + minimum + modelled half-spread), percentage margin enforced by

@@ -111,3 +111,23 @@ Market data stored as Parquet files under Nautilus catalog structure.
 - The equity parser also pads every price of a file to one precision (the widest in the file):
   Nautilus' catalog stores a batch at its first bar's precision and would truncate the rest.
 - Design notes: `openspec/changes/add-futures-importer/design.md`.
+
+## FX import (FX M2)
+
+- `import --format firstrate --catalog firstrate-fx --asset-class fx <dir>` ->
+  `src/cli/commands/import_fx.py` (maps each timeframe to `MID`)
+  -> `FxImportService` (`src/services/firstrate/fx_import_service.py`, a subclass of
+  `FuturesImportService`) -> `FirstRateFxParser`
+  (`src/services/firstrate/parsers/firstrate_fx_parser.py`, a futures-parser subclass
+  registered for `FX`).
+- Rows: intraday `YYYYMMDD,HH:MM:SS,O,H,L,C,V`, daily `YYYYMMDD,O,H,L,C,V`. Each chunk is
+  rewritten to the futures `ts,O,H,L,C,V` shape, so ET->UTC, validation and ordering are the
+  futures code. A daily row dated `D` is stamped `D-1 17:00` America/New_York (session open).
+- Prices: the pair spec's `price_precision`, half-even; rows changed by more than 1e-9 are
+  counted (`N row(s) rounded to 3 decimals`). Bars outside Sun 17:00-Fri 17:00 ET are kept
+  and counted (`session anomaly` warnings).
+- Bar dirs drop the `/` (`EURUSD.IDEALPRO-1-HOUR-MID-EXTERNAL`); `bar_directory()` applies
+  Nautilus' `urisafe_identifier`. `source_probe` and the dry-run read compact FX dates; the
+  probe returns the parser's stamp so re-runs skip.
+- Catalog: `firstrate-fx` (`/srv/market-data/catalogs/firstrate-fx`, imported 2026-11-22: 3
+  pairs x 5 timeframes, 767 MB).
