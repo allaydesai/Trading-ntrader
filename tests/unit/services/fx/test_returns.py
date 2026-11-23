@@ -68,6 +68,7 @@ SNAPSHOT = {
 
 def _trade(iid, side, qty, entry, exit_, pnl, start_h, end_h):
     return SimpleNamespace(
+        trade_id=f"T-{iid[:3]}-{start_h}",
         instrument_id=iid,
         order_side=side,
         quantity=Decimal(qty),

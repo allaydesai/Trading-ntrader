@@ -18,6 +18,7 @@ from rich.text import Text
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
 from src.services.futures.display import print_futures
+from src.services.fx.display import print_fx
 
 console = Console()
 
@@ -114,6 +115,8 @@ def _display_backtest(backtest):
 
     # Futures runs: return on margin (headline), contract terms, ratio-adjustment note
     print_futures(console, backtest)
+    # FX runs: pips, lots, USD notional, leverage, costs split, financing note (M5)
+    print_fx(console, backtest)
 
     # Configuration Snapshot
     _display_config_snapshot(backtest.config_snapshot)
