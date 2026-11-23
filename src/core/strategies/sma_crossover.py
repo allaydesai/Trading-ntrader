@@ -10,9 +10,12 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
+from src.core.fx_rates import fx_units, usd_per_quote
 from src.core.position_sizing import (
+    ONE,
     contract_notional,
     instrument_multiplier,
+    is_fx_pair,
     units_for_notional,
     whole_contracts,
 )
@@ -59,21 +62,33 @@ def _sized_quantity(
     price: Decimal,
     instrument: object | None,
     fixed_contracts: int | None = None,
+    cache=None,
 ) -> tuple[Quantity | None, Decimal, Decimal]:
     """``(quantity, raw units, multiplier)`` for ``position_value`` of exposure at ``price``.
+
+    ``quantity x price x multiplier`` is the USD exposure the strategy logs.
 
     Shares (multiplier 1) are whole, at least 1; crypto (size precision > 0) is fractional;
     a multiplied contract (futures) floors to whole contracts and is ``None`` below one.
     ``fixed_contracts`` (futures only) replaces the budget with exactly that many contracts.
+    A spot FX pair (FX M4) is sized in base units worth ``position_value`` USD, floored to its
+    size increment and ``None`` below one: USD 100,000 of USDJPY is 100,000 units, not
+    ``100,000 / 157``. A cross reads its quote/USD rate from ``cache``.
 
     Raises:
-        ValueError: ``fixed_contracts`` for an instrument with no multiplier (not futures).
+        ValueError: ``fixed_contracts`` for an instrument with no multiplier (not futures),
+            or a cross with no USD rate in ``cache`` yet.
     """
     multiplier = instrument_multiplier(instrument)
     if fixed_contracts is not None:
         if multiplier == 1:
             raise ValueError("contracts applies to futures instruments only")
         return Quantity.from_int(fixed_contracts), Decimal(fixed_contracts), multiplier
+    if is_fx_pair(instrument):  # third value: USD per quote unit, so qty x price x it is USD
+        units = fx_units(position_value, price, instrument, cache)  # type: ignore[arg-type]
+        rate = usd_per_quote(instrument, price, cache) or ONE  # type: ignore[arg-type]
+        size_prec = instrument.size_precision  # type: ignore[union-attr]
+        return (Quantity(units, size_prec) if units else None), units, rate
     raw_qty = units_for_notional(position_value, price, multiplier)
     size_prec = getattr(instrument, "size_precision", 0) if instrument else 0
     if multiplier != 1:
@@ -230,7 +245,7 @@ class SMACrossover(Strategy):
         current_price = Decimal(str(self._current_bar.close))
 
         sizing = (position_value, current_price, self.cache.instrument(self.instrument_id))
-        quantity, raw_qty, multiplier = _sized_quantity(*sizing, self.config.contracts)
+        quantity, raw_qty, multiplier = _sized_quantity(*sizing, self.config.contracts, self.cache)
         if quantity is None:
             self.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
             return None
