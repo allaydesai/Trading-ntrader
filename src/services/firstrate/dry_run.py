@@ -70,7 +70,11 @@ _EXPECTED_COLUMNS: int = 6
 
 #: Column counts a sampled file may have, per asset class. Futures daily files add a 7th
 #: open-interest column, which the futures parser drops (futures M2).
-_ACCEPTED_COLUMNS: dict[AssetClass, tuple[int, ...]] = {AssetClass.FUTURES: (6, 7)}
+#: FX intraday rows have 7 because the date and time are separate columns (FX M2).
+_ACCEPTED_COLUMNS: dict[AssetClass, tuple[int, ...]] = {
+    AssetClass.FUTURES: (6, 7),
+    AssetClass.FX: (6, 7),
+}
 
 #: Marker that separates the ticker from the rest of a FirstRate filename,
 #: e.g. ``AAPL_full_1day_adjsplitdiv.txt``.
@@ -108,13 +112,17 @@ class ResolvedTickerReader(Protocol):
 # ---------------------------------------------------------------------------
 
 
-def _infer_timeframe(filename: str) -> str:
+def _infer_timeframe(filename: str, *, exact_stem: bool = False) -> str:
     """Return the Nautilus timeframe spec inferred from a FirstRate filename.
 
     Case-insensitive: ``AAPL_full_1Day_adjsplitdiv.txt`` is treated as a
     ``1-DAY-LAST`` file. Unknown suffixes bucket into :data:`_UNKNOWN_TIMEFRAME`.
+    With ``exact_stem`` (FX, whose files end at the token: ``EURUSD_full_1hour.txt``) a
+    token right before the extension also counts; the equity/futures default is unchanged.
     """
     lower = filename.lower()
+    if exact_stem:
+        lower = f"{Path(lower).stem}_"
     for suffix, spec in _FILENAME_TIMEFRAME_MAP.items():
         if suffix in lower:
             return spec
@@ -158,7 +166,7 @@ class _ScanState:
     total_source_bytes: int = 0
 
 
-def _walk(source_path: Path) -> _ScanState:
+def _walk(source_path: Path, exact_stem: bool = False) -> _ScanState:
     """Walk ``source_path`` and collect scan state in a single pass.
 
     Uses :func:`os.walk` with ``followlinks=False`` so symlinked directories
@@ -168,6 +176,7 @@ def _walk(source_path: Path) -> _ScanState:
 
     Discovery is case-insensitive for the ``.txt`` extension so files with
     ``.TXT`` / ``.Txt`` on case-sensitive filesystems are not silently missed.
+    ``exact_stem`` is passed to :func:`_infer_timeframe` (FX filenames).
     """
     state = _ScanState()
 
@@ -209,7 +218,7 @@ def _walk(source_path: Path) -> _ScanState:
                 )
                 continue
 
-            spec = _infer_timeframe(name)
+            spec = _infer_timeframe(name, exact_stem=exact_stem)
             bucket = state.groups.setdefault(spec, _Bucket())
             bucket.tickers.add(ticker)
             bucket.files.append(file)
@@ -342,7 +351,9 @@ def _date_from_line(line: str | None) -> str | None:
 
     The first comma-separated field is the row datetime, e.g.
     ``2024-01-02 09:30:00`` (intraday) or ``2024-01-02`` (daily). We keep only
-    the date portion (token before any whitespace). Returns ``None`` for a blank
+    the date portion (token before any whitespace). An FX compact date
+    (``20240102``) is rewritten to ISO; it is the row's calendar date, not the
+    daily bar's ``D-1 17:00`` session-open stamp. Returns ``None`` for a blank
     or fieldless line.
     """
     if not line:
@@ -350,6 +361,8 @@ def _date_from_line(line: str | None) -> str | None:
     first = line.split(",", 1)[0].strip()
     if not first:
         return None
+    if len(first) == 8 and first.isdigit():  # FirstRate FX compact date (FX M2)
+        return f"{first[:4]}-{first[4:6]}-{first[6:]}"
     return first.split()[0]
 
 
@@ -514,7 +527,7 @@ def build_dry_run_report(
       FMP-aware, offline cached-vs-needs-resolution estimate. When ``None`` the
       estimate is omitted. The reader keeps this module DB-free / Nautilus-free.
     """
-    state = _walk(source_path)
+    state = _walk(source_path, exact_stem=asset_class == AssetClass.FX)
     report = _state_to_report(state, source_path, asset_class)
 
     schema_mismatches: list[SchemaMismatch] = list(state.name_mismatches)

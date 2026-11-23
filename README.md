@@ -181,13 +181,14 @@ and any supplementary dividend/split files it discovers alongside the bars.
 | `import ... --timeframe daily,hourly,1min,5min <dir>` | Import multiple timeframes in one pass |
 | `import ... --dividends-dir <dir> --splits-dir <dir>` | Override auto-discovery of supplementary data |
 | `import --format firstrate --catalog firstrate-futures --asset-class futures <dir>` | Import FirstRate continuous futures (ES, NQ, CL, GC, ZN); see below |
+| `import --format firstrate --catalog firstrate-fx --asset-class fx <dir>` | Import FirstRate spot FX (EURUSD, GBPUSD, USDJPY) as `MID` bars; see below |
 
 Key options:
 
 - `--format firstrate` (required) — only FirstRate is supported today
 - `--catalog <name>` (required) — target catalog under `CATALOG_BASE_PATH`
 - `--asset-class` — `etf` (import default) · `stock` · `futures` · `fx` · `crypto` · `index` (`--dry-run` defaults to `stock`)
-- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min`, `30min` (default: all five for `etf` and `futures`, `daily` otherwise)
+- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min`, `30min` (default: all five for `etf`, `futures` and `fx`, `daily` otherwise)
 - `--dividends-dir` / `--splits-dir` — explicit supplementary sources (auto-discovered from the source tree when omitted)
 - `--dry-run` — scan and report only; writes nothing to the catalog or DB
 
@@ -211,6 +212,25 @@ uv run python -m src.cli.main import --format firstrate --catalog firstrate-futu
   --asset-class futures --dry-run /srv/market-data/raw/futures
 uv run python -m src.cli.main import --format firstrate --catalog firstrate-futures \
   --asset-class futures --timeframe daily,hourly /srv/market-data/raw/futures
+```
+
+**Spot FX** (`--asset-class fx`) likewise needs no profiles: identity comes from
+`src/services/fx/pair_specs.yaml`, and the `catalog_instruments` row is `ticker` `EURUSD`,
+`nautilus_id` `EUR/USD.IDEALPRO`, `asset_class` `FX`, `currency` the quote, `tick_size` the IB
+min tick. The source is a flat directory of `{PAIR}_full_{1min|5min|30min|1hour|1day}.txt`
+files (compact `YYYYMMDD` dates, US/Eastern wall clock). Bars are `MID`
+(`EUR/USD.IDEALPRO-1-HOUR-MID-EXTERNAL`), streamed like futures (the 6M-row 1-minute files
+peaked at 750 MB RSS), stored at one precision per pair (EURUSD/GBPUSD 5, USDJPY 3, which also
+rounds USDJPY's 2014 float noise), and daily bars are stamped at their 17:00 ET session open
+(the row dated `D` opens `D-1 17:00` New York). Bars outside Sunday 17:00 to Friday 17:00 ET are
+kept and reported as session-anomaly warnings. FX backtests arrive with M3-M5 of
+`openspec/changes/add-fx-backtesting/`; see `docs/agent/fx-backtesting.md`.
+
+```bash
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-fx \
+  --asset-class fx --dry-run /srv/market-data/raw/fx
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-fx \
+  --asset-class fx /srv/market-data/raw/fx
 ```
 
 **Backtesting futures**: run `backtest run` with `--catalog firstrate-futures` (symbol `ES`,

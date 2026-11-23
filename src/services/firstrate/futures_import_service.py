@@ -129,9 +129,23 @@ def new_instrument_row(spec: FuturesContractSpec, catalog_name: str) -> CatalogI
     return apply_spec(row, spec)
 
 
+def urisafe(identifier: BarType | str) -> str:
+    """The directory name Nautilus' catalog uses for an id: ``/`` removed.
+
+    Mirrors ``nautilus_trader.persistence.funcs.urisafe_identifier`` (1.219+), which older
+    Nautilus versions allowed by ``pyproject.toml`` do not export.
+    """
+    return str(identifier).replace("/", "")
+
+
 def bar_directory(catalog: ParquetDataCatalog, bar_type: BarType | str) -> Path:
-    """``{catalog}/data/bar/{bar_type}`` where Nautilus writes a bar type's parts."""
-    return Path(catalog.path) / "data" / "bar" / str(bar_type)
+    """``{catalog}/data/bar/{bar_type}`` where Nautilus writes a bar type's parts.
+
+    Nautilus drops ``/`` from the directory name (``EUR/USD.IDEALPRO-...`` is written to
+    ``EURUSD.IDEALPRO-...``, see :func:`urisafe`); futures ids carry none, so their path is
+    unchanged.
+    """
+    return Path(catalog.path) / "data" / "bar" / urisafe(bar_type)
 
 
 def rows_on_disk(directory: Path) -> int:

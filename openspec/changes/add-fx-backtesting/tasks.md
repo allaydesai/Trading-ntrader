@@ -45,30 +45,34 @@ Acceptance: `import --format firstrate --asset-class fx --catalog firstrate-fx
 line counts. Every price reads back at 5/3 decimals. Daily bars sit at 17:00 ET of the
 previous day. A re-run skips. Peak RSS on a 1-minute file stays under 1.5 GB.
 
-- [ ] 2.1 Component (failing first): `tests/component/services/firstrate/test_firstrate_fx_parser.py`:
+- [x] 2.1 Component (failing first): `tests/component/services/firstrate/test_firstrate_fx_parser.py`:
       registration; 7-field intraday and 6-field daily rows; compact date plus separate time;
       ET to UTC parity with the futures parser (DST weeks, Sunday 17:00 open); the daily row
       `D` is stamped `D-1 17:00 ET`; padding (`1.43` to `1.43000`); USDJPY float noise
       (`108.33599` to `108.336`) rounded and counted; zero volume valid; Saturday and off-hour
       Sunday bars kept and counted as `session_anomalies`; chunking, duplicates, cross-chunk
       order, invalid rows, empty file.
-- [ ] 2.2 Implement `FirstRateFxParser` and register it.
-- [ ] 2.3 Component (failing first): `tests/component/services/firstrate/test_fx_import_service.py`
+- [x] 2.2 Implement `FirstRateFxParser` and register it.
+- [x] 2.3 Component (failing first): `tests/component/services/firstrate/test_fx_import_service.py`
       against a tmp catalog: spec-filled rows (`ticker EURUSD`, `nautilus_id
       EUR/USD.IDEALPRO`, `asset_class FX`, `currency` quote, `tick_size` min tick); bar
       directory `EURUSD.IDEALPRO-1-HOUR-MID-EXTERNAL`; read-back precision; skip/overwrite;
       the incomplete-marker reimport; unknown pair fails that file only.
-- [ ] 2.4 Implement `FxImportService` (share helpers with `FuturesImportService`; no growth of
+- [x] 2.4 Implement `FxImportService` (share helpers with `FuturesImportService`; no growth of
       `ImportService`/`_run_import` baselines).
-- [ ] 2.5 Unit/component (failing first): CLI `--asset-class fx` defaults to five timeframes and
+- [x] 2.5 Unit/component (failing first): CLI `--asset-class fx` defaults to five timeframes and
       dispatches to `run_fx_import`; dry-run and source probe accept both FX row shapes; no DB
       gives exit 2.
-- [ ] 2.6 Implement `src/cli/commands/import_fx.py` and the dispatch.
-- [ ] 2.7 Integration, forked: trimmed real EURUSD 1-hour (a DST week plus a weekend) and USDJPY
+- [x] 2.6 Implement `src/cli/commands/import_fx.py` and the dispatch.
+- [x] 2.7 Integration, forked: trimmed real EURUSD 1-hour (a DST week plus a weekend) and USDJPY
       daily (2014 noise rows) import, full read-back equals source, the engine accepts the bars.
-- [ ] 2.8 Manual: import all three pairs into `/srv/market-data/catalogs/firstrate-fx` (new
+- [x] 2.8 Manual: import all three pairs into `/srv/market-data/catalogs/firstrate-fx` (new
       directory; existing catalogs untouched); counts vs `wc -l`; RSS measured on EURUSD 1min;
       update `/srv/market-data/raw/README.md` ("fx: yes"), project README, `data-pipeline.md`.
+      **Result (2026-11-22):** 15/15 series imported, every count equal to `wc -l` (table in
+      `docs/agent/fx-backtesting.md`), 767 MB on disk, re-run skips all 15, peak RSS 750 MB
+      on the 1-minute pass (505 MB for 1day+1hour). Existing catalogs untouched. The raw
+      `README.md` is left for Allay: the raw tree is read-only to agents.
 
 ## M3. Account-currency conversion (USD results for any pair)
 
