@@ -19,25 +19,35 @@ risk engine's own ``_deny_order``/``_reject_modify_order`` (so the strategy rece
 - any modify that sets an order's quantity while an earlier modify of that order is still
   outstanding (``FUTURES_``/``FX_`` ``MODIFY_PENDING``). Each check compares against the cached
   quantity, which an outstanding modify has not changed yet, so two queued modifies (3 -> 1,
-  then 3 -> 2) would otherwise together raise 1 -> 2 unchecked.
+  then 3 -> 2) would otherwise together raise 1 -> 2 unchecked;
+- an FX modify whose new limit or trigger raises an entry's margin by more than is free
+  (``MARGIN_EXCEEDS_FREE_BALANCE``);
+- an FX entry that would rest (it has a limit or trigger) but cannot be margined yet because
+  its quote has no USD rate (``FX_MARGIN_UNPRICEABLE``).
 
 What one unit needs is per instrument (a :class:`MarginRequirement`):
 
 - **futures**: dollars per contract from the spec, at any price (``FuturesRequirement``);
 - **FX**: ``units x price x USD per quote unit x margin_pct`` (``FxRequirement``). The price is
   the order's limit (or stop trigger), else the instrument's latest ``MID`` price in the cache;
-  a cross converts at the cache rate. An order the gate cannot price (no bar or no cross rate
-  yet) is passed on: its fill would have no rate either, and M3's guard fails such a run.
+  a cross converts at the cache rate. A market order the gate cannot price (no bar or no cross
+  rate yet) is passed on: it fills at once, without a rate M3's guard fails the run, and with
+  no market the venue rejects it. Any other type (limit, stop, trailing, even one with no
+  trigger yet) can rest, so it is refused instead (it could fill later, unmargined).
 
 Quantity-reducing and price-only modifies, and everything else, go straight on to the risk
-engine unchanged. The gate keeps no pending-modify state: margin checks read only orders'
-actual current quantities and open positions. The gate is installed only when a run has a
-futures contract or an FX pair, so equity runs never see it.
+engine unchanged. The gate's only state is :class:`~src.core.pending_modifies.PendingModifies`:
+the modifies it passed on that the venue has not answered yet, per client order id. It backs
+the one-quantity-modify-at-a-time rule and the unreserved margin below; each request settles
+when the venue applies or rejects it or the order closes. The gate is installed only when a
+run has a futures contract or an FX pair, so equity runs never see it.
 
 "Free" is Nautilus' free balance in the account's currency (USD for an FX venue's single
 currency account, the quote currency otherwise): realised cash minus the margin it has locked
 (initial margin for working orders, maintenance for open positions), less the initial margin of
-orders submitted on the same venue but not yet accepted, which hold no reservation yet.
+orders submitted on the same venue but not yet accepted, which hold no reservation yet, and
+less the increase each pending FX reprice on the venue adds (Nautilus reserves an order at its
+current price until the venue applies the modify; an order counts its largest one).
 Unrealised P&L is not counted (Nautilus does not add it to the balance), and there are no
 margin calls: maintenance margin is locked, never used to liquidate.
 """
@@ -51,15 +61,7 @@ from typing import Protocol
 
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.execution.messages import ModifyOrder, SubmitOrder, SubmitOrderList
-from nautilus_trader.model.enums import (
-    ContingencyType,
-    OrderSide,
-    OrderStatus,
-    OrderType,
-    PriceType,
-    TriggerType,
-)
-from nautilus_trader.model.events import OrderModifyRejected, OrderPendingUpdate, OrderUpdated
+from nautilus_trader.model.enums import OrderSide, OrderStatus, OrderType, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import Order
@@ -67,9 +69,11 @@ from nautilus_trader.model.orders import Order
 from src.core.futures_costs import FuturesTerms, terms_by_instrument
 from src.core.fx_costs import fx_terms_by_instrument
 from src.core.fx_rates import usd_per_quote
+from src.core.pending_modifies import PendingModifies
 
 RISK_ENDPOINT = "RiskEngine.execute"
 DENIAL_REASON = "MARGIN_EXCEEDS_FREE_BALANCE"
+UNPRICEABLE = "MARGIN_UNPRICEABLE"
 ZERO = Decimal(0)
 
 
@@ -165,6 +169,7 @@ class MarginGate:
         self._cache = cache
         self._msgbus = msgbus
         self._terms = dict(terms)
+        self._pending = PendingModifies()
         self.denied_count = 0
 
     def install(self) -> None:
@@ -174,8 +179,23 @@ class MarginGate:
 
     def execute(self, command) -> None:
         """Refuse an over-margin submit or a size increase; pass the rest on."""
-        if not self._refused(command):
+        if not isinstance(command, ModifyOrder):
+            if not self._refused(command):
+                self._risk.execute(command)
+            return
+        order = self._cache.order(command.client_order_id)
+        if order is None or order.instrument_id not in self._terms:
             self._risk.execute(command)
+            return
+        reason = self.modify_denial_reason(
+            order, command.quantity, command.price, command.trigger_price
+        )
+        if reason is None:
+            self._pending.forward(order, command, self._risk.execute)
+            return
+        self._pending.rejecting(order)
+        self._risk._reject_modify_order(order, reason)
+        self.denied_count += 1
 
     def _refused(self, command) -> bool:
         reason = None
@@ -187,17 +207,6 @@ class MarginGate:
             reason = self.denial_reason(command.order_list.orders, command.position_id)
             if reason is not None:
                 self._risk._deny_order_list(command.order_list, reason)
-        elif isinstance(command, ModifyOrder):
-            order = self._cache.order(command.client_order_id)
-            reason = (
-                self.modify_denial_reason(
-                    order, command.quantity, command.price, command.trigger_price
-                )
-                if order
-                else None
-            )
-            if reason is not None:
-                self._risk._reject_modify_order(order, reason)
         if reason is not None:
             self.denied_count += 1
         return reason is not None
@@ -207,7 +216,8 @@ class MarginGate:
 
         Only orders without a parent (entries) count. What they close of the targeted
         position is credited once across the whole list, net of what other working orders on
-        that position already claim to close.
+        that position already claim to close. An entry the gate cannot price is refused when
+        it would rest (it has a limit or trigger: its fill could come once a rate exists).
         """
         entries = [
             o for o in orders if o.parent_order_id is None and o.instrument_id in self._terms
@@ -222,15 +232,16 @@ class MarginGate:
             exposure, credit = _new_exposure(order, position, credit)
             if exposure <= 0:
                 continue
-            needed = self._terms[order.instrument_id].initial_usd(exposure, order, self._cache)
+            requirement = self._terms[order.instrument_id]
+            needed = requirement.initial_usd(exposure, order, self._cache)
+            if needed is None and _rests(order):
+                return _unpriceable_reason(requirement, order, exposure)
             if needed is None:
-                continue  # unpriceable: its fill has no rate either (module); siblings still count
+                continue  # a market order fills now: without a rate the run fails (module)
             units += exposure
             required += needed
         if required <= 0:
             return None
-        if (waiting := _entry_reprice_pending(self._cache, self._terms, entries)) is not None:
-            return waiting
         free = self._free_usd(entries[0].instrument_id)
         if required <= free:
             return None
@@ -250,8 +261,8 @@ class MarginGate:
         increase would need margin held for a change the venue has not applied yet. Cancel
         and resubmit instead. Decreases and price-only modifies (``new_quantity`` is
         ``None``) pass; Nautilus releases margin only once a decrease is applied. A modify
-        that sets a quantity is also refused while an earlier modify of the order is still
-        outstanding; price-only modifies are not (the venue applies them to whatever the
+        that sets a quantity is also refused while a modify of the order the gate passed on
+        is unanswered; price-only modifies are not (the venue applies them to whatever the
         quantity is by then).
 
         Where the requirement moves with price (FX), a new limit or trigger that raises the
@@ -263,112 +274,124 @@ class MarginGate:
         if requirement is None:
             return None
         if new_quantity is None:
-            return self._reprice_denial(order, requirement, new_price, new_trigger_price)
-        if _earlier_modifies_outstanding(order) > 0:
-            return (
-                f"{requirement.prefix}_MODIFY_PENDING: an earlier modify of "
-                f"{order.client_order_id} is not applied or rejected yet; wait for it to resolve"
-            )
+            return self._reprice_denial(order, requirement, (new_price, new_trigger_price))
+        if self._pending.outstanding(order):
+            return _modify_pending_reason(requirement, order)
         current, new = order.quantity.as_decimal(), new_quantity.as_decimal()
         if new <= current:
-            return self._reprice_denial(order, requirement, new_price, new_trigger_price, new)
-        return (
-            f"{requirement.prefix}_QTY_INCREASE_NOT_SUPPORTED: modify would raise "
-            f"{order.instrument_id} from {current} to {new} {requirement.unit}; "
-            "cancel and resubmit instead"
+            return self._reprice_denial(order, requirement, (new_price, new_trigger_price), new)
+        return _qty_increase_reason(requirement, order, current, new)
+
+    def _reprice_denial(self, order, requirement, new_prices: tuple, quantity=None) -> str | None:
+        """Why a new limit/trigger raising an entry's margin past free must be refused."""
+        extra = _margin_increase(self._cache, requirement, order, new_prices, quantity)
+        if extra <= 0:
+            return None
+        # this order's own pending increase is replaced, not added to (one state applies)
+        free = self._free_usd(order.instrument_id, exclude=order.client_order_id)
+        return None if extra <= free else _reprice_reason(order, new_prices, extra, free)
+
+    def _free_usd(self, instrument_id: InstrumentId, exclude=None) -> Decimal:
+        """Venue free balance less unaccepted orders' margin and unapplied reprice increases."""
+        unreserved = _unreserved_usd(
+            self._cache, self._terms, self._pending, instrument_id, exclude
         )
-
-    def _reprice_denial(self, order, requirement, new_price, new_trigger, quantity=None):
-        return _reprice_denial(
-            self._cache, self._terms, order, requirement, (new_price, new_trigger), quantity
-        )
-
-    def _free_usd(self, instrument_id: InstrumentId) -> Decimal:
-        """Venue free balance less the margin of its submitted-but-unaccepted orders."""
-        return _free_usd(self._cache, self._terms, instrument_id)
+        return _free_usd(self._cache, self._terms, instrument_id) - unreserved
 
 
-def _reprice_denial(
-    cache, terms, order: Order, requirement, new_prices: tuple, quantity: Decimal | None = None
-) -> str | None:
-    """Why a new limit/trigger on a price-sensitive entry must be refused, or ``None``."""
+def _unreserved_usd(
+    cache, terms, pending: PendingModifies, instrument_id: InstrumentId, exclude=None
+) -> Decimal:
+    """The margin increases of passed, still unanswered modifies on the instrument's venue.
+
+    Nautilus reserves an order's margin at its current price and quantity, so what a
+    pending reprice adds is not reserved until the venue applies it. Each order counts its
+    largest pending increase (only one requested state is live at a time); ``exclude`` (an
+    order being repriced again) counts none, as its new request replaces the old.
+    """
+    venue: Venue = instrument_id.venue
+    total = ZERO
+    for client_order_id in pending.order_ids():
+        order = cache.order(client_order_id)
+        if order is None:
+            continue
+        requested = pending.outstanding(order)  # read first: settles and prunes the ledger
+        excluded = exclude is not None and client_order_id == exclude
+        if excluded or order.instrument_id.venue != venue:
+            continue
+        requirement = terms.get(order.instrument_id)
+        increases = [
+            _margin_increase(cache, requirement, order, (r.price, r.trigger_price), q)
+            for r in requested
+            for q in [r.quantity.as_decimal() if r.quantity is not None else None]
+        ]
+        total += max(increases, default=ZERO)
+    return total
+
+
+def _unpriceable_reason(requirement, order: Order, exposure: Decimal) -> str:
+    return (
+        f"{requirement.prefix}_{UNPRICEABLE}: no USD rate for {order.instrument_id} yet to "
+        f"margin {exposure} {requirement.unit} resting on it; resubmit once its rate source "
+        "has a bar"
+    )
+
+
+def _modify_pending_reason(requirement, order: Order) -> str:
+    return (
+        f"{requirement.prefix}_MODIFY_PENDING: an earlier modify of {order.client_order_id} "
+        "is not applied or rejected yet; wait for it to resolve"
+    )
+
+
+def _qty_increase_reason(requirement, order: Order, current: Decimal, new: Decimal) -> str:
+    return (
+        f"{requirement.prefix}_QTY_INCREASE_NOT_SUPPORTED: modify would raise "
+        f"{order.instrument_id} from {current} to {new} {requirement.unit}; "
+        "cancel and resubmit instead"
+    )
+
+
+def _reprice_reason(order: Order, new_prices: tuple, extra: Decimal, free: Decimal) -> str:
+    return (
+        f"{DENIAL_REASON}: modify of {order.client_order_id} to "
+        f"{_new_reference(order, *new_prices)} raises {order.instrument_id} initial margin "
+        f"by {extra} USD, free={free} USD"
+    )
+
+
+def _margin_increase(
+    cache, requirement, order: Order, new_prices: tuple, quantity: Decimal | None = None
+) -> Decimal:
+    """USD initial margin a modify to ``new_prices`` (and ``quantity``) adds to an entry.
+
+    Zero where the gate margins no reprice: futures, reduce-only orders, contingent
+    children (not margined as entries, ``denial_reason``), quantity-only modifies, and orders
+    it cannot price. Nautilus 1.220 margins a working order on its full quantity (not
+    ``leaves_qty``), so the increase is computed on that too.
+    """
     reference = _new_reference(order, *new_prices)
-    if not requirement.price_sensitive or reference is None or order.is_reduce_only:
-        return None
-    if order.parent_order_id is not None:
-        return None  # contingent children are not margined as entries (denial_reason)
-    # Nautilus 1.220 margins a working order on its full quantity (not leaves_qty)
+    if requirement is None or not requirement.price_sensitive or reference is None:
+        return ZERO
+    if order.is_reduce_only or order.parent_order_id is not None:
+        return ZERO
     held_qty = order.quantity.as_decimal()
     after = min(held_qty, quantity) if quantity is not None else held_qty
     before = requirement.initial_usd(held_qty, order, cache)
     new = requirement.initial_usd(after, order, cache, reference)
-    if before is None or new is None or new <= before:
-        return None
-    if _other_price_modify_pending(cache, terms, order):
-        return (
-            f"{requirement.prefix}_MODIFY_PENDING: another modify on "
-            f"{order.instrument_id.venue} is not applied yet; a reprice that raises margin "
-            "waits for it"
-        )
-    extra, free = new - before, _free_usd(cache, terms, order.instrument_id)
-    if extra <= free:
-        return None
-    return (
-        f"{DENIAL_REASON}: modify of {order.client_order_id} to {reference} raises "
-        f"{order.instrument_id} initial margin by {extra} USD, free={free} USD"
-    )
+    if before is None or new is None:
+        return ZERO
+    return max(new - before, ZERO)
 
 
-def _other_price_modify_pending(cache, terms, order: Order) -> bool:
-    """Whether another price-sensitive order on the venue has a modify not yet applied.
-
-    Its margin change is not reserved until the venue applies it, so a second margin-raising
-    reprice could pass against the same free balance; it waits instead (as quantity modifies
-    wait for their own earlier modify). Read from each order's events, not its status:
-    Nautilus restores the previous status when a later modify is rejected even while an
-    earlier one is still unapplied, which also takes the order out of ``orders_inflight``, so
-    the venue's open orders are scanned too.
-    """
-    venue = order.instrument_id.venue
-    seen = {order.client_order_id}
-    for other in [*cache.orders_open(venue=venue), *cache.orders_inflight(venue=venue)]:
-        requirement = terms.get(other.instrument_id)
-        if other.client_order_id in seen or requirement is None:
-            continue
-        seen.add(other.client_order_id)
-        pending = other.status == OrderStatus.PENDING_UPDATE
-        if requirement.price_sensitive and (pending or _unresolved_modifies(other)):
-            return True
-    return False
+#: Order types that fill on arrival (a market-to-limit's first fill is at market); every
+#: other type can rest, including a trailing stop submitted without a trigger yet.
+_IMMEDIATE_TYPES = frozenset({OrderType.MARKET, OrderType.MARKET_TO_LIMIT})
 
 
-def _entry_reprice_pending(cache, terms, entries: list[Order]) -> str | None:
-    """Why new price-sensitive entries must wait for a pending reprice, or ``None``.
-
-    A margined entry (parentless, not reduce-only) with an unresolved modify may hold an
-    approved margin increase the account has not reserved yet. Its size is unknown (the gate
-    keeps no per-order state, and Nautilus keeps the requested price only in the simulated
-    exchange's queue), so it counts as committed in full: new entries wait until it resolves.
-    """
-    requirement = terms[entries[0].instrument_id]
-    if not requirement.price_sensitive:
-        return None
-    venue = entries[0].instrument_id.venue
-    submitting = {o.client_order_id for o in entries}
-    for other in [*cache.orders_open(venue=venue), *cache.orders_inflight(venue=venue)]:
-        other_terms = terms.get(other.instrument_id)
-        if other.client_order_id in submitting or other_terms is None:
-            continue
-        if other.parent_order_id is not None or other.is_reduce_only:
-            continue
-        pending = other.status == OrderStatus.PENDING_UPDATE or _unresolved_modifies(other)
-        if other_terms.price_sensitive and pending:
-            return (
-                f"{requirement.prefix}_MODIFY_PENDING: {other.client_order_id} has a modify "
-                f"not applied yet on {venue}; its margin increase is unreserved, so new entries "
-                "wait for it"
-            )
-    return None
+def _rests(order: Order) -> bool:
+    """Whether ``order`` can wait to fill (its type is not market or market-to-limit)."""
+    return getattr(order, "order_type", None) not in _IMMEDIATE_TYPES
 
 
 def _free_usd(cache, terms, instrument_id: InstrumentId) -> Decimal:
@@ -406,77 +429,6 @@ def _closing_credit(cache, position, submitting: set) -> Decimal:
         if order.is_open or order.is_inflight:
             credit -= order.leaves_qty.as_decimal()
     return max(credit, ZERO)
-
-
-def _earlier_modifies_outstanding(order: Order) -> int:
-    """Modifies of ``order`` sent before this one that the venue has not resolved yet.
-
-    Read from the order's own events in the cache (no gate state). Nautilus' status alone
-    cannot say: ``Strategy.modify_order`` sets ``PENDING_UPDATE`` before sending the command,
-    and the first ``OrderUpdated``/``OrderModifyRejected`` clears it even while a second
-    modify is queued. So: each ``OrderPendingUpdate`` opens a modify, each
-    ``OrderModifyRejected`` (venue, risk engine or this gate) closes one, and an
-    ``OrderUpdated`` closes one while any is open (only where it can only be an answer:
-    :func:`_unresolved_modifies`). This command's own ``OrderPendingUpdate`` (the order's latest
-    event when it came through ``Strategy.modify_order`` or an exec algorithm) is not counted;
-    an active-local order gets none, so nothing is popped for it.
-    """
-    events = list(order.events)
-    local = bool(getattr(order, "is_active_local", False))  # modify_order applies no event
-    if events and isinstance(events[-1], OrderPendingUpdate) and not local:
-        events.pop()  # this modify's own pending event
-    elif order.status == OrderStatus.PENDING_UPDATE:
-        return 1  # pending, but not because of this command: an earlier modify is open
-    return _unresolved_modifies(order, events)
-
-
-#: Order types Nautilus 1.220 sends ``OrderUpdated`` to without a modify asking: the matching
-#: engine and emulator trail trailing stops; a MARKET_TO_LIMIT's first fill sets its price.
-_SELF_UPDATING_TYPES = frozenset(
-    {OrderType.TRAILING_STOP_MARKET, OrderType.TRAILING_STOP_LIMIT, OrderType.MARKET_TO_LIMIT}
-)
-
-
-def _gets_unsolicited_updates(order: Order) -> bool:
-    """Whether ``order`` can receive an ``OrderUpdated`` that answers no modify (1.220).
-
-    Besides the self-updating types: reduce-only (a fill past the position is clipped),
-    contingent (the matching engine syncs an OUO sibling's quantity on a linked fill), emulated
-    (the emulator updates it locally) and exec-algorithm orders (the algorithm reduces its
-    primary). On any other order the only backtest source is the venue applying a modify.
-    """
-    contingency = getattr(order, "contingency_type", ContingencyType.NO_CONTINGENCY)
-    emulation = getattr(order, "emulation_trigger", TriggerType.NO_TRIGGER)
-    return (
-        getattr(order, "order_type", None) in _SELF_UPDATING_TYPES
-        or bool(getattr(order, "is_reduce_only", False))
-        or contingency not in (None, ContingencyType.NO_CONTINGENCY)
-        or emulation not in (None, TriggerType.NO_TRIGGER)
-        or getattr(order, "exec_algorithm_id", None) is not None
-    )
-
-
-def _unresolved_modifies(order: Order, events=None) -> int:
-    """Modifies of ``order`` opened (``OrderPendingUpdate``) and not answered yet.
-
-    An ``OrderModifyRejected`` always answers one (Nautilus emits it only in reply to a
-    modify). An ``OrderUpdated`` answers one only on an order that cannot be updated
-    unsolicited (:func:`_gets_unsolicited_updates`); on any other it may be a trail or a
-    contingent sync arriving mid-modify, so it closes nothing: when in doubt the modify stays
-    pending, which blocks a later resize or margin-raising reprice rather than overcommit.
-    Such an order's applied modifies therefore stay counted while it is open. ``events``
-    defaults to the order's own.
-    """
-    answers: tuple[type, ...] = (OrderModifyRejected,)
-    if not _gets_unsolicited_updates(order):
-        answers = (OrderModifyRejected, OrderUpdated)
-    outstanding = 0
-    for event in order.events if events is None else events:
-        if isinstance(event, OrderPendingUpdate):
-            outstanding += 1
-        elif isinstance(event, answers) and outstanding:
-            outstanding -= 1
-    return outstanding
 
 
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:

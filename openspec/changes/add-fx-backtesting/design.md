@@ -314,7 +314,14 @@ dominates: 10k EUR costs about 1.7 bp in commission alone).
 - As built (M4): FX venues are added with `default_leverage=1`; Nautilus' margin-account
   default (10) divides `margin_init` by it. The FX modify reasons are `FX_QTY_INCREASE_NOT_SUPPORTED`
   and `FX_MODIFY_PENDING`. The reference price is the order's limit or trigger, else the latest
-  `MID` price; an order the gate cannot price (no bar or cross rate yet) is passed through.
+  `MID` price. A resting entry the gate cannot price in USD (a cross before its rate source's
+  first bar) is denied `FX_MARGIN_UNPRICEABLE`; a market order in that state is passed through
+  (it fills at once, and a fill without a rate fails the run). A margin-raising reprice is not
+  reserved by Nautilus until the venue applies it, so the gate records each modify it passes on
+  per client order id (`src/core/pending_modifies.py`) and subtracts each order's largest
+  unapplied increase from free balance; a request settles on the venue's rejection, on the
+  `OrderUpdated` that applies it (on kinds Nautilus also updates unsolicited, only one carrying
+  the requested values), or when the order closes.
 - **Implied max leverage** = 100 / margin_pct (about 33:1 at 3%). It is reported per run.
 - **Defaults (UNVERIFIED)**: about 3% for EURUSD/GBPUSD/USDJPY at IB (IB publishes per-pair FX
   margin rates; US-regulated retail caps of 2%/5% do not apply to IDEALPRO the same way).
