@@ -67,7 +67,9 @@ def _usd_realised(position, book: FxRateBook) -> float:
 
     The account converts every reducing fill's quote P&L at that fill's rate, so the position
     is replayed (average cost, as Nautilus' ``Position``) and the USD amounts summed. No single
-    rate could stand in: parts closed at 151 and 149 net 0 JPY but not 0 USD.
+    rate could stand in: parts closed at 151 and 149 net 0 JPY but not 0 USD. Each fill is
+    rounded as the account books it (``Money`` in the quote currency, then in USD cents), so
+    the sum is the balance change exactly: two 50 JPY halves at 150.001 are 0.33 + 0.33.
     """
     quantity = average = usd = 0.0
     multiplier = position.multiplier.as_double()
@@ -80,7 +82,8 @@ def _usd_realised(position, book: FxRateBook) -> float:
             quantity += signed
             continue
         closed = math.copysign(min(abs(signed), abs(quantity)), quantity)
-        usd += closed * (price - average) * multiplier * rate
+        quote_pnl = Money(closed * (price - average) * multiplier, position.settlement_currency)
+        usd += Money(quote_pnl.as_double() * rate, ACCOUNT_CURRENCY).as_double()
         quantity -= closed
     return usd
 
@@ -95,7 +98,7 @@ def usd_realised_pnls(engine: BacktestEngine) -> dict[str, Decimal]:
     if book is None:
         return {}
     return {
-        position.id.value: Decimal(str(_usd_realised(position, book)))
+        position.id.value: Decimal(str(round(_usd_realised(position, book), 2)))
         for position in engine.cache.positions()
         if needs_conversion(engine.cache.instrument(position.instrument_id))
     }

@@ -303,6 +303,25 @@ def test_a_position_netting_zero_quote_pnl_keeps_its_usd_result():
         engine.dispose()
 
 
+def test_each_partial_close_is_rounded_to_cents_as_the_account_books_it():
+    # Two 50,000 halves at 150.001 earn 50 JPY each; the account books 0.33 + 0.33 = 0.66 USD,
+    # where rounding the unrounded sum (0.666662) would give 0.67.
+    engine, _ = _run(
+        USDJPY,
+        [(_bars(USDJPY, ["150.000", "150.001", "150.001", "150.001"]), USDJPY)],
+        exit_kind="partial",
+    )
+    try:
+        position = _closed(engine)
+        assert position.realized_pnl == Money(100, JPY)
+        change = _usd_change(engine)
+        assert change == Decimal("0.66")
+        usd = usd_realised_pnls(engine)[position.id.value]
+        assert usd_profit_loss("100.00 JPY", usd) == change
+    finally:
+        engine.dispose()
+
+
 def test_gap_aware_refuses_a_rate_source_with_bars_the_traded_pair_lacks():
     eurgbp = [b for i, b in enumerate(_bars(EURGBP, EURGBP_BARS)) if i != 2]  # no bar 3
     with pytest.raises(ValueError, match="same timestamps"):
@@ -468,7 +487,7 @@ async def test_the_orchestrator_reports_a_usdjpy_run_in_usd_marked_to_market():
     try:
         engine = orchestrator.engine
         assert result.final_balance == pytest.approx(100_662.25)
-        assert result.largest_win == pytest.approx(100_000 / 151)  # USD, not 100,000 JPY
+        assert result.largest_win == 662.25  # USD as booked (cents), not 100,000 JPY
         assert result.total_pnl == pytest.approx(662.25)
         assert result.winning_trades == 1
         marked = mark_to_market(engine, {USDJPY.id: _bars(USDJPY, JPY_BARS)}, float(START))
