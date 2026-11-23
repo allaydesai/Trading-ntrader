@@ -51,7 +51,14 @@ from typing import Protocol
 
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.execution.messages import ModifyOrder, SubmitOrder, SubmitOrderList
-from nautilus_trader.model.enums import OrderSide, OrderStatus, PriceType
+from nautilus_trader.model.enums import (
+    ContingencyType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PriceType,
+    TriggerType,
+)
 from nautilus_trader.model.events import OrderModifyRejected, OrderPendingUpdate, OrderUpdated
 from nautilus_trader.model.identifiers import InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
@@ -328,7 +335,7 @@ def _other_price_modify_pending(cache, terms, order: Order) -> bool:
             continue
         seen.add(other.client_order_id)
         pending = other.status == OrderStatus.PENDING_UPDATE
-        if requirement.price_sensitive and (pending or _unresolved_modifies(other.events)):
+        if requirement.price_sensitive and (pending or _unresolved_modifies(other)):
             return True
     return False
 
@@ -378,28 +385,65 @@ def _earlier_modifies_outstanding(order: Order) -> int:
     and the first ``OrderUpdated``/``OrderModifyRejected`` clears it even while a second
     modify is queued. So: each ``OrderPendingUpdate`` opens a modify, each
     ``OrderModifyRejected`` (venue, risk engine or this gate) closes one, and an
-    ``OrderUpdated`` closes one while any is open. This command's own ``OrderPendingUpdate``
-    (the order's latest event when it came through ``Strategy.modify_order``) is not counted.
+    ``OrderUpdated`` closes one while any is open (only where it can only be an answer:
+    :func:`_unresolved_modifies`). This command's own ``OrderPendingUpdate`` (the order's latest
+    event when it came through ``Strategy.modify_order`` or an exec algorithm) is not counted;
+    an active-local order gets none, so nothing is popped for it.
     """
     events = list(order.events)
-    if events and isinstance(events[-1], OrderPendingUpdate):
+    local = bool(getattr(order, "is_active_local", False))  # modify_order applies no event
+    if events and isinstance(events[-1], OrderPendingUpdate) and not local:
         events.pop()  # this modify's own pending event
     elif order.status == OrderStatus.PENDING_UPDATE:
         return 1  # pending, but not because of this command: an earlier modify is open
-    return _unresolved_modifies(events)
+    return _unresolved_modifies(order, events)
 
 
-def _unresolved_modifies(events) -> int:
-    """Modifies opened (``OrderPendingUpdate``) and not yet resolved, from order events.
+#: Order types Nautilus 1.220 sends ``OrderUpdated`` to without a modify asking: the matching
+#: engine and emulator trail trailing stops; a MARKET_TO_LIMIT's first fill sets its price.
+_SELF_UPDATING_TYPES = frozenset(
+    {OrderType.TRAILING_STOP_MARKET, OrderType.TRAILING_STOP_LIMIT, OrderType.MARKET_TO_LIMIT}
+)
 
-    Each ``OrderModifyRejected`` closes one, and an ``OrderUpdated`` closes one while any is
-    open (an unsolicited update with none open closes nothing).
+
+def _gets_unsolicited_updates(order: Order) -> bool:
+    """Whether ``order`` can receive an ``OrderUpdated`` that answers no modify (1.220).
+
+    Besides the self-updating types: reduce-only (a fill past the position is clipped),
+    contingent (the matching engine syncs an OUO sibling's quantity on a linked fill), emulated
+    (the emulator updates it locally) and exec-algorithm orders (the algorithm reduces its
+    primary). On any other order the only backtest source is the venue applying a modify.
     """
+    contingency = getattr(order, "contingency_type", ContingencyType.NO_CONTINGENCY)
+    emulation = getattr(order, "emulation_trigger", TriggerType.NO_TRIGGER)
+    return (
+        getattr(order, "order_type", None) in _SELF_UPDATING_TYPES
+        or bool(getattr(order, "is_reduce_only", False))
+        or contingency not in (None, ContingencyType.NO_CONTINGENCY)
+        or emulation not in (None, TriggerType.NO_TRIGGER)
+        or getattr(order, "exec_algorithm_id", None) is not None
+    )
+
+
+def _unresolved_modifies(order: Order, events=None) -> int:
+    """Modifies of ``order`` opened (``OrderPendingUpdate``) and not answered yet.
+
+    An ``OrderModifyRejected`` always answers one (Nautilus emits it only in reply to a
+    modify). An ``OrderUpdated`` answers one only on an order that cannot be updated
+    unsolicited (:func:`_gets_unsolicited_updates`); on any other it may be a trail or a
+    contingent sync arriving mid-modify, so it closes nothing: when in doubt the modify stays
+    pending, which blocks a later resize or margin-raising reprice rather than overcommit.
+    Such an order's applied modifies therefore stay counted while it is open. ``events``
+    defaults to the order's own.
+    """
+    answers: tuple[type, ...] = (OrderModifyRejected,)
+    if not _gets_unsolicited_updates(order):
+        answers = (OrderModifyRejected, OrderUpdated)
     outstanding = 0
-    for event in events:
+    for event in order.events if events is None else events:
         if isinstance(event, OrderPendingUpdate):
             outstanding += 1
-        elif isinstance(event, (OrderModifyRejected, OrderUpdated)) and outstanding:
+        elif isinstance(event, answers) and outstanding:
             outstanding -= 1
     return outstanding
 

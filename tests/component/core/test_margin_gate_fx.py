@@ -9,8 +9,14 @@ from types import SimpleNamespace
 
 import pytest
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.enums import OrderSide, OrderStatus
-from nautilus_trader.model.identifiers import ClientOrderId
+from nautilus_trader.model.enums import (
+    ContingencyType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    TriggerType,
+)
+from nautilus_trader.model.identifiers import ClientOrderId, ExecAlgorithmId
 from nautilus_trader.model.objects import Price, Quantity
 
 from src.core.margin_gate import DENIAL_REASON, FxRequirement, MarginGate
@@ -34,7 +40,12 @@ def _order(instrument, qty: int, price: str | None = None, leaves: int | None = 
         trigger_price=None,
         status=kw.get("status", OrderStatus.INITIALIZED),
         events=list(kw.get("events", [])),
-        is_reduce_only=False,
+        order_type=kw.get("order_type", OrderType.LIMIT),
+        contingency_type=kw.get("contingency_type", ContingencyType.NO_CONTINGENCY),
+        emulation_trigger=kw.get("emulation_trigger", TriggerType.NO_TRIGGER),
+        exec_algorithm_id=kw.get("exec_algorithm_id"),
+        is_active_local=kw.get("active_local", False),
+        is_reduce_only=kw.get("reduce_only", False),
         parent_order_id=None,
         client_order_id=ClientOrderId(f"O-{next(_IDS)}"),
     )
@@ -164,3 +175,99 @@ class TestPendingReadFromEvents:
         order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED)
         gate = _gate(free="100", open_orders=[other, order])
         assert gate.modify_denial_reason(order, None, Price.from_str("1.12000")) is None
+
+
+#: Order kinds Nautilus 1.220 sends ``OrderUpdated`` to without a modify asking: trailing
+#: stops (matching engine and emulator trail them), MARKET_TO_LIMIT (first fill reprices it),
+#: reduce-only (a fill past the position is clipped), contingent OUO siblings (quantity
+#: synced on a linked fill), emulated and exec-algorithm orders (local updates).
+UNSOLICITED_KINDS = {
+    "trailing stop market": {"order_type": OrderType.TRAILING_STOP_MARKET},
+    "trailing stop limit": {"order_type": OrderType.TRAILING_STOP_LIMIT},
+    "market to limit": {"order_type": OrderType.MARKET_TO_LIMIT},
+    "reduce only": {"reduce_only": True},
+    "contingent OUO": {"contingency_type": ContingencyType.OUO},
+    "emulated": {"emulation_trigger": TriggerType.BID_ASK},
+    "exec algorithm": {"exec_algorithm_id": ExecAlgorithmId("TWAP")},
+}
+
+
+class TestUnsolicitedUpdatesNeverAnswerAModify:
+    """An ``OrderUpdated`` closes a pending modify only where it can only be the answer.
+
+    Rejections always answer a modify (Nautilus emits ``OrderModifyRejected`` only in reply
+    to one). On a plain limit or stop the only backtest source of ``OrderUpdated`` is the venue
+    applying a modify, so it answers one. On the kinds above it may be unsolicited, so it never
+    clears a pending modify: when in doubt the modify stays pending (a reprice or resize waits;
+    margin is never overcommitted). CodeRabbit, PR #63.
+    """
+
+    @pytest.mark.parametrize("kind", list(UNSOLICITED_KINDS))
+    def test_an_unsolicited_update_mid_modify_keeps_another_reprice_waiting(self, kind):
+        # A (USD 100 free): a +60 reprice queued, then an update that may be A trailing on its
+        # own. B's +60 must still wait, or both increases pass against the same 100 USD.
+        events = [_event("pending"), _event("updated")]
+        other = _order(
+            EURUSD,
+            100_000,
+            "1.10000",
+            status=OrderStatus.ACCEPTED,
+            events=events,
+            **UNSOLICITED_KINDS[kind],
+        )
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED)
+        gate = _gate(free="100", open_orders=[other, order])
+        reason = gate.modify_denial_reason(order, None, Price.from_str("1.12000"))
+        assert reason is not None and reason.startswith("FX_MODIFY_PENDING")
+
+    @pytest.mark.parametrize("kind", list(UNSOLICITED_KINDS))
+    def test_an_unsolicited_update_does_not_free_the_orders_own_next_resize(self, kind):
+        # The shared quantity rule: an earlier modify, an update that may be unsolicited, then
+        # this modify's own pending event. The earlier one is still outstanding.
+        events = [_event("pending"), _event("updated"), _event("pending")]
+        order = _order(
+            EURUSD,
+            100_000,
+            "1.10000",
+            status=OrderStatus.PENDING_UPDATE,
+            events=events,
+            **UNSOLICITED_KINDS[kind],
+        )
+        reason = _gate().modify_denial_reason(order, Quantity.from_int(50_000))
+        assert reason is not None and reason.startswith("FX_MODIFY_PENDING")
+
+    def test_a_rejection_still_answers_a_modify_on_any_kind(self):
+        events = [_event("pending"), _event("rejected")]
+        other = _order(
+            EURUSD,
+            100_000,
+            "1.10000",
+            status=OrderStatus.ACCEPTED,
+            events=events,
+            order_type=OrderType.TRAILING_STOP_MARKET,
+        )
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED)
+        gate = _gate(free="100", open_orders=[other, order])
+        assert gate.modify_denial_reason(order, None, Price.from_str("1.12000")) is None
+
+    def test_on_a_plain_order_the_update_is_the_answer(self):
+        events = [_event("pending"), _event("updated"), _event("pending")]
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.PENDING_UPDATE, events=events)
+        assert _gate().modify_denial_reason(order, Quantity.from_int(50_000)) is None
+
+
+def test_a_local_orders_modify_has_no_pending_event_so_none_is_popped_for_it():
+    # Strategy.modify_order applies no OrderPendingUpdate to an active-local (emulated, not yet
+    # released) order, so the last pending event is an earlier modify's and must still count.
+    events = [_event("pending")]
+    order = _order(
+        EURUSD,
+        100_000,
+        "1.10000",
+        status=OrderStatus.EMULATED,
+        events=events,
+        emulation_trigger=TriggerType.BID_ASK,
+        active_local=True,
+    )
+    reason = _gate().modify_denial_reason(order, Quantity.from_int(50_000))
+    assert reason is not None and reason.startswith("FX_MODIFY_PENDING")
