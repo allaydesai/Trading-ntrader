@@ -123,11 +123,12 @@ Market data stored as Parquet files under Nautilus catalog structure.
 - Rows: intraday `YYYYMMDD,HH:MM:SS,O,H,L,C,V`, daily `YYYYMMDD,O,H,L,C,V`. Each chunk is
   rewritten to the futures `ts,O,H,L,C,V` shape, so ET->UTC, validation and ordering are the
   futures code. A daily row dated `D` is stamped `D-1 17:00` America/New_York (session open).
-- Prices: the pair spec's `price_precision`, half-even; rows changed by more than 1e-9 are
+- Prices: the pair spec's `price_precision`, half-even on the decimal value (float-scaled
+  ties such as `128.0105` are re-quantized, `quantize_ties()`); rows changed by more than 1e-9 are
   counted (`N row(s) rounded to 3 decimals`). Bars outside Sun 17:00-Fri 17:00 ET are kept
   and counted (`session anomaly` warnings).
 - Bar dirs drop the `/` (`EURUSD.IDEALPRO-1-HOUR-MID-EXTERNAL`); `bar_directory()` applies
-  Nautilus' `urisafe_identifier`. `source_probe` and the dry-run read compact FX dates; the
-  probe returns the parser's stamp so re-runs skip.
+  `urisafe()`, a mirror of Nautilus' `urisafe_identifier` (absent before 1.219). `source_probe`
+  and the dry-run read compact FX dates; the probe returns the parser's stamp so re-runs skip.
 - Catalog: `firstrate-fx` (`/srv/market-data/catalogs/firstrate-fx`, imported 2026-11-22: 3
   pairs x 5 timeframes, 767 MB).

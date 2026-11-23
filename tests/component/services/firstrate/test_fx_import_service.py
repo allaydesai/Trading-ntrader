@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 from src.db.models.catalog_instrument import CatalogInstrument
@@ -87,6 +87,17 @@ def _parts(catalog_dir: Path, directory: str = EUR_HOUR_DIR) -> list[Path]:
 
 def _read_all(catalog_dir: Path, bar_type: str = EUR_HOUR) -> list[Bar]:
     return ParquetDataCatalog(str(catalog_dir / CATALOG)).bars(bar_types=[bar_type])
+
+
+class TestUrisafe:
+    @pytest.mark.parametrize("identifier", [EUR_HOUR, "ES.CME-1-MINUTE-LAST-EXTERNAL"])
+    def test_matches_the_nautilus_catalog_naming(self, identifier):
+        from nautilus_trader.persistence.funcs import urisafe_identifier
+
+        from src.services.firstrate.futures_import_service import urisafe
+
+        assert urisafe(identifier) == urisafe_identifier(identifier)
+        assert urisafe(BarType.from_str(identifier)) == urisafe_identifier(identifier)
 
 
 class TestMidTimeframe:

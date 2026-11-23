@@ -152,6 +152,22 @@ class TestPrecision:
         _, [bar] = _parse(tmp_path, rows, JPY_HOUR, chunk_rows=10)
         assert (str(bar.open), str(bar.close)) == ("108.336", "108.338")
 
+    def test_decimal_ties_round_half_even_not_by_float_scaling(self, tmp_path):
+        # 128.0105 * 1000 lands just above 128010.5 in binary, so float rounding gives 128.011.
+        rows = ["20140102,10:00:00,128.0105,128.0115,128.0005,128.0105,5"]
+        parser, [bar] = _parse(tmp_path, rows, JPY_HOUR)
+        assert (str(bar.open), str(bar.high), str(bar.low), str(bar.close)) == (
+            "128.010",
+            "128.012",
+            "128.000",
+            "128.010",
+        )
+        assert parser.rounded_rows == 1
+
+    def test_on_grid_prices_are_unchanged(self, tmp_path):
+        _, [bar] = _parse(tmp_path, ["20140102,10:00:00,128.01,128.5,127.999,128.4,5"], JPY_HOUR)
+        assert (str(bar.open), str(bar.low)) == ("128.010", "127.999")
+
 
 class TestSessions:
     def test_out_of_session_bars_are_kept_and_counted(self, tmp_path):

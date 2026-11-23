@@ -11,7 +11,8 @@ date: intraday rows have 7 fields (``YYYYMMDD,HH:MM:SS,O,H,L,C,V``) and daily ro
   session open, ``D-1 17:00`` ET (decision D5; Monday's bar opens Sunday 17:00).
 
 Every price is emitted at the pair spec's ``price_precision`` (5 or 3), padded or rounded
-half-even, which also removes USDJPY's 2014 float noise (``108.33599`` -> ``108.336``).
+half-even on the decimal value (ties re-quantized, see :func:`quantize_ties`), which also
+removes USDJPY's 2014 float noise (``108.33599`` -> ``108.336``).
 Validation, de-duplication and chunk ordering are the futures parser's. Two counters are
 added, totalled over the file on the parser (D14, nothing is dropped for them):
 
@@ -25,8 +26,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import time
+from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import structlog
 from nautilus_trader.model.data import BarType
@@ -114,6 +117,26 @@ def _rounded(frame: pd.DataFrame, precision: int) -> pd.Series:
     return ((source.round(precision) - source).abs() > ROUNDING_TOLERANCE).any(axis=1)
 
 
+def quantize_ties(good: pd.DataFrame, precision: int) -> pd.DataFrame:
+    """Re-round decimal ties half-even from their decimal value, not by float scaling.
+
+    ``Series.round`` scales in binary floating point, so a source tie such as ``128.0105``
+    (precision 3) lands just above ``128010.5`` and rounds up to ``128.011``. Prices within
+    1e-6 of a tie are re-quantized from their shortest decimal repr with
+    ``ROUND_HALF_EVEN`` (``128.010``); every other price, including those already on the
+    grid, keeps the float result, which is exact for them.
+    """
+    step = Decimal(1).scaleb(-precision)
+    for col in _PRICES:
+        scaled = good[f"source_{col}"].to_numpy() * 10.0**precision
+        near = np.abs(scaled - np.floor(scaled) - 0.5) < 1e-6
+        if near.any():
+            ties = good[f"source_{col}"][near]
+            fixed = [float(Decimal(repr(v)).quantize(step, ROUND_HALF_EVEN)) for v in ties]
+            good.loc[ties.index, col] = fixed
+    return good
+
+
 def _process_fx_chunk(
     raw: pd.DataFrame,
     bar_type: BarType,
@@ -133,6 +156,9 @@ def _process_fx_chunk(
         ahead = good["ts"].astype("int64") > after_ns
         behind = int((~ahead).sum())
         good = good[ahead]
+    for col in _PRICES:
+        good[f"source_{col}"] = pd.to_numeric(shaped.loc[good.index, col], errors="coerce")
+    good = quantize_ties(good, precision)
     return FxChunk(
         bars=_build_bars(good, bar_type, precision),
         row_count=len(raw),
