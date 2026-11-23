@@ -34,6 +34,21 @@ Every futures margin rule and reason SHALL behave as before.
   (initial margin USD 13,200)
 - **THEN** the order is denied and no position opens
 
+#### Scenario: a pending reprice holds its increase
+- **WHEN** a working 100,000 EURUSD limit at 1.10000 with USD 100 free is repriced to 1.12000
+  (USD 60 more) and the venue has not applied it yet
+- **THEN** a new entry or another order's reprice is checked against USD 40 free, and once the
+  modify is applied, rejected or the order closes, the hold is released
+
+#### Scenario: an applied modify on a trailing entry
+- **WHEN** a parentless trailing stop entry's modify has been applied by the venue
+- **THEN** later FX entries on the venue are checked against free margin as usual, not refused
+  `FX_MODIFY_PENDING`
+
+#### Scenario: a resting entry that cannot be priced
+- **WHEN** an EURGBP limit is submitted before GBPUSD has a bar (no USD rate)
+- **THEN** it is denied with reason prefix `FX_MARGIN_UNPRICEABLE`
+
 ### Requirement: FX sizing is in base-currency units with USD budgets
 Strategy sizing helpers SHALL size FX as `floor(budget_usd / (price x quote-to-USD rate))` base
 units (risk sizing: `risk_usd / (stop distance x quote-to-USD rate)`), floored to the size
