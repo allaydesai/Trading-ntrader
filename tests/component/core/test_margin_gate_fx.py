@@ -187,7 +187,10 @@ def _reprice_reason(gate, order, price):
 class TestPricing:
     def test_an_unpriceable_sibling_does_not_waive_a_priced_over_margin_entry(self):
         # 400,000 EURUSD limit at 1.10000 needs 13,200; the market order has no price yet.
-        orders = [_order(EURUSD, 400_000, "1.10000"), _order(EURUSD, 1_000)]
+        orders = [
+            _order(EURUSD, 400_000, "1.10000"),
+            _order(EURUSD, 1_000, order_type=OrderType.MARKET),
+        ]
         reason = _gate().denial_reason(orders, None)
         assert reason is not None and reason.startswith(DENIAL_REASON)
         assert "13200.00 USD" in reason
@@ -195,16 +198,26 @@ class TestPricing:
     def test_an_unpriceable_market_order_is_passed_on(self):
         # It fills at once: with no rate M3's guard fails the run; with no market the venue
         # rejects it. Either way it never fills unchecked later.
-        assert _gate().denial_reason([_order(EURUSD, 400_000)], None) is None
+        assert (
+            _gate().denial_reason([_order(EURUSD, 400_000, order_type=OrderType.MARKET)], None)
+            is None
+        )
 
     @pytest.mark.parametrize("kind", ["limit", "stop"])
     def test_a_resting_entry_without_a_usd_rate_is_refused(self, kind):
         # EURGBP before its first GBPUSD bar: it could fill later, unmargined.
-        kw = {"trigger": "0.85000"} if kind == "stop" else {}
+        kw = {"trigger": "0.85000", "order_type": OrderType.STOP_MARKET} if kind == "stop" else {}
         order = _order(EURGBP, 400_000, "0.85000" if kind == "limit" else None, **kw)
         reason = _gate().denial_reason([order], None)
         assert reason is not None and reason.startswith(UNPRICEABLE)
         assert "EUR/GBP.IDEALPRO" in reason and "400000 unit(s)" in reason
+
+    def test_a_trailing_entry_without_a_trigger_yet_is_resting_too(self):
+        # Nautilus 1.220 accepts a trailing stop with no trigger (set from the market later):
+        # no MID price yet means no margin, and it is no market order (CodeRabbit, PR #63).
+        order = _order(EURUSD, 400_000, order_type=OrderType.TRAILING_STOP_MARKET)
+        reason = _gate().denial_reason([order], None)
+        assert reason is not None and reason.startswith(UNPRICEABLE)
 
     def test_an_unpriceable_resting_sibling_refuses_the_whole_list(self):
         orders = [_order(EURUSD, 1_000, "1.10000"), _order(EURGBP, 1_000, "0.85000")]
@@ -276,7 +289,17 @@ class TestPendingIncreaseIsHeldBack:
         _modify(gate, a, price="1.14000")
         assert len(gate._risk.forwarded) == 2
         assert len(gate._risk.rejected) == 1 and "by 120.00 USD" in gate._risk.rejected[0]
-        assert _entry_reason(gate, 1_000) is not None  # 33 > 100 - 90
+
+    def test_an_order_holds_its_largest_pending_increase_not_the_latest_or_the_sum(self):
+        # +90 then +60 pending: holding the largest leaves 10 (200 units need 6.60, 1,000 need
+        # 33); the latest (60) would let 1,000 through, the sum (150) would refuse both.
+        gate, a = _gate(free="100"), _working()
+        _modify(gate, a, price="1.13000")
+        _modify(gate, a, price="1.12000")
+        assert len(gate._risk.forwarded) == 2
+        assert _entry_reason(gate, 200) is None
+        reason = _entry_reason(gate, 1_000)
+        assert reason is not None and "free=10.00 USD" in reason
 
     def test_once_applied_the_increase_counts_once_in_the_account(self):
         gate, a = _gate(free="100"), _working()
@@ -400,7 +423,14 @@ class TestOnlyRealAnswersSettle:
         _modify(gate, a, price="1.12000")  # passed, pending
         risk.answer = lambda command: a.events.append(_rejected(a))
         _modify(gate, a, price="1.11000")  # the risk engine refuses it there and then
+        assert [str(c.price) for c in risk.forwarded] == ["1.12000", "1.11000"]
+        assert risk.rejected == []  # refused by the risk engine, not the gate
         assert "free=40.00 USD" in _entry_reason(gate, 2_000)  # 1.12 still pending
+        # once 1.12 applies nothing is left: the refused 1.11 was never recorded
+        risk.answer = None
+        _apply(a, price="1.12000")
+        _modify(gate, a, qty=50_000)
+        assert len(risk.forwarded) == 3 and risk.rejected == []
 
     def test_a_reentrant_check_during_that_rejection_still_sees_the_earlier_modify(self):
         risk = _Risk()

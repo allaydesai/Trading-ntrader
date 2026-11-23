@@ -280,7 +280,8 @@ sum of the trade rows equals the USD balance change, and mark-to-market reconcil
   the increase held while an applied modify clears it. The gate's own rejection, and a risk
   engine rejection of the modify being passed on, never settle an earlier request. Reduce-only
   and contingent child orders hold nothing (they are not margined as entries).
-- An FX entry that would rest (limit or stop) but cannot be priced in USD yet (a cross before
+- An FX entry that can rest (any type but market and market-to-limit, including a trailing
+  stop submitted without a trigger) but cannot be priced in USD yet (no bar, or a cross before
   its first GBPUSD bar) is denied `FX_MARGIN_UNPRICEABLE`: it could otherwise fill later,
   unmargined. A market order in that state is still passed on: it fills at once and the M3
   guard fails a fill without a rate, or, with no market yet, the venue rejects it. Same known

@@ -32,7 +32,8 @@ What one unit needs is per instrument (a :class:`MarginRequirement`):
   the order's limit (or stop trigger), else the instrument's latest ``MID`` price in the cache;
   a cross converts at the cache rate. A market order the gate cannot price (no bar or no cross
   rate yet) is passed on: it fills at once, without a rate M3's guard fails the run, and with
-  no market the venue rejects it. A resting order is refused instead (it could fill later).
+  no market the venue rejects it. Any other type (limit, stop, trailing, even one with no
+  trigger yet) can rest, so it is refused instead (it could fill later, unmargined).
 
 Quantity-reducing and price-only modifies, and everything else, go straight on to the risk
 engine unchanged. The gate's only state is :class:`~src.core.pending_modifies.PendingModifies`:
@@ -60,7 +61,7 @@ from typing import Protocol
 
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.execution.messages import ModifyOrder, SubmitOrder, SubmitOrderList
-from nautilus_trader.model.enums import OrderSide, OrderStatus, PriceType
+from nautilus_trader.model.enums import OrderSide, OrderStatus, OrderType, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import Order
@@ -383,9 +384,14 @@ def _margin_increase(
     return max(new - before, ZERO)
 
 
+#: Order types that fill on arrival (a market-to-limit's first fill is at market); every
+#: other type can rest, including a trailing stop submitted without a trigger yet.
+_IMMEDIATE_TYPES = frozenset({OrderType.MARKET, OrderType.MARKET_TO_LIMIT})
+
+
 def _rests(order: Order) -> bool:
-    """Whether ``order`` has its own limit or trigger (it can wait to fill)."""
-    return any(getattr(order, name, None) is not None for name in ("price", "trigger_price"))
+    """Whether ``order`` can wait to fill (its type is not market or market-to-limit)."""
+    return getattr(order, "order_type", None) not in _IMMEDIATE_TYPES
 
 
 def _free_usd(cache, terms, instrument_id: InstrumentId) -> Decimal:
