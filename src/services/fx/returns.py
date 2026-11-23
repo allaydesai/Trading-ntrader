@@ -79,8 +79,8 @@ class RunSummary:
     pairs: dict[str, PairTerms]
     closed_trades: int
     max_units: Decimal
-    peak_notional_usd: Decimal
-    peak_margin_usd: Decimal
+    peak_notional_usd: Decimal | None
+    peak_margin_usd: Decimal | None
     peak_leverage: Decimal | None
     net_pnl_usd: Decimal
     pips: Decimal
@@ -166,24 +166,29 @@ def trade_figures(trade: Any, terms: PairTerms) -> TradeFigures:
 
 def _peaks(
     rows: list[tuple[Any, TradeFigures]], capital: Decimal | None
-) -> tuple[Decimal, Decimal, Decimal | None]:
+) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
     """Peak concurrent notional and margin (USD), and peak notional / equity.
 
     Equity is the starting capital plus the P&L of trades closed so far. At one timestamp,
-    exits come before entries (a close-and-reverse is not counted twice), and a trade that
-    opens and closes on that timestamp holds its notional.
+    exits come before entries (a close-and-reverse is not counted twice), every exit there is
+    applied before leverage is sampled, and a trade that opens and closes on that timestamp
+    holds its notional. A position with no USD value (a cross) makes all three unknown
+    (``None``): a peak that leaves out a position would understate the exposure.
     """
-    events = []
+    if any(fig.notional_usd is None for _, fig in rows):
+        return None, None, None
+    events: dict[tuple[Any, int], list[Decimal]] = {}
     for trade, fig in rows:
         notional, margin = fig.notional_usd or Decimal(0), fig.margin_used_usd or Decimal(0)
         entry_ts = _get(trade, "entry_timestamp")
-        events.append((entry_ts, 1, notional, margin, Decimal(0)))
+        _add(events, (entry_ts, 1), notional, margin, Decimal(0))
         if (exit_ts := _get(trade, "exit_timestamp")) is not None:
-            pnl = fig.pnl_usd or Decimal(0)
-            events.append((exit_ts, 2 if exit_ts == entry_ts else 0, -notional, -margin, pnl))
+            kind = 2 if exit_ts == entry_ts else 0
+            _add(events, (exit_ts, kind), -notional, -margin, fig.pnl_usd or Decimal(0))
     notional = margin = peak_notional = peak_margin = Decimal(0)
     equity, leverage = capital, None
-    for _, _, d_notional, d_margin, pnl in sorted(events, key=lambda e: (e[0], e[1])):
+    for key in sorted(events, key=lambda k: (k[0], k[1])):
+        d_notional, d_margin, pnl = events[key]
         notional, margin = notional + d_notional, margin + d_margin
         peak_notional, peak_margin = max(peak_notional, notional), max(peak_margin, margin)
         if equity is not None:
@@ -191,6 +196,13 @@ def _peaks(
             if equity > 0 and (leverage is None or notional / equity > leverage):
                 leverage = notional / equity
     return peak_notional, peak_margin, leverage
+
+
+def _add(events: dict, key: tuple[Any, int], *deltas: Decimal) -> None:
+    """Sum same-timestamp, same-kind events, so leverage is sampled once per group."""
+    totals = events.setdefault(key, [Decimal(0)] * len(deltas))
+    for i, delta in enumerate(deltas):
+        totals[i] += delta
 
 
 def _compounded(returns_pct: list[Decimal]) -> Decimal | None:
@@ -234,7 +246,11 @@ def summarise_run(
         net_pnl_usd=net,
         pips=sum((f.pips for _, f in closed if f.pips), Decimal(0)),
         return_on_underlying_pct=_compounded(
-            [f.return_on_underlying_pct for _, f in closed if f.return_on_underlying_pct]
+            [
+                f.return_on_underlying_pct
+                for _, f in closed
+                if f.return_on_underlying_pct is not None
+            ]
         ),
         return_on_margin_pct=net / peak_margin * _HUNDRED if closed and peak_margin else None,
         commission_usd=sum((t.commission_usd for t in terms.values()), Decimal(0)),

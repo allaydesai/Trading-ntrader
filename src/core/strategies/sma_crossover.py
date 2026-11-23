@@ -89,7 +89,8 @@ def _sized_quantity(
     if (fixed_units := getattr(config, "units", None)) is not None:
         if not is_fx_pair(instrument):
             raise ValueError("units applies to FX pairs only")
-        rate = usd_per_quote(instrument, price, cache) or ONE  # type: ignore[arg-type]
+        if (rate := usd_per_quote(instrument, price, cache)) is None:  # type: ignore[arg-type]
+            raise ValueError(f"No USD rate for {instrument.id} yet: USD notional unknown")  # type: ignore[union-attr]
         return Quantity.from_int(fixed_units), Decimal(fixed_units), rate
     if fixed_contracts is not None:
         if multiplier == 1:

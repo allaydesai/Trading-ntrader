@@ -151,3 +151,10 @@ def test_cli_mode_params_size_usdjpy_at_10pct_of_the_balance_in_base_units():
     sizing = _sma_self(USDJPY, 157.0, _cache(), pct=str(params["position_size_pct"]))
     sizing.portfolio_value = params["portfolio_value"]
     assert SMACrossover._calculate_position_size(sizing) == Quantity.from_int(100_000)
+
+
+def test_fixed_units_on_a_cross_without_a_rate_is_an_error_not_a_usd_guess():
+    """CodeRabbit round 1 on PR #64: no GBP rate means no USD notional to log."""
+    sizing = _sma_self(EURGBP, 0.85, _cache(), units=25_000)
+    with pytest.raises(ValueError):
+        SMACrossover._calculate_position_size(sizing)

@@ -221,3 +221,30 @@ class TestFields:
         other = _trade("AAPL.NASDAQ", "BUY", "10", "100", "110", "100", 0, 1)
         rows = trade_rows(SNAPSHOT, [TRADE_A, other])
         assert rows[0]["pips"] == "50.0" and rows[1] == {}
+
+
+class TestReviewEdgeCases:
+    """CodeRabbit round 1 on PR #64."""
+
+    def test_a_cross_leaves_the_portfolio_peaks_unknown_not_zero(self):
+        cross = {
+            "fx_pairs": {"EUR/GBP.IDEALPRO": _pair("EUR", "GBP", "0.0001", "0", "0", "GBPUSD")}
+        }
+        trade = _trade("EUR/GBP.IDEALPRO", "BUY", "100000", "0.85", None, None, 0, None)
+        s = summarise_run(cross, [trade], Decimal("1000000"))
+        assert s.peak_notional_usd is None and s.peak_margin_usd is None
+        assert s.peak_leverage is None
+        f = report_fields(s)
+        assert f["peak_notional_usd"] is None and f["peak_leverage"] is None
+
+    def test_leverage_is_sampled_after_every_exit_at_a_timestamp(self):
+        # Both close at h5. Applying only the loser's exit would show 100,000 / 40,000 = 2.5x,
+        # a state that never existed; after both exits nothing is open.
+        loser = _trade("EUR/USD.IDEALPRO", "BUY", "100000", "1.00000", "0.40000", "-60000", 1, 5)
+        winner = _trade("EUR/USD.IDEALPRO", "BUY", "100000", "1.00000", "1.60000", "60000", 0, 5)
+        s = summarise_run(SNAPSHOT, [loser, winner], Decimal("100000"))
+        assert s.peak_leverage == Decimal(2)  # 200,000 / 100,000 while both are open
+
+    def test_breakeven_trades_report_zero_underlying_return(self):
+        flat = _trade("EUR/USD.IDEALPRO", "BUY", "100000", "1.08000", "1.08000", "-4.50", 0, 1)
+        assert summarise_run(SNAPSHOT, [flat], Decimal("1000000")).return_on_underlying_pct == 0
