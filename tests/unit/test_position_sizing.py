@@ -482,6 +482,72 @@ class TestFxSizingHelpers:
         with pytest.raises(ValueError):
             fx_units_for_risk(*(Decimal(a) for a in args))
 
+    @pytest.mark.parametrize("price", ["144.657", "157.123", "149.999", "101.001"])
+    def test_usd_base_risk_units_are_exact(self, price):
+        """FX M6: USD 1,000 over a 0.5-JPY stop is 2,000 x price units, never one fewer.
+
+        ``fx_units_for_risk`` with the reciprocal rate leaves 28-digit noise below the whole
+        number; the budget helper sizes a USD base algebraically, as ``fx_units_for_budget``.
+        """
+        from src.core.position_sizing import fx_units_for_risk_budget
+
+        units = fx_units_for_risk_budget(
+            Decimal("1000"), Decimal("0.5"), Decimal(price), _fx("USD", "JPY")
+        )
+        assert units == (Decimal(price) * 2000).to_integral_value(rounding="ROUND_FLOOR")
+
+    def test_risk_budget_floors_usd_quote_and_cross(self):
+        from src.core.position_sizing import fx_units_for_risk_budget
+
+        # EURUSD: USD 1,000 over 0.0030 = 333,333.3 -> 333,333 units
+        eurusd = _fx("EUR", "USD")
+        assert fx_units_for_risk_budget(
+            Decimal("1000"), Decimal("0.0030"), Decimal("1.08"), eurusd
+        ) == Decimal("333333")
+        # EURGBP over 0.0040 GBP at GBP 1.25: USD 0.005 a unit -> 200,000
+        rates = {"GBP": Decimal("1.25")}
+        units = fx_units_for_risk_budget(
+            Decimal("1000"), Decimal("0.0040"), Decimal("0.85"), _fx("EUR", "GBP"), rates
+        )
+        assert units == Decimal("200000")
+        # increment 1,000: 333,333 -> 333,000
+        lots = _fx("EUR", "USD", "1000")
+        assert fx_units_for_risk_budget(
+            Decimal("1000"), Decimal("0.0030"), Decimal("1.08"), lots
+        ) == Decimal("333000")
+
+    def test_risk_budget_zero_stop_and_tiny_budget_are_no_order(self):
+        from src.core.position_sizing import fx_units_for_risk_budget
+
+        usdjpy = _fx("USD", "JPY")
+        assert fx_units_for_risk_budget(Decimal("1000"), Decimal("0"), Decimal("150"), usdjpy) == 0
+        assert (
+            fx_units_for_risk_budget(Decimal("0.001"), Decimal("0.5"), Decimal("150"), usdjpy) == 0
+        )
+
+    @pytest.mark.parametrize("pair", [("EUR", "USD"), ("USD", "JPY"), ("EUR", "GBP")])
+    @pytest.mark.parametrize("price", ["0", "-1.1"])
+    def test_risk_budget_rejects_a_non_positive_price_for_every_pair(self, pair, price):
+        from src.core.position_sizing import fx_units_for_risk_budget
+
+        rates = {"GBP": Decimal("1.25")}
+        with pytest.raises(ValueError, match="price"):
+            fx_units_for_risk_budget(
+                Decimal("100"), Decimal("0.01"), Decimal(price), _fx(*pair), rates
+            )
+
+    def test_risk_budget_rejects_a_negative_stop_and_a_cross_without_rate(self):
+        from src.core.position_sizing import fx_units_for_risk_budget
+
+        with pytest.raises(ValueError):
+            fx_units_for_risk_budget(
+                Decimal("1000"), Decimal("-0.5"), Decimal("150"), _fx("USD", "JPY")
+            )
+        with pytest.raises(ValueError, match="GBP/USD"):
+            fx_units_for_risk_budget(
+                Decimal("1000"), Decimal("0.004"), Decimal("0.85"), _fx("EUR", "GBP")
+            )
+
     @pytest.mark.parametrize(
         "units,increment,expected",
         [("92592.59", "1", "92592"), ("0.4", "1", "0"), ("-5", "1", "0"), ("1234", "1000", "1000")],

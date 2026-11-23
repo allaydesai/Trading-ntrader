@@ -297,7 +297,8 @@ floored to `size_increment` (UNVERIFIED: 1) with no minimum of one (0 is no orde
 sized ~690, the equity `notional / price`). CLI mode passes the starting balance as
 `portfolio_value` and 10% a trade, so a USD 1M account trades 100,000 units. `buy_and_hold`
 reads the account's USD cash (an FX account holds no JPY). `contracts` stays futures-only.
-Submodule strategies (Riptide, Bollinger Reversal) still use their own sizing: M6.
+Submodule strategies (Riptide, Bollinger Reversal) size FX through `_sizing.py` since M6
+(see "Strategies on FX").
 
 ### Smoke (task 4.8, 2026-11-22)
 
@@ -389,6 +390,79 @@ CLI, `firstrate-fx`, `sma_crossover`, 1-HOUR, 2024-01-02 to 2024-02-01, persiste
 
 `AAPL --units 1000` exits 2 ("--units is for FX only").
 
-## Planned (M6)
+## Strategies on FX (M6)
 
-- Riptide and Bollinger Reversal on FX (submodule sizing, `units` configs).
+Ported: `sma_crossover`, `buy_and_hold` (core, M4), `riptide` and `bollinger_reversal`
+(private submodule, M6). Configs: `configs/riptide_fx.yaml`, `configs/bollinger_fx.yaml`
+(EURUSD 1-DAY MID, 2015-2025, USD 1M); `--symbol USDJPY` switches the pair, `--units N` trades
+a fixed size:
+
+```bash
+uv run python -m src.cli.main backtest run configs/bollinger_fx.yaml --catalog firstrate-fx
+uv run python -m src.cli.main backtest run configs/riptide_fx.yaml --catalog firstrate-fx --symbol USDJPY
+```
+
+What the submodule strategies do on a spot pair (`is_fx_pair`, design section 10):
+
+| | Riptide | Bollinger Reversal |
+|---|---|---|
+| Sizing (`_sizing.py`) | `position_size_pct` of `portfolio_value` in USD -> base units (`fx_units_for_budget`) | `max_risk_pct` of `portfolio_value` over the 2 x ATR stop, priced in USD (`fx_units_for_risk_budget`: USDJPY yen at `1/price`, exact for a USD base) |
+| Rounding | floor to `size_increment`, no minimum of 1 (0 = no order); `units` replaces the budget (FX only, N >= 1) | same |
+| Prices | FX: limit and ATR stop half-up to the pair's precision; everything else cents, as before | FX: bracket stop/target at the pair's precision (`f"{x:.{precision}f}"`); everything else 2 dp, as before |
+| FX-only behaviour | ADV dollar-volume filter skipped (FirstRate volume is a tick count), logged once on start | weekly SMA buckets by `fx_trade_date` (the Sunday 17:00 ET bar opens the new week); log lines print the quote currency |
+| Cross pairs | the quote/USD rate from the cache (`fx_quote_rates`); none yet raises, as `sma_crossover` | same |
+
+A "day" on 1-day FX bars is the 17:00 New York trade date (daily rows are stamped at the
+session open, D-1 17:00 ET), so Riptide's next-open exits and `max_hold_days` keep their
+meaning. `riptide_fx.yaml` sets `limit_offset_pct: 0.5`, not the equity 2.0: 2% is about three
+daily ATRs on EURUSD, and every one of 80 EURUSD setups (2015-2025) expired unfilled at 2%
+(USDJPY: 2 trades from 67 setups). UNTUNED working default, Allay to confirm.
+
+`make_price` is not used for these prices although design section 10 names it: it rounds
+half-even (100.125 -> 100.12, where Riptide's cents rounding gives 100.13) and its float path
+differs from `f"{x:.2f}"` (100.135 -> 100.14 vs 100.13). The precision change is FX-only:
+`firstrate-stocks` equities are price precision **4** (not 2, as section 10 assumed), and
+rounding them at 4 dp moved Riptide AAPL 2015-2024 from 3.50% to 3.49%. With the FX gate both
+strategies' AAPL 1-day 2015-2024 results are byte-identical to the pre-M6 submodule.
+
+**Pre-existing equity bug (not fixed here, open for Allay):** `bollinger_reversal`'s 2-dp
+brackets are rejected on a precision-4 catalog equity ("Invalid trigger price precision ...
+was 2 when AAPL.NASDAQ price precision is 4"), so it trades nothing on `firstrate-stocks`
+(AAPL 2015-2024: 0 trades). Using the instrument's precision for every instrument fixes it
+(82 trades, +1.57%) but changes equity results, which M6's acceptance forbids.
+
+**Not ported** (still size FX like equities, `notional / price` with a minimum of one, and
+format prices at 2 dp where they set any): `sma_crossover_long_only`, `apolo_rsi`,
+`mean_reversion` (`rsi_mean_reversion`), `connors_rsi_mean_rev`, `momentum` (`sma_momentum`).
+Port one by routing its size through `_sizing` (submodule) or `fx_units` (core) and its prices
+through the instrument's precision, as above.
+
+### Smoke (task 6.5, 2026-11-23)
+
+CLI config mode, `firstrate-fx`, 1-DAY MID, 2015-01-02 to 2025-12-31, USD 1M, persisted. No
+order was denied in any run.
+
+| Run | Strategy / pair | Trades | Return | Notes |
+|---|---|---|---|---|
+| `be0d982a` | bollinger_reversal EURUSD | 92 | +24.35% | largest loss USD 10,124.23 (the 1% risk plus costs) |
+| `02be82e5` | bollinger_reversal USDJPY | 104 | +3.29% | largest loss USD 10,265.73 |
+| `2b0d081e` | riptide EURUSD | 16 | +0.21% | every entry ~USD 100,000 (e.g. 90,957 units at 1.09942) |
+| `7388099a` | riptide USDJPY | 24 | -0.08% | every entry 100,000 units |
+
+Hand-checked (to the cent, stored `profit_loss`):
+
+- **riptide USDJPY, trade 1** (2017-01-16 -> 01-18): setup close 114.182, limit
+  `114.182 x 0.995 = 113.611` (3 dp), 100,000 units (USD 100,000 of a USD-base pair). Stop
+  `113.611 - 2.5 x 1.4273 = 110.04275 -> 110.043`. Exit 114.660 (green-candle next open).
+  Gross `1.049 x 100,000 = 104,900 JPY = USD 914.88` at 1/114.66; costs `2.00 + 2.00`
+  commission (0.2 bp of USD 100,000 = the USD 2 minimum) `+ 2.20 + 2.18` half-spread (250 JPY
+  a side); net **906.50**.
+- **bollinger_reversal EURUSD, trade 1** (2015-05-25 -> 06-17): close 1.08699, 2 x ATR =
+  0.0262815, so `10,000 / 0.0262815 = 380,496` units, SL 1.06071, TP 1.13955 (5 dp). Filled
+  at 1.08699802 (the bar fill model splits the order), exit at the TP. Gross
+  `0.05255198 x 380,496 = 19,995.82`; commission `8.27 + 8.67` (0.2 bp of USD 413,598 /
+  433,594) plus half-spread `9.51 x 2`, total 35.96; net **19,959.86**.
+
+Found by the smoke and fixed in the submodule: a YAML config's numbers reach
+`BollingerReversalConfig` as float, and `Decimal x float` crashed the first entry of every
+config-file run (Riptide already coerced them).

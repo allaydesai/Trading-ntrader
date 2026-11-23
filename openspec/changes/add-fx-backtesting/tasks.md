@@ -212,18 +212,38 @@ are accepted at instrument precision, sized correctly in USD terms, and trades o
 and futures results for both strategies are unchanged (pinned by the submodule tests and
 one existing equity smoke).
 
-- [ ] 6.1 Submodule tests (failing first): `make_price` rounding (EURUSD 1.084314 stays 5 dp;
+- [x] 6.1 Submodule tests (failing first): `make_price` rounding (EURUSD 1.084314 stays 5 dp;
       equity output unchanged); FX `notional_quantity`/`risk_quantity` (USDJPY not 157x off);
       Riptide skips the ADV check for FX; Bollinger weekly bucket by NY trade date (the Sunday
       17:00 bar belongs to the new week; equities unchanged); `units` config.
-- [ ] 6.2 Implement in the submodule (`_sizing.py`, `riptide.py`, `bollinger_reversal.py`),
+- [x] 6.2 Implement in the submodule (`_sizing.py`, `riptide.py`, `bollinger_reversal.py`),
       submodule PR merged first.
-- [ ] 6.3 Bump the submodule pointer in NTrader (no `.gitmodules` change); `configs/riptide_fx.yaml`,
+- [x] 6.3 Bump the submodule pointer in NTrader (no `.gitmodules` change); `configs/riptide_fx.yaml`,
       `configs/bollinger_fx.yaml`.
-- [ ] 6.4 Integration, forked: Bollinger on trimmed real EURUSD daily places brackets that are
+- [x] 6.4 Integration, forked: Bollinger on trimmed real EURUSD daily places brackets that are
       not denied; Riptide on USDJPY daily sizes at notional.
 - [ ] 6.5 Manual smoke and the `docs/agent/fx-backtesting.md` strategy guide (unported
       strategies listed); archive this change (`/openspec-archive-change`).
+      **Smoke and guide done (2026-11-23)**, archive open: it follows the merge of #63, #64,
+      the strategies PR and the M6 pin PR (the pin then moves to the strategies merge commit).
+      Four persisted 1-DAY runs 2015-2025, no order denied: bollinger EURUSD 92 trades / USDJPY
+      104, riptide EURUSD 16 / USDJPY 24; one trade per strategy hand-checked to the cent
+      (`docs/agent/fx-backtesting.md`, "Smoke (task 6.5)").
+- **M6 notes (2026-11-23):** the submodule PR is allaydesai/Trading-ntrader-strategies
+  `feat/fx-m6-strategies`; it imports `fx_units_for_budget`/`is_fx_pair` (#63) and
+  `fx_units_for_risk_budget`/`fx_quote_rates` (this PR), so it needs #63 and this PR on main.
+  Core additions: `fx_units_for_risk_budget` (whole units; a USD base sized as `risk x price /
+  stop`, since the reciprocal rate floored an exact 299,998 to 299,997) and `fx_quote_rates`.
+  FX prices keep each strategy's own rounding at the pair's precision, not `make_price`
+  (half-even); non-FX keeps cents / 2 dp, since catalog equities are precision 4 (design
+  section 10 note). Equity parity: riptide and bollinger_reversal AAPL 1-day 2015-2024 are
+  byte-identical to the pre-M6 submodule. Open: bollinger_reversal's 2-dp brackets are
+  rejected on precision-4 catalog equities (0 trades; pre-existing, not changed here). `riptide_fx.yaml` uses
+  `limit_offset_pct: 0.5` (at 2% all 80 EURUSD setups expired unfilled; UNTUNED, Allay to
+  confirm). The smoke found a Bollinger bug outside FX: YAML numbers arrive as float and
+  `Decimal x float` crashed every config-file run's first entry; fixed (coerced). The
+  integration test (`tests/integration/core/test_fx_strategies_engine.py`, trimmed real daily
+  excerpts under `tests/fixtures/firstrate_fx/strategies/`) skips without the submodule (CI).
 
 ## Not in these milestones
 

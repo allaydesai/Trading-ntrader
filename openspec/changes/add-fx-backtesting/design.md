@@ -400,6 +400,15 @@ extension.
 `sma_crossover` (core) and `buy_and_hold` get FX sizing in M4. Other submodule strategies
 are listed in `docs/agent/fx-backtesting.md` as unported.
 
+As built (M6): for spot FX only, the price fixes round at `instrument.price_precision` with
+each strategy's existing rule (Riptide `quantize(ROUND_HALF_UP)`, Bollinger
+`f"{x:.{precision}f}"`) rather than `make_price` (half-even). Non-FX keeps cents / 2 dp:
+catalog equities are precision 4, not 2, so the instrument's precision would change equity
+results (and would fix Bollinger's 2-dp brackets, rejected on them today: an open question).
+Bollinger's weekly bucket switches to `fx_trade_date` for FX only; equities keep the UTC ISO
+week. Risk sizing uses `fx_units_for_risk_budget` (exact for a USD base, like
+`fx_units_for_budget`); the cross rate comes from `src.core.fx_rates.fx_quote_rates`.
+
 ## 11. Reporting, dashboard and CLI (M5)
 
 `src/services/fx/returns.py` (pure, like `futures/returns.py`) works from `config_snapshot.fx_pairs`

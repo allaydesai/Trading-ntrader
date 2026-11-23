@@ -22,6 +22,7 @@ from src.core.fx_rates import (
     FxRateBook,
     conversion_pair,
     conversion_pairs_for,
+    fx_quote_rates,
     fx_ticker,
     is_fx,
     needs_conversion,
@@ -159,3 +160,20 @@ def test_a_usd_quote_fill_needs_no_rate_and_records_nothing():
     book.on_fill(_fill(EURUSD))
     assert book.misses == []
     assert book.fill_rate(TradeId("T-1")) is None
+
+
+# -- the rates table the sizing helpers take (FX M6) -----------------------------------------
+
+
+def test_fx_quote_rates_is_closed_form_for_usd_quote_and_usd_base():
+    _, cache = _book(EURUSD, USDJPY)
+    assert fx_quote_rates(EURUSD, Decimal("1.08"), cache) == {"USD": Decimal(1)}
+    assert fx_quote_rates(USDJPY, Decimal("160"), cache) == {"JPY": Decimal("0.00625")}
+
+
+def test_fx_quote_rates_reads_a_cross_rate_from_the_cache_and_is_none_before_it():
+    book, cache = _book(GBPUSD, EURGBP)
+    assert fx_quote_rates(EURGBP, Decimal("0.85"), cache) is None
+    book.on_bar(_bar(GBPUSD, "1.25000"))
+    rates = fx_quote_rates(EURGBP, Decimal("0.85"), cache)
+    assert rates is not None and float(rates["GBP"]) == pytest.approx(1.25)

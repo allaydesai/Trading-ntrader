@@ -120,14 +120,22 @@ def _side_price_type(side: OrderSide) -> PriceType:
     return PriceType.BID if side == OrderSide.SELL else PriceType.ASK
 
 
+def fx_quote_rates(instrument: Instrument, price: Decimal, cache) -> dict[str, Decimal] | None:
+    """``{quote: USD per quote unit}``, the ``rates`` the sizing helpers take; None if unknown.
+
+    None only for a cross whose quote currency has no USD rate in the cache yet.
+    """
+    rate = usd_per_quote(instrument, price, cache)
+    return {instrument.quote_currency.code: rate} if rate is not None else None
+
+
 def fx_units(notional_usd: Decimal, price: Decimal, instrument: Instrument, cache) -> Decimal:
     """Whole base units of FX ``instrument`` worth ``notional_usd`` (0: no order).
 
     Raises:
         ValueError: A cross whose quote currency has no USD rate in the cache yet.
     """
-    rate = usd_per_quote(instrument, price, cache)
-    rates = {instrument.quote_currency.code: rate} if rate is not None else None
+    rates = fx_quote_rates(instrument, price, cache)
     return fx_units_for_budget(notional_usd, price, instrument, rates)
 
 

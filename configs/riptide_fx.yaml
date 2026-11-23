@@ -1,0 +1,53 @@
+# configs/riptide_fx.yaml
+# Riptide on spot FX (FX M6), daily MID bars from the `firstrate-fx` catalog.
+#
+#   backtest run configs/riptide_fx.yaml --catalog firstrate-fx
+#   backtest run configs/riptide_fx.yaml --catalog firstrate-fx --symbol USDJPY
+#   backtest run configs/riptide_fx.yaml --catalog firstrate-fx --units 100000
+#
+# FX differences from configs/riptide.yaml (equities):
+# - Sizes are base-currency units worth `position_size_pct` of `portfolio_value` in USD
+#   (USD 100,000 of USDJPY is 100,000 units), floored to whole units with no minimum of one.
+#   `units: N` (or `--units N`) trades exactly N base units instead.
+# - Limit and stop prices keep the pair's precision (EURUSD 5 dp, USDJPY 3 dp).
+# - The ADV filter is skipped for FX (FirstRate volume is a tick count, not dollars), so
+#   `min_adv_dollars` is 0 here; the strategy logs the skip once.
+# - A "day" is the 17:00 New York trade date (FX daily bars open at Sunday-Thursday 17:00
+#   ET), so the next-open exits and `max_hold_days` keep their meaning.
+# - Financing (rollover interest) is not modelled; see docs/agent/fx-backtesting.md.
+strategy_path: "src.core.strategies.custom.riptide:Riptide"
+config_path: "src.core.strategies.custom.riptide:RiptideConfig"
+
+config:
+  instrument_id: "EUR/USD.IDEALPRO"
+  bar_type: "EUR/USD.IDEALPRO-1-DAY-MID-EXTERNAL"
+
+  # Position sizing (USD)
+  portfolio_value: 1000000   # Should match backtest.initial_capital
+  position_size_pct: 10.0    # USD 100,000 per entry
+
+  # Setup filters
+  sma_trend_period: 200      # Trend: close must be above the 200-day SMA
+  pullback_period: 15        # Pullback: close must be a 15-day low
+  adv_period: 20
+  min_adv_dollars: 0         # Skipped for FX anyway (volume is a tick count)
+
+  # Entry
+  # Buy limit 0.5% below the setup-day close (1-day validity). The equity 2% is about three
+  # daily ATRs on EURUSD: on 2015-2025 daily bars all 80 EURUSD setups expired unfilled at
+  # 2% (USDJPY: 2 trades from 67 setups). 0.5% trades 16 (EURUSD) / 24 (USDJPY).
+  # UNTUNED working default, Allay to confirm.
+  limit_offset_pct: 0.5
+
+  # Exits
+  atr_period: 14
+  atr_stop_mult: 2.5         # Hard stop at 2.5 * ATR below entry
+  max_hold_days: 10
+
+  roc_period: 100
+
+backtest:
+  start_date: "2015-01-02"
+  end_date: "2025-12-31"
+  initial_capital: 1000000
+  fill_model: gap_aware      # next-open exits; a gapped stop fills at the open
