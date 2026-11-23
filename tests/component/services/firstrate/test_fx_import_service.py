@@ -90,14 +90,20 @@ def _read_all(catalog_dir: Path, bar_type: str = EUR_HOUR) -> list[Bar]:
 
 
 class TestUrisafe:
-    @pytest.mark.parametrize("identifier", [EUR_HOUR, "ES.CME-1-MINUTE-LAST-EXTERNAL"])
-    def test_matches_the_nautilus_catalog_naming(self, identifier):
-        from nautilus_trader.persistence.funcs import urisafe_identifier
-
+    @pytest.mark.parametrize(
+        ("identifier", "expected"),
+        [
+            (EUR_HOUR, EUR_HOUR_DIR),
+            ("ES.CME-1-MINUTE-LAST-EXTERNAL", "ES.CME-1-MINUTE-LAST-EXTERNAL"),
+        ],
+    )
+    def test_drops_the_slash_like_the_nautilus_catalog(self, identifier, expected):
+        # Literal oracle: urisafe_identifier is absent before Nautilus 1.219. That the
+        # installed Nautilus writes to this name is pinned by TestFirstImport (real parts).
         from src.services.firstrate.futures_import_service import urisafe
 
-        assert urisafe(identifier) == urisafe_identifier(identifier)
-        assert urisafe(BarType.from_str(identifier)) == urisafe_identifier(identifier)
+        assert urisafe(identifier) == expected
+        assert urisafe(BarType.from_str(identifier)) == expected
 
 
 class TestMidTimeframe:
