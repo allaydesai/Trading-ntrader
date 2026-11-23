@@ -19,7 +19,7 @@ Public API:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -28,7 +28,8 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 #: FirstRate files are headerless 6-column CSVs (Datetime, O, H, L, C, Volume). Futures
-#: daily files add a 7th open-interest column, which the futures parser drops.
+#: daily files add a 7th open-interest column, which the futures parser drops; FX intraday
+#: rows have 7 because the date and time are separate columns.
 _ACCEPTED_COLUMNS: tuple[int, ...] = (6, 7)
 
 #: Timestamp formats the probe understands, in the same order the parser
@@ -44,6 +45,10 @@ _SEPARATORS = str.maketrans("", "", "-: ")
 #: ``FirstRateCsvParser._parse_timestamp`` exactly so the source_probe and
 #: parser agree on what UTC datetime each row represents.
 _FIRSTRATE_TIMEZONE = ZoneInfo("America/New_York")
+
+#: New York session open of a FirstRate FX daily bar (``pair_specs.yaml`` ``session.open``;
+#: not imported, this module stays free of the spec loader).
+_FX_SESSION_OPEN = "17:00:00"
 
 
 def compute_source_last_date(file_path: Path) -> datetime | None:
@@ -86,7 +91,14 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
 
 
 def _first_columns(file_path: Path):
-    """Yield the stripped first column of every row with an accepted column count."""
+    """Yield the stamp of every row with an accepted column count.
+
+    Equity and futures rows yield their stripped first column. FirstRate FX rows carry a
+    compact date (``YYYYMMDD``) and are rewritten to the canonical shape the scan compares:
+    an intraday ``YYYYMMDD,HH:MM:SS,...`` row to ``YYYY-MM-DD HH:MM:SS``, and a daily
+    ``YYYYMMDD,O,H,L,C,V`` row to its session open ``D-1 17:00`` (FX decision D5, the
+    timestamp the FX parser gives the bar).
+    """
     with file_path.open("r", encoding="utf-8", errors="replace") as fh:
         for raw in fh:
             stripped = raw.strip()
@@ -94,7 +106,24 @@ def _first_columns(file_path: Path):
                 continue
             parts = stripped.split(",")
             if len(parts) in _ACCEPTED_COLUMNS:
-                yield parts[0].strip()
+                first = parts[0].strip()
+                yield _fx_stamp(first, parts) if _is_compact_date(first) else first
+
+
+def _is_compact_date(text: str) -> bool:
+    return len(text) == 8 and text.isdigit()
+
+
+def _fx_stamp(date: str, parts: list[str]) -> str:
+    """The canonical stamp of a FirstRate FX row (see :func:`_first_columns`)."""
+    iso = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+    if len(parts) == 7:
+        return f"{iso} {parts[1].strip()}"
+    try:
+        day = datetime.strptime(iso, _DAILY_FMT) - timedelta(days=1)
+    except ValueError:
+        return iso  # unparseable; the scan skips it like any malformed stamp
+    return f"{day:%Y-%m-%d} {_FX_SESSION_OPEN}"
 
 
 def _separator_shaped(stamp: str) -> bool:
