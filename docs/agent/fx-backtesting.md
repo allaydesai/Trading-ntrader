@@ -267,7 +267,11 @@ sum of the trade rows equals the USD balance change, and mark-to-market reconcil
   rejection or the order closing resolves it. When in doubt the modify stays pending, so a
   resize or margin-raising reprice waits rather than overcommitting margin (no strategy in the
   repo modifies orders today). The same counting backs the one-quantity-modify-at-a-time rule
-  for futures and FX. The
+  for futures and FX. A new FX entry also waits (`FX_MODIFY_PENDING`) while any margined FX
+  entry (parentless, not reduce-only) on the venue has an unresolved modify: the gate cannot
+  know how much margin that pending reprice adds (no per-order state; Nautilus keeps the
+  requested price only in the exchange's queue), so it counts it as committed in full. Resizes
+  need no such check: increases are always refused and decreases release margin. The
   reference price is the order's limit or stop trigger, else the latest `MID` price. Futures
   names, reasons and behaviour are unchanged (`src/core/futures_margin_gate.py` keeps them).
 - Limit: an order the gate cannot price (no bar yet, or a cross before its first GBPUSD bar) is

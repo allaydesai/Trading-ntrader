@@ -229,6 +229,8 @@ class MarginGate:
             required += needed
         if required <= 0:
             return None
+        if (waiting := _entry_reprice_pending(self._cache, self._terms, entries)) is not None:
+            return waiting
         free = self._free_usd(entries[0].instrument_id)
         if required <= free:
             return None
@@ -338,6 +340,35 @@ def _other_price_modify_pending(cache, terms, order: Order) -> bool:
         if requirement.price_sensitive and (pending or _unresolved_modifies(other)):
             return True
     return False
+
+
+def _entry_reprice_pending(cache, terms, entries: list[Order]) -> str | None:
+    """Why new price-sensitive entries must wait for a pending reprice, or ``None``.
+
+    A margined entry (parentless, not reduce-only) with an unresolved modify may hold an
+    approved margin increase the account has not reserved yet. Its size is unknown (the gate
+    keeps no per-order state, and Nautilus keeps the requested price only in the simulated
+    exchange's queue), so it counts as committed in full: new entries wait until it resolves.
+    """
+    requirement = terms[entries[0].instrument_id]
+    if not requirement.price_sensitive:
+        return None
+    venue = entries[0].instrument_id.venue
+    submitting = {o.client_order_id for o in entries}
+    for other in [*cache.orders_open(venue=venue), *cache.orders_inflight(venue=venue)]:
+        other_terms = terms.get(other.instrument_id)
+        if other.client_order_id in submitting or other_terms is None:
+            continue
+        if other.parent_order_id is not None or other.is_reduce_only:
+            continue
+        pending = other.status == OrderStatus.PENDING_UPDATE or _unresolved_modifies(other)
+        if other_terms.price_sensitive and pending:
+            return (
+                f"{requirement.prefix}_MODIFY_PENDING: {other.client_order_id} has a modify "
+                f"not applied yet on {venue}; its margin increase is unreserved, so new entries "
+                "wait for it"
+            )
+    return None
 
 
 def _free_usd(cache, terms, instrument_id: InstrumentId) -> Decimal:

@@ -271,3 +271,52 @@ def test_a_local_orders_modify_has_no_pending_event_so_none_is_popped_for_it():
     )
     reason = _gate().modify_denial_reason(order, Quantity.from_int(50_000))
     assert reason is not None and reason.startswith("FX_MODIFY_PENDING")
+
+
+class TestNewEntriesSeePendingReprices:
+    """A new FX entry counts every still-pending reprice of a margined entry as committed.
+
+    The gate keeps no per-order state and Nautilus keeps the requested price only in the
+    simulated exchange's private queue, so the size of a pending increase is unknown: it is
+    taken as committed in full, and the new entry waits (``FX_MODIFY_PENDING``) until the
+    reprice is applied or rejected (CodeRabbit, PR #63).
+    """
+
+    def test_a_new_order_waits_for_a_pending_reprice_then_passes_once_it_is_rejected(self):
+        # USD 100 free; A's +60 reprice is pending; a new 1,000 EURUSD limit needs 33 USD.
+        new = _order(EURUSD, 1_000, "1.10000")
+        pending = _order(
+            EURUSD,
+            100_000,
+            "1.10000",
+            status=OrderStatus.PENDING_UPDATE,
+            events=[_event("pending")],
+        )
+        reason = _gate(free="100", inflight=[pending], open_orders=[pending]).denial_reason(
+            [new], None
+        )
+        assert reason is not None and reason.startswith("FX_MODIFY_PENDING")
+
+        rejected = _order(
+            EURUSD,
+            100_000,
+            "1.10000",
+            status=OrderStatus.ACCEPTED,
+            events=[_event("pending"), _event("rejected")],
+        )
+        assert _gate(free="100", open_orders=[rejected]).denial_reason([new], None) is None
+
+    def test_a_pending_modify_on_an_exit_order_does_not_hold_new_entries(self):
+        # Reduce-only and child (bracket) orders are not margined as entries, so a modify of
+        # them is never a margin-raising reprice the gate approved.
+        new = _order(EURUSD, 1_000, "1.10000")
+        exit_order = _order(
+            EURUSD,
+            100_000,
+            "1.05000",
+            status=OrderStatus.PENDING_UPDATE,
+            events=[_event("pending")],
+            reduce_only=True,
+        )
+        gate = _gate(free="100", inflight=[exit_order], open_orders=[exit_order])
+        assert gate.denial_reason([new], None) is None
