@@ -142,3 +142,16 @@ class TestClickOptions:
         result = CliRunner().invoke(run_backtest, args + ["--units", "1000"])
         assert result.exit_code == 2
         assert "--units is for FX only" in result.output
+
+
+class TestWebRunTarget:
+    """The dashboard's Run Backtest form resolves the same way (M5)."""
+
+    def _form(self, symbol, catalog="firstrate-fx"):
+        return SimpleNamespace(symbol=symbol, catalog_name=catalog, timeframe="1-HOUR")
+
+    def test_fx_form_gets_the_ticker_and_mid_bars(self):
+        assert symbols.run_target(self._form("EUR/USD")) == ("EURUSD", "1-HOUR-MID")
+
+    def test_equity_form_keeps_last(self):
+        assert symbols.run_target(self._form("AAPL", "equities")) == ("AAPL", "1-HOUR-LAST")

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, computed_field
 from src.api.models.filter_models import FilterState
 from src.db.models.backtest import BacktestRun
 from src.services.futures.display import list_return
+from src.services.fx.returns import asset_class as fx_asset_class
 
 
 class BacktestListItem(BaseModel):
@@ -68,7 +69,7 @@ class BacktestListItem(BaseModel):
     )
     execution_status: str = Field(..., description="success or failed")
     created_at: datetime = Field(..., description="Execution timestamp")
-    asset_class: str = Field("equity", description="equity or futures (M4)")
+    asset_class: str = Field("equity", description="equity, futures (M4) or fx (M5)")
     return_on_margin_pct: Optional[Decimal] = Field(
         None, description="Futures only: return on margin, percent (the futures headline)"
     )
@@ -252,6 +253,7 @@ def to_list_item(run: BacktestRun) -> BacktestListItem:
         max_drawdown = run.metrics.max_drawdown
 
     asset_class, return_on_margin_pct = list_return(run)
+    asset_class = fx_asset_class(getattr(run, "config_snapshot", None)) or asset_class
     return BacktestListItem(
         run_id=run.run_id,
         strategy_name=truncate_strategy_name(run.strategy_name),

@@ -58,3 +58,13 @@ def resolve_fx_symbol(
     if row is None or price_type_for(row.asset_class) != FX_PRICE_TYPE:
         return None
     return ticker, with_price_type(bar_type_spec, FX_PRICE_TYPE)
+
+
+def run_target(form: Any) -> tuple[str, str]:
+    """``(symbol, bar spec)`` for a run form (``catalog_name``, ``symbol``, ``timeframe``).
+
+    ``LAST`` bars for equity and crypto; an FX catalog row's ticker and ``MID`` bars (M5).
+    """
+    bar_type_spec = f"{form.timeframe}-{DEFAULT_PRICE_TYPE}"
+    resolved = resolve_fx_symbol(form.catalog_name, form.symbol, bar_type_spec)
+    return resolved or (form.symbol, bar_type_spec)

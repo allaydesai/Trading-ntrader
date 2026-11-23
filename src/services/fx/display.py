@@ -149,6 +149,10 @@ def tone(value: Decimal | None) -> str:
     return "text-green-400" if value > 0 else "text-red-400"
 
 
+#: Rows the panel shows in its own costs box instead of the figures list.
+_PANEL_COSTS = ("Commission (USD)", "Modelled spread (USD)")
+
+
 def dashboard_panel(run: Any) -> dict[str, Any] | None:
     """The detail page's FX panel, display-ready; ``None`` for a non-FX run."""
     summary = run_summary(run)
@@ -164,10 +168,31 @@ def dashboard_panel(run: Any) -> dict[str, Any] | None:
         "leverage": leverage(summary.peak_leverage),
         "commission": usd(summary.commission_usd),
         "spread": usd(summary.spread_usd),
-        "rows": rows[1:-n_pairs] if n_pairs else rows[1:],
+        "rows": [r for r in rows[1 : len(rows) - n_pairs] if r[0] not in _PANEL_COSTS],
         "terms": rows[-n_pairs:] if n_pairs else [],
         "note": FINANCING_NOTE,
     }
+
+
+def trade_table_cells(snapshot: Mapping[str, Any] | None, trades: list[Any]) -> dict[str, Any]:
+    """The trades table's per-trade cells: ``futures_cells`` (M4) and ``fx_cells`` (M5).
+
+    Each is ``None`` unless the run is of that asset class, so an equity table is unchanged.
+    """
+    from src.services.futures.display import trade_cells as futures_trade_cells
+
+    return {
+        "futures_cells": futures_trade_cells(snapshot, trades),
+        "fx_cells": trade_cells(snapshot, trades),
+    }
+
+
+def _price(value: Any, terms: PairTerms) -> str:
+    """A price at the pair's quoting precision: a pip and one fractional digit (1.08000)."""
+    if value is None:
+        return "-"
+    places = len(f"{terms.pip_size.normalize():f}".partition(".")[2]) + 1
+    return f"{Decimal(str(value)):,.{places}f}"
 
 
 def trade_cells(snapshot: Mapping[str, Any] | None, trades: list[Any]) -> list[dict] | None:
@@ -189,6 +214,8 @@ def trade_cells(snapshot: Mapping[str, Any] | None, trades: list[Any]) -> list[d
         cells.append(
             {
                 "units": f"{fig.units:,.0f}",
+                "entry": _price(get("entry_price"), terms[iid]),
+                "exit": _price(get("exit_price"), terms[iid]),
                 "lots": f"{fig.lots:.2f}",
                 "notional": usd(fig.notional_usd),
                 "pips": pips(fig.pips),
