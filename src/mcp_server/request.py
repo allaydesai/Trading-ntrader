@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from src.mcp_server.catalogs import timeframe_spec
 from src.mcp_server.errors import ToolFailure
@@ -49,10 +49,10 @@ class BacktestSpec(BaseModel):
     cost_multiplier: float = Field(
         default=1.0, ge=0, description="Commission scale (cost stress); 1 is the broker's schedule"
     )
-    units: int | None = Field(
+    units: StrictInt | None = Field(  # strict: True or 1.5 is refused, not coerced
         default=None, gt=0, description="FX only: base units per entry (100000 = 1 lot)"
     )
-    contracts: int | None = Field(
+    contracts: StrictInt | None = Field(
         default=None, gt=0, description="Futures only: whole contracts per entry"
     )
 

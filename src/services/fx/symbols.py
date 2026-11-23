@@ -30,9 +30,10 @@ def conversion_ticker(ticker: str) -> str | None:
     ``None`` for a USD-quoted or USD-based pair (and any non-pair); the ticker-level twin of
     :func:`src.core.fx_rates.conversion_pair`, for checks made before an instrument exists.
     """
-    base, quote = ticker[:3], ticker[3:]
-    if fx_ticker(ticker) is None or "USD" in (base, quote):
+    pair = fx_ticker(ticker)
+    if pair is None or "USD" in (pair[:3], pair[3:]):
         return None
+    quote = pair[3:]
     known = pair_names()
     return next((c for c in (f"{quote}USD", f"USD{quote}") if c in known), None)
 

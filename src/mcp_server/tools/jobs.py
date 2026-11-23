@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from mcp.server import MCPServer
+from pydantic import StrictInt
 
 from src.mcp_server.context import ServerContext
 from src.mcp_server.errors import ToolFailure
@@ -37,8 +38,8 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         starting_balance: Decimal | None = None,
         study: str | None = None,
         over_budget_reason: str | None = None,
-        units: int | None = None,
-        contracts: int | None = None,
+        units: StrictInt | None = None,
+        contracts: StrictInt | None = None,
     ) -> dict[str, Any]:
         """Validate and queue one backtest; returns a job id at once. Poll get_job.
 

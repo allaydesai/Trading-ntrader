@@ -181,7 +181,7 @@ class TestSizingOverrides:
         assert "sma_crossover" in exc.value.fix
 
     @pytest.mark.parametrize("field", ["units", "contracts"])
-    @pytest.mark.parametrize("bad", [0, -1])
+    @pytest.mark.parametrize("bad", [0, -1, True, 1.5, "2"])
     def test_sizes_must_be_positive(self, field, bad):
         with pytest.raises(ValueError):
             _spec(**{field: bad})

@@ -119,6 +119,14 @@ async def test_units_on_a_non_fx_symbol_queue_nothing(ctx):
         assert (await _call(client, "list_jobs"))["jobs"] == []
 
 
+@pytest.mark.parametrize("bad", [True, 1.5])
+async def test_a_non_integer_size_is_refused_not_coerced(ctx, bad):
+    async with Client(build_server(ctx)) as client:
+        result = await client.call_tool("submit_backtest", {**REQUEST, "units": bad})
+        assert result.is_error or result.structured_content["ok"] is False
+        assert (await _call(client, "list_jobs"))["jobs"] == []
+
+
 async def test_unknown_job_ids(ctx):
     async with Client(build_server(ctx)) as client:
         for tool in ("get_job", "cancel_job"):
