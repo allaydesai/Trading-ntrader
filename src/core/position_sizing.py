@@ -185,9 +185,9 @@ def fx_units_for_risk_budget(
         raise ValueError("stop_distance must not be negative")
     if stop_distance == 0:
         return Decimal(0)
+    if price <= 0:
+        raise ValueError("price must be positive to size an FX risk budget")
     if _code(getattr(instrument, "base_currency")) == "USD":
-        if price <= 0:
-            raise ValueError("price must be positive to size a USD-base pair")
         return whole_units(risk * price / stop_distance, step)
     rate = quote_to_account_rate(instrument, price, rates)
     return whole_units(fx_units_for_risk(risk, stop_distance, rate), step)

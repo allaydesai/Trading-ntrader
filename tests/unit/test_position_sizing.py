@@ -525,6 +525,17 @@ class TestFxSizingHelpers:
             fx_units_for_risk_budget(Decimal("0.001"), Decimal("0.5"), Decimal("150"), usdjpy) == 0
         )
 
+    @pytest.mark.parametrize("pair", [("EUR", "USD"), ("USD", "JPY"), ("EUR", "GBP")])
+    @pytest.mark.parametrize("price", ["0", "-1.1"])
+    def test_risk_budget_rejects_a_non_positive_price_for_every_pair(self, pair, price):
+        from src.core.position_sizing import fx_units_for_risk_budget
+
+        rates = {"GBP": Decimal("1.25")}
+        with pytest.raises(ValueError, match="price"):
+            fx_units_for_risk_budget(
+                Decimal("100"), Decimal("0.01"), Decimal(price), _fx(*pair), rates
+            )
+
     def test_risk_budget_rejects_a_negative_stop_and_a_cross_without_rate(self):
         from src.core.position_sizing import fx_units_for_risk_budget
 
