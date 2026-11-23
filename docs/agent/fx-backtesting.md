@@ -461,7 +461,7 @@ tick count, so most daily FX entries split (USDJPY 2023-07-10: 81,022 + 18,978).
 its hard stop from the first part: 13 of 16 EURUSD and 8 of 24 USDJPY stops covered part of the
 position, and a USDJPY stop-out left 18,978 units open to the next green candle. It now
 replaces the stop with one for the whole position when the entry keeps filling
-(`on_position_changed`). Bollinger's bracket children carry the full order quantity and are
+(`on_position_changed`). Bollinger's bracket stops carry the full order quantity (QA: 198 of 198) and are
 not affected. Details: `docs/agent/fx-qa-2026-11-23.md`.
 
 Found by the smoke and fixed in the submodule: a YAML config's numbers reach
