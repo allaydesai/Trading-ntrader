@@ -215,12 +215,12 @@ def bind_fill_model(fill_model: FillModel, engine: BacktestEngine, bars: Sequenc
             another venue) and filled at a stale price.
     """
     if isinstance(fill_model, GapAwareFillModel):
-        _check_alignment(bars)
+        check_bar_alignment(bars)
         fill_model.register_clock(engine.kernel.clock)
         fill_model.register_bars(bars)
 
 
-def _check_alignment(bars: Sequence[Bar]) -> None:
+def check_bar_alignment(bars: Sequence[Bar]) -> None:
     """Every instrument in the run must have bars at the same ``ts_init`` timestamps."""
     series: dict[str, set[int]] = defaultdict(set)
     for bar in bars:

@@ -26,7 +26,7 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Money
 
-from src.core.fill_models import gap_aware_venue_options
+from src.core.fill_models import GapAwareFillModel, check_bar_alignment, gap_aware_venue_options
 from src.core.futures_costs import venue_cost_models
 from src.core.futures_margin_gate import FuturesMarginGate, install_futures_margin_gate
 from src.core.fx_costs import FxNoCommissionModel
@@ -109,5 +109,9 @@ def setup_backtest_venues(
         raise ValueError("FX pairs settling outside USD need data= so a rate feeder is registered")
     gate = install_futures_margin_gate(engine, everything)
     if data is not None:
+        if isinstance(fill_model, GapAwareFillModel) and rate_sources:
+            # bind_fill_model saw only the traded bars; a rate source's bar at a timestamp the
+            # traded pair lacks would release next-bar commands without an open to fill at
+            check_bar_alignment([bar for bars, _ in [*data, *rate_sources] for bar in bars])
         add_fx_data(engine, data, rate_sources)
     return gate

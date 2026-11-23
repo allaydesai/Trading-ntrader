@@ -65,6 +65,19 @@ def test_a_cross_converts_through_its_rate_series():
     assert float(equity.iloc[-1]) == pytest.approx(START + 1_250.0)
 
 
+def test_an_open_position_is_never_marked_at_a_future_rate():
+    # GBPUSD prints 1.20 at 20:00 and 1.30 at 23:00; EURGBP has bars at 21:00 and 23:00.
+    # The 21:00 mark must use 1.20 (the latest known), not 1.30.
+    t20 = pd.Timestamp("2025-03-06 20:00", tz="UTC").value
+    t21, t23 = t20 + HOUR, t20 + 3 * HOUR
+    closes = {EURGBP: [(t21, 0.86), (t23, 0.86)]}
+    rates = {EURGBP: [(t20, 1.20), (t23, 1.30)]}
+    fills = [Fill(t21, EURGBP, 100_000, 0.85, 0.0, quote_rate=1.20, position_id="P-1")]
+    equity = fx_daily_equity(START, fills, closes, rates)
+    # 21:00 is 16:00 ET (trade date 3/6); 23:00 is 18:00 ET (3/7)
+    assert list(equity) == pytest.approx([START + 1_000 * 1.20, START + 1_000 * 1.30])
+
+
 def test_partial_closes_realise_each_part_at_its_own_rate():
     closes = [150.0, 151.0, 152.0]
     rates = {USDJPY: [(ts, 1 / px) for ts, px in _closes(closes)]}

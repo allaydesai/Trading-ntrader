@@ -4,15 +4,16 @@
 fill at, and a miss for every fill the cache had no rate for. Here a finished engine is read
 back: a miss (or FX fills with no feeder at all) fails the run, because Nautilus left the USD
 balance unchanged for that fill. Otherwise each position's quote-currency P&L converts at the
-rate of its last fill (its exit for a closed position), which is the rate the account itself
-used for a single-exit position.
+rate the account used for each of its reducing fills (for a single exit, the exit's rate).
 """
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 
 from nautilus_trader.backtest.engine import BacktestEngine
+from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.events import OrderFilled
 from nautilus_trader.model.objects import Money
 
@@ -61,8 +62,42 @@ def require_fx_rates(engine: BacktestEngine) -> FxRateBook | None:
     return book
 
 
+def _effective_rate(position, book: FxRateBook) -> float | None:
+    """USD per quote unit that converts ``position``'s whole realised P&L exactly.
+
+    The account converts each reducing fill's P&L at that fill's rate, so a position closed in
+    parts is replayed (average cost, as Nautilus' ``Position``) and the summed USD divided by
+    the summed quote P&L. A position with no realised P&L yet uses its last fill's rate.
+    """
+    quantity = average = quote_pnl = usd = 0.0
+    last_rate = None
+    multiplier = position.multiplier.as_double()
+    for fill in position.events:
+        rate = book.fill_rate(fill.trade_id)
+        if rate is None:
+            continue
+        last_rate = rate
+        signed = fill.last_qty.as_double() * (1.0 if fill.order_side == OrderSide.BUY else -1.0)
+        price = fill.last_px.as_double()
+        if quantity == 0.0 or (quantity > 0) == (signed > 0):
+            average = (quantity * average + signed * price) / (quantity + signed)
+            quantity += signed
+            continue
+        closed = math.copysign(min(abs(signed), abs(quantity)), quantity)
+        pnl = closed * (price - average) * multiplier
+        quote_pnl += pnl
+        usd += pnl * rate
+        quantity -= closed
+    if abs(quote_pnl) < 1e-9:
+        return last_rate
+    return usd / quote_pnl
+
+
 def exit_rates(engine: BacktestEngine) -> dict[str, Decimal]:
-    """USD per quote unit at each converting position's last fill, by position id.
+    """USD per quote unit converting each converting position's realised P&L, by position id.
+
+    For a single exit this is the exit fill's rate; for a position closed in parts, the
+    P&L-weighted rate of its reducing fills, so ``P&L x rate`` equals the account's USD.
 
     Raises:
         FxRateMissingError: as :func:`require_fx_rates`.
@@ -72,7 +107,7 @@ def exit_rates(engine: BacktestEngine) -> dict[str, Decimal]:
         return {}
     rates: dict[str, Decimal] = {}
     for position in engine.cache.positions():
-        rate = book.fill_rate(position.last_trade_id)
+        rate = _effective_rate(position, book)
         if rate is not None:
             rates[position.id.value] = Decimal(str(rate))
     return rates

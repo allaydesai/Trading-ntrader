@@ -8,11 +8,13 @@ never falls back to IBKR or the default NAUTILUS_PATH catalog.
 """
 
 import asyncio
+from datetime import datetime
 
 import structlog
 from nautilus_trader.model.currencies import USD
+from nautilus_trader.model.data import Bar
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
-from nautilus_trader.model.instruments import Equity
+from nautilus_trader.model.instruments import Equity, Instrument
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
@@ -277,15 +279,21 @@ def _check_bar_venue(bars, instrument, ticker: str, catalog_name: str) -> None:
 
 
 async def _load_rate_sources(
-    instrument, catalog_name, bar_type_spec, start, end, catalog_manager, metadata_service
-) -> list[tuple[list, object]]:
+    instrument: Instrument,
+    catalog_name: str,
+    bar_type_spec: str,
+    start: datetime,
+    end: datetime,
+    catalog_manager: CatalogManager,
+    metadata_service: MetadataService,
+) -> list[tuple[list[Bar], Instrument]]:
     """An FX cross's conversion-only pairs (GBPUSD for EURGBP), same catalog and timeframe.
 
     Every other instrument (USD-quote and USD-base pairs, equities, futures) needs none and
     costs no extra read. A run never proceeds unconverted: a conversion pair the catalog
     lacks, or has no bars for in the window, fails the load naming it (FX M3, design D4).
     """
-    sources = []
+    sources: list[tuple[list[Bar], Instrument]] = []
     for pair in conversion_pairs_for([instrument]):
         try:
             loaded = await load_from_catalog(

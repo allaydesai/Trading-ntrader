@@ -134,8 +134,11 @@ def fx_daily_equity(
         prices = pd.Series(dict(closes_by_instrument[instrument_id])).reindex(index).ffill().bfill()
         rates = pd.Series(1.0, index=index)
         if rates_by_instrument.get(instrument_id):
-            rate_points = pd.Series(dict(rates_by_instrument[instrument_id]))
-            rates = rate_points.reindex(index).ffill().bfill()
+            # forward-fill over every rate observation, then sample: never a future rate.
+            # Before the first rate nothing can be held (a fill needs one), so 0 is inert.
+            points = pd.Series(dict(rates_by_instrument[instrument_id])).sort_index()
+            union = points.index.union(pd.Index(index))
+            rates = points.reindex(union).ffill().reindex(index).fillna(0.0)
         held = _stepped(moves, index) * prices * multipliers[instrument_id]
         equity = equity + (held - _stepped(cost_moves[instrument_id], index)) * rates
     return equity.groupby(fx_trade_days(index)).last()

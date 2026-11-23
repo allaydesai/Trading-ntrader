@@ -152,17 +152,17 @@ Tests: `tests/component/core/test_fx_rates.py`,
   failed when persisting) instead of reporting a frozen balance. FX fills with no feeder at
   all fail the same way.
 - **Results in USD.** Trade rows store `profit_loss` in USD: the positions report's
-  `"100000.00 JPY"` is converted at the rate the account used for the position's last fill
-  (its exit), rounded to cents; a non-USD P&L with no rate fails the trade write. The
+  `"100000.00 JPY"` is converted at the rate(s) the account used for the position's
+  reducing fills (its exit, for a single exit), rounded to cents; a non-USD P&L with no rate fails the trade write. The
   analyzer gets each converted trade in USD, so `total_pnl`, `largest_win`, profit factor and
   the other P&L statistics are USD. Mark-to-market equity for an FX run books each fill's
   realised P&L at its own recorded rate (average cost per position, as Nautilus' `Position`)
   and marks open positions at the latest rate, one value per **17:00 New York trade date**;
   a flat run rebuilds to the engine's USD balance, so `metrics_basis` is `mark_to_market`.
   `config_snapshot` declares `account_currency` and `fx_pairs` (filled from M4).
-- A position closed in several parts converts its stored `profit_loss` at the last exit's
-  rate, while the account converted each part at its own fill's rate; the difference is the
-  rate drift between the exits. The balance and mark-to-market equity are exact.
+- A position closed in several parts converts each part at its own fill's rate, as the
+  account does: the stored `profit_loss` uses the P&L-weighted rate of its reducing fills
+  (`exit_rates`), so it equals the balance change (pinned: USD 497.24 for two halves).
 
 ### When a fill converts (the rate lag, pinned)
 
@@ -183,8 +183,12 @@ Worked numbers from the tests (100,000 USDJPY bought at 150.000, sold at 151.000
 USD 664.45 (1/150.5). EURGBP (P&L 1,000 GBP, GBPUSD 1.22 then 1.25): market and resting exits
 USD 1,250.00; a gap-aware release USD 1,220.00.
 
-So the lag is at most one bar of the **rate's** move, and only for pairs settling outside USD
-(USDJPY, crosses). It never touches fill prices or EURUSD/GBPUSD. On 1-hour bars it is
+So with a gap-free rate series the lag is at most one bar of the **rate's** move, and only for
+pairs settling outside USD (USDJPY, crosses). The feeder does not check a rate's age: if the
+rate source is missing bars (a gap in a cross's GBPUSD series), the cache keeps the last rate
+it had, and a fill after the gap converts at that older rate, so the lag can exceed one bar.
+Gap-aware runs refuse a rate source whose timestamps differ from the traded pair's;
+default-model runs accept it. It never touches fill prices or EURUSD/GBPUSD. On 1-hour bars it is
 typically under 0.1% of the trade's P&L. A gap-aware Sunday-open fill converts at the
 Friday close, so a weekend gap in USDJPY is the worst case. M3 does not close it: the rate at
 an intrabar fill is not knowable from one `MID` bar without looking ahead.

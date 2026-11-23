@@ -84,7 +84,7 @@ def _bars(instrument, ohlc: list) -> list[Bar]:
 class _TradeConfig(StrategyConfig, frozen=True):
     bar_type: str
     exit_bar: int = 3
-    exit_kind: str = "market"  # market | limit | moo
+    exit_kind: str = "market"  # market | limit | moo | partial (half on bar 2, half on bar 3)
     limit_px: str | None = None
 
 
@@ -114,7 +114,11 @@ class _Trade(Strategy):
         open_ids = [p.id for p in self.cache.positions_open(instrument_id=iid)]
         if not open_ids:
             return
-        if self.config.exit_kind == "limit" and self._bar == 2:  # HEDGING: close that position
+        if self.config.exit_kind == "partial" and self._bar in (2, 3):
+            half = Quantity.from_int(UNITS // 2)
+            order = self.order_factory.market(iid, OrderSide.SELL, half)
+            self.submit_order(order, position_id=open_ids[0])
+        elif self.config.exit_kind == "limit" and self._bar == 2:  # HEDGING: close that position
             price = self.cache.instrument(iid).make_price(Decimal(self.config.limit_px))
             order = self.order_factory.limit(iid, OrderSide.SELL, qty, price)
             self.submit_order(order, position_id=open_ids[0])
@@ -263,6 +267,32 @@ def test_a_traded_rate_source_listed_after_the_cross_is_still_added_first():
         assert _usd_change(engine) == Decimal("1250.00")
     finally:
         engine.dispose()
+
+
+def test_a_position_closed_in_parts_converts_each_part_at_its_own_rate():
+    # 50k sold at 150.500 (bar 2) and 50k at 151.000 (bar 3): the account books
+    # 25,000 JPY / 150.5 + 50,000 JPY / 151 = 166.11 + 331.13; the trade row must too.
+    engine, _ = _run(USDJPY, [(_bars(USDJPY, JPY_BARS), USDJPY)], exit_kind="partial")
+    try:
+        position = _closed(engine)
+        assert position.realized_pnl == Money(75_000, JPY)
+        change = _usd_change(engine)
+        assert change == Decimal("497.24")
+        rate = exit_rates(engine)[position.id.value]
+        assert usd_profit_loss("75000.00 JPY", rate) == change  # not 75,000 / 151 = 496.69
+    finally:
+        engine.dispose()
+
+
+def test_gap_aware_refuses_a_rate_source_with_bars_the_traded_pair_lacks():
+    eurgbp = [b for i, b in enumerate(_bars(EURGBP, EURGBP_BARS)) if i != 2]  # no bar 3
+    with pytest.raises(ValueError, match="same timestamps"):
+        _run(
+            EURGBP,
+            [(eurgbp, EURGBP)],
+            rate_sources=[(_bars(GBPUSD, GBPUSD_BARS), GBPUSD)],
+            fill_model=make_fill_model(1, kind="gap_aware"),
+        )
 
 
 # -- failures ------------------------------------------------------------------------------------
