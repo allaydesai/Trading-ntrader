@@ -1,0 +1,37 @@
+# configs/bollinger_fx.yaml
+# Bollinger Band reversal with the weekly SMA filter on spot FX (FX M6), daily MID bars
+# from the `firstrate-fx` catalog.
+#
+#   backtest run configs/bollinger_fx.yaml --catalog firstrate-fx
+#   backtest run configs/bollinger_fx.yaml --catalog firstrate-fx --symbol USDJPY
+#   backtest run configs/bollinger_fx.yaml --catalog firstrate-fx --units 100000
+#
+# FX differences from equities:
+# - Risk sizing prices the ATR stop in USD: `max_risk_pct` of `portfolio_value` over a stop
+#   quoted in yen is converted at 1/price for USDJPY. Units are base-currency units, floored
+#   with no minimum of one. `units: N` (or `--units N`) trades exactly N base units instead.
+# - Bracket stop/target prices keep the pair's precision (EURUSD 5 dp, USDJPY 3 dp).
+# - Weekly SMA buckets follow the New York FX trade date: the Sunday 17:00 ET bar opens the
+#   new week.
+# - Financing (rollover interest) is not modelled; see docs/agent/fx-backtesting.md.
+strategy_path: "src.core.strategies.custom.bollinger_reversal:BollingerReversalStrategy"
+config_path: "src.core.strategies.custom.bollinger_reversal:BollingerReversalConfig"
+
+config:
+  instrument_id: "EUR/USD.IDEALPRO"
+  bar_type: "EUR/USD.IDEALPRO-1-DAY-MID-EXTERNAL"
+
+  portfolio_value: 1000000   # Should match backtest.initial_capital (USD)
+  max_risk_pct: 1.0          # USD 10,000 at risk per trade
+  daily_bb_period: 20
+  daily_bb_std_dev: 2.0
+  weekly_ma_period: 20
+  weekly_ma_tolerance_pct: 0.05
+  stop_loss_atr_mult: 2.0
+  take_profit_rr: 2.0
+  atr_period: 14
+
+backtest:
+  start_date: "2015-01-02"
+  end_date: "2025-12-31"
+  initial_capital: 1000000

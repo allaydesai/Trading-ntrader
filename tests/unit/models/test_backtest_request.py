@@ -331,3 +331,13 @@ class TestBacktestRequestFillModel:
     def test_the_riptide_config_asks_for_the_gap_aware_model(self):
         request = BacktestRequest.from_yaml_file("configs/riptide.yaml", persist=False)
         assert request.fill_model == "gap_aware"
+
+    @pytest.mark.parametrize("name", ["riptide_fx", "bollinger_fx"])
+    def test_the_fx_strategy_configs_run_eurusd_daily_mid_from_2015(self, name):
+        """FX M6 (task 6.3): ``--symbol USDJPY`` switches the pair; the M5 resolver maps
+        ``EUR/USD`` to the catalog ticker."""
+        request = BacktestRequest.from_yaml_file(f"configs/{name}.yaml", persist=False)
+        assert (request.symbol, request.instrument_id) == ("EUR/USD", "EUR/USD.IDEALPRO")
+        assert request.bar_type == "1-DAY-MID"
+        assert request.start_date.year == 2015 and request.end_date.year == 2025
+        assert request.starting_balance == request.strategy_config["portfolio_value"]
