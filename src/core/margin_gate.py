@@ -288,12 +288,19 @@ def _reprice_denial(
         return None
     if order.parent_order_id is not None:
         return None  # contingent children are not margined as entries (denial_reason)
-    leaves = order.leaves_qty.as_decimal()
-    after = min(leaves, quantity) if quantity is not None else leaves
-    before = requirement.initial_usd(leaves, order, cache)
+    # Nautilus 1.220 margins a working order on its full quantity (not leaves_qty)
+    held_qty = order.quantity.as_decimal()
+    after = min(held_qty, quantity) if quantity is not None else held_qty
+    before = requirement.initial_usd(held_qty, order, cache)
     new = requirement.initial_usd(after, order, cache, reference)
     if before is None or new is None or new <= before:
         return None
+    if _other_price_modify_pending(cache, terms, order):
+        return (
+            f"{requirement.prefix}_MODIFY_PENDING: another modify on "
+            f"{order.instrument_id.venue} is not applied yet; a reprice that raises margin "
+            "waits for it"
+        )
     extra, free = new - before, _free_usd(cache, terms, order.instrument_id)
     if extra <= free:
         return None
@@ -301,6 +308,22 @@ def _reprice_denial(
         f"{DENIAL_REASON}: modify of {order.client_order_id} to {reference} raises "
         f"{order.instrument_id} initial margin by {extra} USD, free={free} USD"
     )
+
+
+def _other_price_modify_pending(cache, terms, order: Order) -> bool:
+    """Whether another price-sensitive order on the venue has a modify not yet applied.
+
+    Its margin change is not reserved until the venue applies it, so a second margin-raising
+    reprice could pass against the same free balance; it waits instead (as quantity modifies
+    wait for their own earlier modify).
+    """
+    for other in cache.orders_inflight(venue=order.instrument_id.venue):
+        requirement = terms.get(other.instrument_id)
+        if other.client_order_id == order.client_order_id or requirement is None:
+            continue
+        if requirement.price_sensitive and other.status == OrderStatus.PENDING_UPDATE:
+            return True
+    return False
 
 
 def _free_usd(cache, terms, instrument_id: InstrumentId) -> Decimal:

@@ -24,15 +24,15 @@ EURGBP = build_fx_pair(get_pair_spec("EURGBP"))
 _IDS = iter(range(1, 10_000))
 
 
-def _order(instrument, qty: int, price: str | None = None):
+def _order(instrument, qty: int, price: str | None = None, leaves: int | None = None, **kw):
     return SimpleNamespace(
         instrument_id=instrument.id,
         side=OrderSide.BUY,
         quantity=Quantity.from_int(qty),
-        leaves_qty=Quantity.from_int(qty),
+        leaves_qty=Quantity.from_int(qty if leaves is None else leaves),
         price=Price.from_str(price) if price else None,
         trigger_price=None,
-        status=OrderStatus.INITIALIZED,
+        status=kw.get("status", OrderStatus.INITIALIZED),
         is_reduce_only=False,
         parent_order_id=None,
         client_order_id=ClientOrderId(f"O-{next(_IDS)}"),
@@ -42,8 +42,9 @@ def _order(instrument, qty: int, price: str | None = None):
 class _Cache:
     """No bars and no GBP rate yet: only limit orders can be priced (and only USD quotes)."""
 
-    def __init__(self, free: str) -> None:
+    def __init__(self, free: str, inflight=()) -> None:
         self._free = Decimal(free)
+        self._inflight = list(inflight)
 
     def instrument(self, instrument_id):
         return {EURUSD.id: EURUSD, EURGBP.id: EURGBP}[instrument_id]
@@ -61,15 +62,15 @@ class _Cache:
         )
 
     def orders_inflight(self, venue=None):
-        return []
+        return self._inflight
 
     def position(self, position_id):
         return None
 
 
-def _gate(free: str = "10000") -> MarginGate:
+def _gate(free: str = "10000", inflight=()) -> MarginGate:
     terms = {i.id: FxRequirement(Decimal("0.03")) for i in (EURUSD, EURGBP)}
-    return MarginGate(risk_engine=None, cache=_Cache(free), msgbus=None, terms=terms)
+    return MarginGate(risk_engine=None, cache=_Cache(free, inflight), msgbus=None, terms=terms)
 
 
 def test_an_unpriceable_sibling_does_not_waive_a_priced_over_margin_entry():
@@ -87,3 +88,33 @@ def test_an_unpriceable_order_alone_is_passed_on():
 
 def test_a_priced_entry_within_margin_passes():
     assert _gate().denial_reason([_order(EURUSD, 300_000, "1.10000")], None) is None  # 9,900
+
+
+class TestReprice:
+    def test_a_partly_filled_order_is_margined_on_its_full_quantity_as_nautilus_does(self):
+        # 300,000 at 1.10 with 200,000 filled: Nautilus 1.220 margins order.quantity, so
+        # 1.10 -> 1.12 adds 300,000 x 0.02 x 3% = 180 USD (not 60 on the 100,000 left).
+        order = _order(EURUSD, 300_000, "1.10000", leaves=100_000, status=OrderStatus.ACCEPTED)
+        reason = _gate(free="100").modify_denial_reason(order, None, Price.from_str("1.12000"))
+        assert reason is not None and reason.startswith(DENIAL_REASON)
+        assert "by 180.00 USD" in reason
+
+    def test_a_margin_raising_reprice_waits_for_another_pending_modify(self):
+        # Two accepted limits could each pass against the same free 100 USD while both
+        # increases are still pending; the second waits until the first is applied.
+        other = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.PENDING_UPDATE)
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.PENDING_UPDATE)
+        gate = _gate(free="100", inflight=[other, order])
+        reason = gate.modify_denial_reason(order, None, Price.from_str("1.12000"))  # +60
+        assert reason is not None and reason.startswith("FX_MODIFY_PENDING")
+
+    def test_a_margin_raising_reprice_alone_within_free_passes(self):
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.PENDING_UPDATE)
+        gate = _gate(free="100", inflight=[order])  # its own pending state does not count
+        assert gate.modify_denial_reason(order, None, Price.from_str("1.12000")) is None
+
+    def test_a_lowering_reprice_passes_whatever_is_pending(self):
+        other = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.PENDING_UPDATE)
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED)
+        gate = _gate(free="0", inflight=[other])
+        assert gate.modify_denial_reason(order, None, Price.from_str("1.05000")) is None
