@@ -144,6 +144,9 @@ still passes unchanged.
       `pair_specs.yaml` `as_of`/`source` updated. **Open (2026-11-22):** M4 ships the approved
       working defaults, still `status: UNVERIFIED` in `pair_specs.yaml` and flagged
       "UNVERIFIED, Allay to confirm" in `docs/agent/fx-backtesting.md`.
+      **Partial (2026-11-23, PR #68):** the commission (0.20 bp, USD 2.00 minimum) is VERIFIED
+      against IBKR's published pricing page; margin, spread, min-tick, size and the IDEALPRO
+      minimum remain UNVERIFIED.
 - [x] 4.8 Manual smoke: `sma_crossover` EURUSD and USDJPY 1-hour, 2024 H1, persisted; one trade
       per pair hand-checked (pips, USD P&L, commission, spread).
       **Result (2026-11-22):** run on the M3 smoke window (USDJPY 1-hour, 2024-01-02 to
@@ -192,8 +195,10 @@ D12 ruling). Equity and futures output is byte-identical to the pre-M5 goldens.
       component tests red first (`tests/component/api/test_fx_dashboard.py`), then the
       panel, trades table, export, list badge and compare; regenerate `FROZEN_VIEWS` for
       exactly the approved files and record the diff in `design.md`.
-- [ ] 5.7 Manual: FX run pages and trades tables on 127.0.0.1:3000 return 200 with the FX
-      numbers.
+- [x] 5.7 Manual: FX run pages and trades tables on 127.0.0.1:3000 return 200 with the FX
+      numbers. **Result (2026-11-23):** verified in the end-to-end QA
+      (`docs/agent/fx-qa-2026-11-23.md`, "Dashboard"): run list FX badge, run page FX panel,
+      trades table, CSV/JSON/report exports and the chart APIs all return 200 with the numbers.
 - [x] 5.8 Import summary (found in M2/M4 smokes): "Flagged (OHLC)" counted the FX counters
       (rounding, session anomalies) as OHLC flags; `ImportResult.ohlc_flags` splits them into
       an "Other warnings" row (shown only when non-zero). The FX dry-run labels `-MID`.
@@ -222,10 +227,10 @@ one existing equity smoke).
       `configs/bollinger_fx.yaml`.
 - [x] 6.4 Integration, forked: Bollinger on trimmed real EURUSD daily places brackets that are
       not denied; Riptide on USDJPY daily sizes at notional.
-- [ ] 6.5 Manual smoke and the `docs/agent/fx-backtesting.md` strategy guide (unported
+- [x] 6.5 Manual smoke and the `docs/agent/fx-backtesting.md` strategy guide (unported
       strategies listed); archive this change (`/openspec-archive-change`).
-      **Smoke and guide done (2026-11-23)**, archive open: it follows the merge of #63, #64,
-      the strategies PR and the M6 pin PR (the pin then moves to the strategies merge commit).
+      **Smoke and guide done (2026-11-23)**; archived 2026-11-23 after #63-#66 and the
+      strategies PRs merged (main `f3a5809`, strategies pinned at `857bbc0`).
       Four persisted 1-DAY runs 2015-2025, no order denied: bollinger EURUSD 92 trades / USDJPY
       104, riptide EURUSD 16 / USDJPY 24; one trade per strategy hand-checked to the cent
       (`docs/agent/fx-backtesting.md`, "Smoke (task 6.5)").
@@ -268,6 +273,22 @@ Allay's rulings of 2026-11-23 on the QA's open questions (design D17-D21).
       `docs/agent/fx-backtesting.md` and the QA notes; no code change.
 - [ ] Q.7 Still open for Allay: Q4 (riptide `limit_offset_pct` untuned), Q6 (UNVERIFIED cost
       and margin values, task 4.7).
+
+## Open follow-ups at archive (2026-11-23)
+
+The change is archived with these items still open. They are not done; each is tracked here
+and in `docs/agent/fx-backtesting.md`.
+
+- **4.7 / Q.7 (Q6): UNVERIFIED cost and margin values.** Commission VERIFIED 2026-11-23
+  (PR #68). Allay to confirm the margin, spread, min-tick and size values against the IBKR
+  account, then set `status`/`source`/`as_of` in `src/services/fx/pair_specs.yaml` and drop
+  the UNVERIFIED flags in `docs/agent/fx-backtesting.md`.
+- **Q.7 (Q4): riptide `limit_offset_pct` untuned.** `configs/riptide_fx.yaml` ships `0.5`
+  (UNTUNED); Allay to confirm or tune.
+- **2.8 remainder: raw data README.** `/srv/market-data/raw/README.md` still says FX has "no
+  parser yet"; it should read "fx: yes". The raw tree is read-only to agents, so Allay edits it.
+- **bollinger_reversal on precision-4 equities** (M6 note, pre-existing, not FX): its 2-dp
+  brackets are rejected on precision-4 catalog equities (0 trades).
 
 ## Not in these milestones
 

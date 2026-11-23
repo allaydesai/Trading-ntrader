@@ -13,8 +13,8 @@ The account return on USD equity stays the headline (design D10); the trade rows
 is already USD (M3). USD notional needs the quote/USD rate at entry: a USD-quote pair's is 1, a
 USD-base pair's notional is its quantity, and a cross's rate is not stored, so a cross has no
 notional, margin or leverage figure (``None``). Financing (rollover) is not modelled (D9); every
-FX report carries :data:`FINANCING_NOTE`. See ``openspec/changes/add-fx-backtesting/design.md``
-section 11.
+FX report carries :data:`FINANCING_NOTE`. See section 11 of
+``openspec/changes/archive/2026-11-23-add-fx-backtesting/design.md``.
 """
 
 from __future__ import annotations
