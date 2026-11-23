@@ -28,7 +28,7 @@ from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, TriggerType
 from nautilus_trader.model.events import OrderDenied, OrderModifyRejected
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments import CurrencyPair
@@ -71,7 +71,7 @@ def _bars(instrument: CurrencyPair, closes: list[str]) -> list[Bar]:
 
 class _ScriptConfig(StrategyConfig, frozen=True):
     bar_type: str
-    script: tuple  # (bar number, "BUY"|"SELL"|"CLOSE"|"LIMIT"|"MODIFY", units, price or None)
+    script: tuple  # (bar number, action, units, price or None): see _Script.on_bar
 
 
 class _Script(Strategy):
@@ -100,6 +100,16 @@ class _Script(Strategy):
                 px = instrument.make_price(Decimal(price))
                 self.resting = self.order_factory.limit(
                     iid, OrderSide.BUY, Quantity.from_int(units), px
+                )
+                self.submit_order(self.resting)
+            elif action == "TRAIL":  # a parentless trailing stop market entry above the market
+                self.resting = self.order_factory.trailing_stop_market(
+                    iid,
+                    OrderSide.BUY,
+                    Quantity.from_int(units),
+                    trailing_offset=Decimal("0.07000"),  # 1.27 never improves on it: no trail
+                    trigger_price=instrument.make_price(Decimal(price)),
+                    trigger_type=TriggerType.DEFAULT,
                 )
                 self.submit_order(self.resting)
             elif action == "MODIFY":
@@ -244,6 +254,45 @@ def test_a_reprice_raising_fx_margin_past_free_is_rejected(new_price: str, rejec
         else:
             assert strategy.modify_rejections == []
             assert str(order.price) == new_price
+    finally:
+        engine.dispose()
+
+
+def test_an_applied_modify_on_a_trailing_entry_frees_later_entries() -> None:
+    # CodeRabbit, PR #63: an OrderUpdated on a trailing stop may be a trail, so the old
+    # event counter never cleared its applied modify and refused every later FX entry
+    # FX_MODIFY_PENDING until the order closed. (Nautilus 1.220 lets a strategy change only a
+    # trailing stop's quantity.) A 100,000 EURUSD buy trailing stop market triggering at
+    # 1.25000 holds 3,750 of 10,000; its decrease to 90,000 is applied by the venue; a 150,000
+    # market buy at 1.20000 then needs 5,400 of the 6,625 free and must fill.
+    script = [
+        (1, "TRAIL", 100_000, "1.25000"),
+        (2, "MODIFY", 90_000, None),
+        (3, "BUY", 150_000, None),
+    ]
+    engine, strategy, gate = _run(EURUSD, ["1.20000"] * 4, script, 10_000)
+    try:
+        trailing = engine.cache.order(strategy.resting.client_order_id)
+        assert trailing.quantity == 90_000 and trailing.is_open
+        assert strategy.modify_rejections == [] and strategy.denials == []
+        assert gate is not None and gate.denied_count == 0
+        assert len(engine.cache.positions_open()) == 1
+        assert len(gate._pending) == 0
+    finally:
+        engine.dispose()
+
+
+def test_a_resting_cross_entry_without_a_usd_rate_yet_is_refused() -> None:
+    # GBPUSD starts an hour late: the bar-1 EURGBP limit cannot be margined in USD. It would
+    # rest and could fill once the rate exists, unchecked, so the gate refuses it.
+    late_gbpusd = [(_bars(GBPUSD, ["1.25000"] * 4)[1:], GBPUSD)]
+    script = [(1, "LIMIT", 100_000, "0.84000"), (2, "LIMIT", 100_000, "0.84000")]
+    engine, strategy, gate = _run(EURGBP, ["0.85000"] * 4, script, 10_000, late_gbpusd)
+    try:
+        assert len(strategy.denials) == 1
+        assert strategy.denials[0].startswith("FX_MARGIN_UNPRICEABLE")
+        assert gate is not None and gate.denied_count == 1
+        assert strategy.resting.is_open  # bar 2 has the rate: 100,000 x 0.84 x 1.25 x 3%
     finally:
         engine.dispose()
 

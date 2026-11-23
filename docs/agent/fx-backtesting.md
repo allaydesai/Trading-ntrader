@@ -206,12 +206,16 @@ an intrabar fill is not knowable from one `MID` bar without looking ahead.
 ## Costs, margin and sizing (M4)
 
 Code: `src/core/fx_costs.py` (`FxCommissionModel`, `fx_terms`, `fx_snapshot`),
-`src/core/margin_gate.py` (`MarginGate`, `FxRequirement`), `src/core/backtest_venue.py`
-(`cost_snapshot`), `src/core/position_sizing.py` (`quote_to_account_rate`,
-`fx_units_for_notional`, `fx_units_for_risk`, `whole_units`), `src/core/fx_rates.py`
-(`usd_per_quote`, `fx_units`). Tests: `tests/component/core/test_fx_costs.py`,
-`tests/component/core/test_fx_strategy_sizing.py`, `tests/unit/test_position_sizing.py`,
+`src/core/margin_gate.py` (`MarginGate`, `FxRequirement`), `src/core/pending_modifies.py`
+(`PendingModifies`), `src/core/backtest_venue.py` (`cost_snapshot`),
+`src/core/position_sizing.py` (`quote_to_account_rate`, `fx_units_for_notional`,
+`fx_units_for_risk`, `whole_units`), `src/core/fx_rates.py` (`usd_per_quote`, `fx_units`).
+Tests: `tests/component/core/test_fx_costs.py`, `tests/component/core/test_fx_strategy_sizing.py`,
+`tests/component/core/test_margin_gate_fx.py`, `tests/unit/test_position_sizing.py`,
 `tests/integration/core/test_fx_margin_engine.py` (forked).
+
+`pyproject.toml` pins `nautilus-trader<1.222`: 1.222 and later shrink USDJPY positions when FX
+commission is charged, which changes every USDJPY result here (the smoke below included).
 
 ### What a fill costs (all UNVERIFIED defaults)
 
@@ -256,30 +260,34 @@ sum of the trade rows equals the USD balance change, and mark-to-market reconcil
   unit x margin_pct`). An entry needing more than the free USD balance is denied
   `MARGIN_EXCEEDS_FREE_BALANCE: 400000 EUR/USD.IDEALPRO unit(s) need 13200.00 USD initial
   margin, free=10000.00 USD`; closes are credited and never denied; a quantity-increase modify
-  is rejected `FX_QTY_INCREASE_NOT_SUPPORTED` (and `FX_MODIFY_PENDING` while one is open), and
-  a new limit or trigger that raises an entry's margin by more than is free is rejected
-  `MARGIN_EXCEEDS_FREE_BALANCE` (futures margin ignores price, so their reprices pass). The
-  increase is computed on the order's full quantity, as Nautilus margins it, and a
-  margin-raising reprice is refused `FX_MODIFY_PENDING` while another FX modify on the venue is
-  not yet applied (its increase is not reserved yet). "Not yet applied" is read from each
-  order's events, not its status: Nautilus restores an order's status when a later modify is
-  rejected even while an earlier one is still queued. An `OrderUpdated` counts as the answer to
-  a modify only on a plain order; on order kinds Nautilus can update unsolicited (trailing
-  stops, market-to-limit, reduce-only, contingent, emulated and exec-algorithm orders) only a
-  rejection or the order closing resolves it. When in doubt the modify stays pending, so a
-  resize or margin-raising reprice waits rather than overcommitting margin (no strategy in the
-  repo modifies orders today). The same counting backs the one-quantity-modify-at-a-time rule
-  for futures and FX. A new FX entry also waits (`FX_MODIFY_PENDING`) while any margined FX
-  entry (parentless, not reduce-only) on the venue has an unresolved modify: the gate cannot
-  know how much margin that pending reprice adds (no per-order state; Nautilus keeps the
-  requested price only in the exchange's queue), so it counts it as committed in full. Resizes
-  need no such check: increases are always refused and decreases release margin. The
-  reference price is the order's limit or stop trigger, else the latest `MID` price. Futures
-  names, reasons and behaviour are unchanged (`src/core/futures_margin_gate.py` keeps them).
-- Limit: an order the gate cannot price (no bar yet, or a cross before its first GBPUSD bar) is
-  passed through (its priced siblings in an order list are still checked); a fill in that state has no rate either and the M3 guard fails the run, but a
-  resting order submitted then and filled later goes unchecked. Same known limits as futures: no
-  unrealised P&L in buying power, no margin calls or liquidation.
+  is rejected `FX_QTY_INCREASE_NOT_SUPPORTED` (and `FX_MODIFY_PENDING` while an earlier modify
+  of the same order is unanswered), and a new limit or trigger that raises an entry's margin by
+  more than is free is rejected `MARGIN_EXCEEDS_FREE_BALANCE` (futures margin ignores price, so
+  their reprices pass). A quantity-only decrease releases margin; a decrease that also changes
+  the limit or trigger is checked like any reprice, on the new quantity, and can be refused
+  `MARGIN_EXCEEDS_FREE_BALANCE` (100,000 EURUSD at 1.10 to 99,000 at 1.20 raises margin from
+  USD 3,300 to 3,564). The increase is computed on the order's full quantity, as Nautilus
+  margins it. The reference price is the order's limit or stop trigger, else the latest `MID`
+  price. Futures names, reasons and behaviour are unchanged (`src/core/futures_margin_gate.py`
+  keeps them).
+- **Pending modifies** (`src/core/pending_modifies.py`): Nautilus reserves an order's margin at
+  its current price until the venue applies a modify, so the gate records each modify it passes
+  on (requested quantity, price, trigger) per client order id. Free balance, for new entries and
+  for other reprices alike, is less each order's largest still-unapplied increase; the order's
+  own new reprice replaces its pending one rather than adding to it. A request settles when the
+  venue rejects it, when an `OrderUpdated` answers it, or when the order closes (filled,
+  cancelled, expired). On order kinds Nautilus also updates unsolicited (trailing stops,
+  market-to-limit, reduce-only, contingent, emulated and exec-algorithm orders) an
+  `OrderUpdated` answers only when it carries the requested values, so a trail mid-modify keeps
+  the increase held while an applied modify clears it. The gate's own rejection, and a risk
+  engine rejection of the modify being passed on, never settle an earlier request. Reduce-only
+  and contingent child orders hold nothing (they are not margined as entries).
+- An FX entry that can rest (any type but market and market-to-limit, including a trailing
+  stop submitted without a trigger) but cannot be priced in USD yet (no bar, or a cross before
+  its first GBPUSD bar) is denied `FX_MARGIN_UNPRICEABLE`: it could otherwise fill later,
+  unmargined. A market order in that state is still passed on: it fills at once and the M3
+  guard fails a fill without a rate, or, with no market yet, the venue rejects it. Same known
+  limits as futures: no unrealised P&L in buying power, no margin calls or liquidation.
 
 ### Sizing (D13)
 

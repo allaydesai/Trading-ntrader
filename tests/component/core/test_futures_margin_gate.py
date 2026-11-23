@@ -262,23 +262,38 @@ class TestModifyRouting:
         assert risk.rejected == [] and gate.denied_count == 0
 
 
-class TestNoPendingModifyState:
-    """With no hold bookkeeping, the round-3 failure modes cannot occur."""
+class TestPendingModifyState:
+    """The gate's only state is which passed modifies are unanswered; it never frees margin
+    early, and the round-3 re-entrancy failure cannot occur."""
 
-    def test_the_gate_keeps_no_per_order_state(self):
+    def test_the_gates_only_state_is_the_pending_modify_ledger(self):
         gate = _gate(_Cache(free=0))
-        assert set(vars(gate)) == {"_risk", "_cache", "_msgbus", "_terms", "denied_count"}
+        assert set(vars(gate)) == {
+            "_risk",
+            "_cache",
+            "_msgbus",
+            "_terms",
+            "_pending",
+            "denied_count",
+        }
+        assert len(gate._pending) == 0
 
-    def test_pending_reductions_release_nothing_early(self):
-        """3 working lots, modifies to 1 then 2 forwarded: new entries still see only what
-        Nautilus has actually released (here nothing yet), never the pending targets."""
+    def test_a_pending_reduction_releases_nothing_early(self):
+        """3 working lots, modify to 1 forwarded: new entries still see only what Nautilus
+        has actually released (here nothing yet), never the pending target."""
         working = _working(3)
         risk = _Risk()
         gate = _gate(_Cache(free=0, orders=[working]), risk)
         gate.execute(_modify_command(working, 1))
-        gate.execute(_modify_command(working, 2))
-        assert len(risk.forwarded) == 2
+        assert len(risk.forwarded) == 1
         assert gate.denial_reason([_order(qty=1)], None) is not None  # free is still 0
+
+    def test_futures_reprices_hold_no_margin(self):
+        """Futures margin ignores price: a pending price-only modify adds nothing."""
+        working = _working(1)
+        gate = _gate(_Cache(free=27_500, orders=[working]), _Risk())
+        gate.execute(_modify_command(working, None))
+        assert gate.denial_reason([_order()], None) is None
 
     def test_a_reentrant_submit_during_forwarding_cannot_double_resolve(self):
         """The old IndexError: a strategy submitting from on_order_modify_rejected while the
@@ -375,9 +390,10 @@ class TestOneQuantityModifyAtATime:
         _strategy_modify(gate, working, 3)
         assert len(risk.rejected) == 1 and risk.rejected[0].startswith(MODIFY_PENDING_REASON)
 
-    def test_pending_without_this_commands_own_event_means_an_earlier_modify(self):
-        """A command that did not come through Strategy.modify_order finds the order pending."""
+    def test_a_modify_the_gate_never_passed_on_is_not_pending(self):
+        """What is pending comes from the gate's own record, not the status: Nautilus sets
+        PENDING_UPDATE for the very command being checked (Strategy.modify_order)."""
         gate, risk, working = self._setup()
         working.status = OrderStatus.PENDING_UPDATE
         gate.execute(_modify_command(working, 1))
-        assert len(risk.rejected) == 1 and risk.rejected[0].startswith(MODIFY_PENDING_REASON)
+        assert len(risk.forwarded) == 1 and risk.rejected == []

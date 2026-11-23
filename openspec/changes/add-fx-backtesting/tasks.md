@@ -161,7 +161,14 @@ still passes unchanged.
   `profit_loss` now deducts the USD commissions (Nautilus nets commission into `realized_pnl`
   only in the settlement currency). The M3 conversion test runs at `cost_multiplier=0` to keep
   its amounts pure conversion. The FX modify reasons are `FX_QTY_INCREASE_NOT_SUPPORTED` and
-  `FX_MODIFY_PENDING`; the gate passes an order it cannot price (no bar or cross rate yet).
+  `FX_MODIFY_PENDING`. PR #63 follow-up (2026-11-23): pending modifies are accounted per order
+  (`PendingModifies`: each passed modify's unapplied margin increase is held back from free
+  balance until the venue applies or rejects it or the order closes), replacing the event
+  counter that never cleared on trailing/contingent/reduce-only/emulated/exec-algorithm orders
+  and so refused every later FX entry `FX_MODIFY_PENDING`; a resting entry the gate cannot price
+  is denied `FX_MARGIN_UNPRICEABLE` (market orders still pass); `nautilus-trader<1.222` pinned
+  (1.222+ shrinks USDJPY positions with FX commission). Smoke rerun: USDJPY January 2024 still
+  USD -1,532.09 (12 positions, 23 orders).
 
 ## M5. Reporting, dashboard and CLI
 
