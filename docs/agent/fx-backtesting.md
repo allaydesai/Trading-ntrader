@@ -400,7 +400,7 @@ What the submodule strategies do on a spot pair (`is_fx_pair`, design section 10
 |---|---|---|
 | Sizing (`_sizing.py`) | `position_size_pct` of `portfolio_value` in USD -> base units (`fx_units_for_budget`) | `max_risk_pct` of `portfolio_value` over the 2 x ATR stop, priced in USD (`fx_units_for_risk_budget`: USDJPY yen at `1/price`, exact for a USD base) |
 | Rounding | floor to `size_increment`, no minimum of 1 (0 = no order); `units` replaces the budget (FX only, N >= 1) | same |
-| Prices | limit and ATR stop half-up to the pair's precision (cents for equities, as before) | bracket stop/target to the pair's precision (`f"{x:.{precision}f}"`, the old equity formatting) |
+| Prices | FX: limit and ATR stop half-up to the pair's precision; everything else cents, as before | FX: bracket stop/target at the pair's precision (`f"{x:.{precision}f}"`); everything else 2 dp, as before |
 | FX-only behaviour | ADV dollar-volume filter skipped (FirstRate volume is a tick count), logged once on start | weekly SMA buckets by `fx_trade_date` (the Sunday 17:00 ET bar opens the new week); log lines print the quote currency |
 | Cross pairs | the quote/USD rate from the cache (`fx_quote_rates`); none yet raises, as `sma_crossover` | same |
 
@@ -412,8 +412,16 @@ daily ATRs on EURUSD, and every one of 80 EURUSD setups (2015-2025) expired unfi
 
 `make_price` is not used for these prices although design section 10 names it: it rounds
 half-even (100.125 -> 100.12, where Riptide's cents rounding gives 100.13) and its float path
-differs from `f"{x:.2f}"` (100.135 -> 100.14 vs 100.13), so it would change equity output.
-Each strategy keeps its own rounding rule at the instrument's precision instead.
+differs from `f"{x:.2f}"` (100.135 -> 100.14 vs 100.13). The precision change is FX-only:
+`firstrate-stocks` equities are price precision **4** (not 2, as section 10 assumed), and
+rounding them at 4 dp moved Riptide AAPL 2015-2024 from 3.50% to 3.49%. With the FX gate both
+strategies' AAPL 1-day 2015-2024 results are byte-identical to the pre-M6 submodule.
+
+**Pre-existing equity bug (not fixed here, open for Allay):** `bollinger_reversal`'s 2-dp
+brackets are rejected on a precision-4 catalog equity ("Invalid trigger price precision ...
+was 2 when AAPL.NASDAQ price precision is 4"), so it trades nothing on `firstrate-stocks`
+(AAPL 2015-2024: 0 trades). Using the instrument's precision for every instrument fixes it
+(82 trades, +1.57%) but changes equity results, which M6's acceptance forbids.
 
 **Not ported** (still size FX like equities, `notional / price` with a minimum of one, and
 format prices at 2 dp where they set any): `sma_crossover_long_only`, `apolo_rsi`,

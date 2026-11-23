@@ -227,8 +227,11 @@ one existing equity smoke).
   `fx_units_for_risk_budget`/`fx_quote_rates` (this PR), so it needs #63 and this PR on main.
   Core additions: `fx_units_for_risk_budget` (whole units; a USD base sized as `risk x price /
   stop`, since the reciprocal rate floored an exact 299,998 to 299,997) and `fx_quote_rates`.
-  Prices keep each strategy's own rounding at the instrument's precision, not `make_price`
-  (half-even, would change equity output; design section 10 note). `riptide_fx.yaml` uses
+  FX prices keep each strategy's own rounding at the pair's precision, not `make_price`
+  (half-even); non-FX keeps cents / 2 dp, since catalog equities are precision 4 (design
+  section 10 note). Equity parity: riptide and bollinger_reversal AAPL 1-day 2015-2024 are
+  byte-identical to the pre-M6 submodule. Open: bollinger_reversal's 2-dp brackets are
+  rejected on precision-4 catalog equities (0 trades; pre-existing, not changed here). `riptide_fx.yaml` uses
   `limit_offset_pct: 0.5` (at 2% all 80 EURUSD setups expired unfilled; UNTUNED, Allay to
   confirm). The smoke found a Bollinger bug outside FX: YAML numbers arrive as float and
   `Decimal x float` crashed every config-file run's first entry; fixed (coerced). The
