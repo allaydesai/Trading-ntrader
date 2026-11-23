@@ -40,6 +40,11 @@ def determine_exit_code(results: list[ImportResult]) -> int:
     return 0
 
 
+def _ohlc_count(result: ImportResult) -> int:
+    """How many of ``result.warnings`` are OHLC flags (all of them when unspecified)."""
+    return len(result.warnings) if result.ohlc_flags is None else result.ohlc_flags
+
+
 def _bucket_results(results: list[ImportResult]) -> dict[str, int]:
     """Return the four Story 1-7 outcome buckets plus totals.
 
@@ -57,7 +62,10 @@ def _bucket_results(results: list[ImportResult]) -> dict[str, int]:
     # count / sample point) is reported once — under Failures — rather than
     # double-counted here. Flagged tickers' violations are still logged
     # (ohlc_sanity_flagged) regardless of final status, so nothing is silent.
-    flagged = sum(1 for r in results if r.warnings and r.status != "failed")
+    # An FX/futures result says how many of its warnings are OHLC flags (``ohlc_flags``);
+    # the rest (rounding, session anomalies, out-of-order rows) count as "other" (FX M5).
+    flagged = sum(1 for r in results if _ohlc_count(r) and r.status != "failed")
+    other = sum(1 for r in results if len(r.warnings) > _ohlc_count(r) and r.status != "failed")
     # "Total processed" (AC-4) excludes skipped + failed.
     processed_rows = sum(r.row_count for r in results if r.outcome in ("new", "reimported"))
     return {
@@ -67,6 +75,7 @@ def _bucket_results(results: list[ImportResult]) -> dict[str, int]:
         "skipped": skipped,
         "failed": failed,
         "flagged": flagged,
+        "other_warnings": other,
         "total_rows": processed_rows,
         "total_processed": new + reimported,
     }
@@ -97,6 +106,7 @@ def build_summary_text(results: list[ImportResult]) -> str:
         f"Skipped:         {buckets['skipped']}",
         f"Failed:          {buckets['failed']}",
         f"Flagged (OHLC):  {buckets['flagged']}",
+        *([f"Other warnings:  {buckets['other_warnings']}"] if buckets["other_warnings"] else []),
         f"Total rows:      {buckets['total_rows']:,}",
         f"Total processed: {buckets['total_processed']}",
     ]
@@ -176,6 +186,8 @@ def _print_summary(
     table.add_row("Skipped", str(buckets["skipped"]))
     table.add_row("Failed", str(buckets["failed"]))
     table.add_row("Flagged (OHLC)", str(buckets["flagged"]))
+    if buckets["other_warnings"]:
+        table.add_row("Other warnings", str(buckets["other_warnings"]))
     table.add_row("Total rows", f"{buckets['total_rows']:,}")
     table.add_row("Total processed", str(buckets["total_processed"]))
     console.print(table)

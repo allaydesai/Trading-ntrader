@@ -231,9 +231,14 @@ def _walk(source_path: Path, exact_stem: bool = False) -> _ScanState:
     return state
 
 
+def _report_spec(spec: str, asset_class: AssetClass) -> str:
+    """FX bars are ``MID`` (design D2), so an FX timeframe reads ``1-HOUR-MID`` (M5)."""
+    return spec.replace("-LAST", "-MID") if asset_class == AssetClass.FX else spec
+
+
 def _state_to_report(state: _ScanState, source_path: Path, asset_class: AssetClass) -> DryRunReport:
     timeframes = {
-        spec: TimeframeSummary(
+        _report_spec(spec, asset_class): TimeframeSummary(
             ticker_count=len(bucket.tickers),
             file_count=len(bucket.files),
             source_bytes=bucket.bytes_,

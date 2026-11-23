@@ -527,3 +527,20 @@ class TestFmpAwareEstimate:
     def test_fake_reader_satisfies_protocol(self):
         """The fake structurally satisfies the runtime-checkable seam."""
         assert isinstance(_FakeResolvedReader(set()), ResolvedTickerReader)
+
+
+class TestFxDryRunLabels:
+    """FX bars are MID (D2): the dry-run labels FX timeframes ``-MID``, not ``-LAST`` (M5)."""
+
+    def test_fx_timeframes_are_mid(self, tmp_path):
+        _make_file(tmp_path / "EURUSD_full_1day.txt", "20100104,1.43,1.44546,1.42564,1.441,9\n")
+        _make_file(
+            tmp_path / "EURUSD_full_1hour.txt", "2010-01-04 03:00:00,1.43,1.44,1.42,1.43,9\n"
+        )
+        report = build_dry_run_report(tmp_path, AssetClass.FX)
+        assert set(report.timeframes) == {"1-DAY-MID", "1-HOUR-MID"}
+
+    def test_equity_timeframes_stay_last(self, tmp_path):
+        _make_file(tmp_path / "SPY_full_1day_adjsplitdiv.txt", _VALID_LINE + "\n")
+        report = build_dry_run_report(tmp_path, AssetClass.STOCK)
+        assert set(report.timeframes) == {"1-DAY-LAST"}

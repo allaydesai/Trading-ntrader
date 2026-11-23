@@ -157,7 +157,8 @@ class FxImportService(FuturesImportService):
         row = self._metadata_service.get_instrument_sync(catalog_name, spec.pair)
         if failure is None and row is None:
             failure = "catalog_instruments row disappeared during import"
-        fields = {"row_count": tally.count, "warnings": warnings}
+        ohlc = len(collect_ohlc_warnings(parser.last_validation))  # the rest are FX counters
+        fields = {"row_count": tally.count, "warnings": warnings, "ohlc_flags": ohlc}
         if failure is not None or row is None:
             return self._result(spec.pair, start, status="failed", error=failure, **fields)
         record_coverage(row, timeframe, tally)

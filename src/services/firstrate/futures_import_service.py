@@ -312,6 +312,7 @@ class FuturesImportService(ImportService):
         precision = spec.continuous_price_precision
         tally = write_series(catalog, parser, file_path, bar_type, precision)
         warnings = collect_ohlc_warnings(parser.last_validation)
+        ohlc = len(warnings)  # the out-of-order count below is not an OHLC flag
         if tally.out_of_order:
             warnings.append(f"{tally.out_of_order} out-of-order row(s) dropped")
         failure = (
@@ -330,6 +331,7 @@ class FuturesImportService(ImportService):
                 error=failure,
                 row_count=tally.count,
                 warnings=warnings,
+                ohlc_flags=ohlc,
             )
         record_coverage(row, timeframe, tally)
         self._metadata_service.upsert_instrument_sync(row)
@@ -344,4 +346,5 @@ class FuturesImportService(ImportService):
             outcome=decision,
             row_count=tally.count,
             warnings=warnings,
+            ohlc_flags=ohlc,
         )
