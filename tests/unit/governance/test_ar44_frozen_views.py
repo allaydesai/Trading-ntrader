@@ -77,7 +77,8 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: sort and pagination controls request the HTML partial instead of the JSON API, and it
 #: renders its own #trades-table-content root so each swap keeps the target.
 #: **Regenerated 2026-11-23 by PO ruling D12 (Allay approved 2026-11-22, FX dashboard, M5)**
-#: for exactly the files ``openspec/changes/add-fx-backtesting/design.md`` section 11 lists:
+#: for exactly the files section 11 of
+#: ``openspec/changes/archive/2026-11-23-add-fx-backtesting/design.md`` lists:
 #: the FX panel (new ``templates/partials/fx_panel.html``, ``backtest_detail.py``,
 #: ``detail.html``), the trades table (``ui/backtests.py``, ``trades_table.html``), the export
 #: (``rest/trades.py``), the run list (``backtest_list.py``, ``list_fragment.html``) and the

@@ -6,7 +6,7 @@ surfaces as :class:`FxSpecError` naming the file and the dotted field path
 (``pairs.EURUSD.margin_pct: ...``). Every economic value carries a dated ``source`` entry
 whose ``status`` says whether it was checked (``VERIFIED``) or is a best-known public figure
 still to be confirmed against the IBKR account (``UNVERIFIED``).
-See ``openspec/changes/add-fx-backtesting/design.md`` section 1.
+See ``openspec/changes/archive/2026-11-23-add-fx-backtesting/design.md`` section 1.
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ subscription name the same instrument (decision D1). The price increment is the 
 (``10^-precision``), not the IB minimum tick, which stays in ``info`` for live orders.
 Margins are the spec percentages as Nautilus fractions of notional; fees are zero because
 commission comes from the venue fee model (``src/core/fx_costs.py``, M4).
-See ``openspec/changes/add-fx-backtesting/design.md`` section 1.
+See ``openspec/changes/archive/2026-11-23-add-fx-backtesting/design.md`` section 1.
 """
 
 from __future__ import annotations
