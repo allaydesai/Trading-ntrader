@@ -125,7 +125,7 @@ SIZE_BASELINE: dict[str, int] = {
     # MCP phase 4, 277 -> 278: `_make_fee_model` scales every commission term for cost stress.
     # Slippage drag, 277 -> 272: `_make_fee_model` delegates to `IBKRCommissionModel.from_settings`.
     # Riptide, 272 -> 274: `bind_fill_model` registers a gap-aware model (single and multi).
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 274,
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 273,
     "src/core/backtest_runner.py::MinimalBacktestRunner": 891,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 95,
@@ -174,8 +174,8 @@ SIZE_BASELINE: dict[str, int] = {
     # curve moved to module functions when they became mark-to-market.
     # Merging 015-paper-trading (Story 5.1 moved the balance reads to `_starting_balance` and
     # `_final_balance`), 145 -> 140 and 81 -> 80 (shrank).
-    "src/core/results_extractor.py::ResultsExtractor": 140,
-    "src/core/results_extractor.py::ResultsExtractor.extract_results": 80,
+    "src/core/results_extractor.py::ResultsExtractor": 134,
+    "src/core/results_extractor.py::ResultsExtractor.extract_results": 77,
     # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
     # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106
@@ -195,9 +195,9 @@ SIZE_BASELINE: dict[str, int] = {
     "src/models/backtest_request.py::BacktestRequest": 180,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
     # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
-    "src/services/backtest_persistence.py::BacktestPersistenceService": 264,
+    "src/services/backtest_persistence.py::BacktestPersistenceService": 260,
     "src/services/backtest_persistence.py::BacktestPersistenceService._extract_and_validate_metrics": 58,  # noqa: E501
-    "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 125,  # noqa: E501
+    "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 121,  # noqa: E501
     # Phase 2 pre-work, 108 -> 110: `get_equity_curve` reads the run's stored curve.
     "src/services/backtest_query.py::BacktestQueryService": 110,
     "src/services/comparison_renderer.py::render_comparison_table": 66,
@@ -208,7 +208,7 @@ SIZE_BASELINE: dict[str, int] = {
     "src/services/data_catalog.py::DataCatalogService._rebuild_availability_cache": 106,
     "src/services/data_catalog.py::DataCatalogService.query_bars": 61,
     "src/services/database_repository.py::DatabaseRepository": 128,
-    "src/services/firstrate/backtest_loader.py::load_from_catalog": 70,
+    "src/services/firstrate/backtest_loader.py::load_from_catalog": 67,
     "src/services/firstrate/import_service.py::ImportService": 372,
     "src/services/firstrate/import_service.py::ImportService._import_ticker": 135,
     "src/services/firstrate/import_service.py::ImportService.import_directory": 59,
