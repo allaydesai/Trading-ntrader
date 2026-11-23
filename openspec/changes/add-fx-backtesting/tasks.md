@@ -89,7 +89,9 @@ realised-only fallback). Equity and futures runs produce byte-identical results 
       instruments from the same catalog/timeframe); no orchestrator growth. Two ordering
       rules found by the M1 gate (`test_fx_engine_acceptance.py` pins both):
       (a) register the `FxRateFeeder` **before** any strategy (`add_actor` before
-      `add_strategy`), so on each bar the rate is in the cache before a strategy submits;
+      `add_strategy`), so on each bar the rate is in the cache before a strategy submits
+      (covers `on_bar` orders only: a resting stop/limit fills before the feeder sees the
+      bar and converts at the previous bar's rate; 3.3 must pin that lag or close it);
       (b) add a cross's rate-source bars (GBPUSD for EURGBP) to the engine **before** the
       traded pair's bars. At equal timestamps bars dispatch in the order added, so the
       reverse order converts at the previous bar's rate (USD 1,220 instead of 1,250).

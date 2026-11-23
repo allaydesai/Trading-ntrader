@@ -83,12 +83,17 @@ into M3:
    bars, so the feeder is required: no feeder means no conversion.
 2. The feeder must be registered **before** the strategies (`add_actor` before
    `add_strategy`), so on each bar it writes the rate before a strategy submits. In the gate
-   test the closing fill used that bar's rate (no lag).
+   test the closing market order, submitted from `on_bar`, used that bar's rate (no lag).
+   This covers only orders submitted from strategy callbacks. A **resting** order (stop,
+   limit) is matched by the exchange before the bar reaches any actor, so its fill converts
+   at the previous bar's rate (the one-bar lag `design.md` section 3 allows; e.g. 100,000 JPY
+   at 150 instead of 151 is USD 666.67 instead of 662.25). Untested in M1: M3 must pin it.
 3. A cross's conversion pair must be added to the engine **before** the traded pair's bars.
    At equal timestamps the engine dispatches bars in the order the data was added. With
    GBPUSD added after EURGBP, the EURGBP close converted at the previous bar's GBPUSD rate
    (USD 1,220 instead of 1,250 on a rate moving 1.22 to 1.25). Both orders are pinned in the
-   gate test. USD-quote and USD-base pairs are their own rate source, so they are unaffected.
+   gate test. USD-quote and USD-base pairs are their own rate source, so rule 3 does not
+   apply to them (rule 2's resting-order lag still does).
 
 ## Planned (M2-M6)
 
