@@ -390,3 +390,112 @@ def test_risk_based_futures_size_is_never_rounded_up_before_flooring():
     )
     assert size == Decimal("3.99")
     assert whole_contracts(size) == 3
+
+
+def _fx(base: str, quote: str, increment: str = "1"):
+    """A duck-typed spot FX pair: what the FX sizing helpers read."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        base_currency=SimpleNamespace(code=base),
+        quote_currency=SimpleNamespace(code=quote),
+        size_increment=Decimal(increment),
+        info={"asset_class": "FX"},
+    )
+
+
+@pytest.mark.unit
+class TestFxSizingHelpers:
+    """FX M4: base-currency units from USD budgets (design section 6, D13)."""
+
+    def test_quote_to_account_rate_for_usd_quote_usd_base_and_a_cross(self):
+        from src.core.position_sizing import quote_to_account_rate
+
+        assert quote_to_account_rate(_fx("EUR", "USD"), Decimal("1.1")) == 1
+        assert quote_to_account_rate(_fx("USD", "JPY"), Decimal("160")) == Decimal("0.00625")
+        rates = {"GBP": Decimal("1.25")}
+        assert quote_to_account_rate(_fx("EUR", "GBP"), Decimal("0.85"), rates) == Decimal("1.25")
+
+    def test_a_cross_without_its_rate_raises_naming_it(self):
+        from src.core.position_sizing import quote_to_account_rate
+
+        with pytest.raises(ValueError, match="GBP/USD"):
+            quote_to_account_rate(_fx("EUR", "GBP"), Decimal("0.85"))
+
+    def test_a_usd_base_needs_a_positive_price(self):
+        from src.core.position_sizing import quote_to_account_rate
+
+        with pytest.raises(ValueError, match="positive"):
+            quote_to_account_rate(_fx("USD", "JPY"), Decimal("0"))
+
+    def test_usdjpy_notional_is_its_usd_amount_in_units(self):
+        """USD 100,000 at 157 is 100,000 USDJPY, not the 636 an equity divide gives."""
+        from src.core.position_sizing import fx_units_for_notional, quote_to_account_rate
+
+        price = Decimal("157")
+        rate = quote_to_account_rate(_fx("USD", "JPY"), price)
+        assert fx_units_for_notional(Decimal("100000"), price, rate) == Decimal("100000")
+
+    @pytest.mark.parametrize("price", ["144.657", "157.123", "149.999", "101.001"])
+    def test_usd_base_units_survive_decimal_division_noise(self, price):
+        """1/p x p is 0.999...9 at 28 digits; flooring that must not lose a unit."""
+        from src.core.position_sizing import fx_units_for_budget
+
+        units = fx_units_for_budget(Decimal("100000"), Decimal(price), _fx("USD", "JPY"))
+        assert units == Decimal("100000")
+
+    def test_eurusd_and_cross_units(self):
+        from src.core.position_sizing import fx_units_for_budget
+
+        # USD 100,000 at 1.08 = 92,592.59 EUR -> 92,592 units
+        assert fx_units_for_budget(Decimal("100000"), Decimal("1.08"), _fx("EUR", "USD")) == 92592
+        # EURGBP 0.85 at GBP 1.25: one EUR is 1.0625 USD -> 94,117.6 -> 94,117
+        rates = {"GBP": Decimal("1.25")}
+        units = fx_units_for_budget(Decimal("100000"), Decimal("0.85"), _fx("EUR", "GBP"), rates)
+        assert units == 94117
+
+    def test_fx_units_for_risk(self):
+        from src.core.position_sizing import fx_units_for_risk
+
+        # risk USD 1,000 over 50 pips of EURUSD (0.0050 USD a unit) = 200,000 units
+        assert fx_units_for_risk(Decimal("1000"), Decimal("0.0050"), Decimal("1")) == 200000
+        # USDJPY: 50 pips = 0.50 JPY a unit = 0.50 / 150 USD -> 300,000 units
+        rate = Decimal(1) / Decimal(150)
+        assert fx_units_for_risk(Decimal("1000"), Decimal("0.50"), rate) == 300000
+        assert fx_units_for_risk(Decimal("1000"), Decimal("0"), Decimal("1")) == 0
+
+    @pytest.mark.parametrize(
+        "args", [("1", "-0.1", "1"), ("1", "0.1", "0")], ids=["negative stop", "zero rate"]
+    )
+    def test_fx_units_for_risk_rejects_bad_inputs(self, args):
+        from src.core.position_sizing import fx_units_for_risk
+
+        with pytest.raises(ValueError):
+            fx_units_for_risk(*(Decimal(a) for a in args))
+
+    @pytest.mark.parametrize(
+        "units,increment,expected",
+        [("92592.59", "1", "92592"), ("0.4", "1", "0"), ("-5", "1", "0"), ("1234", "1000", "1000")],
+    )
+    def test_whole_units_floors_to_the_increment_without_a_minimum(
+        self, units, increment, expected
+    ):
+        from src.core.position_sizing import whole_units
+
+        assert whole_units(Decimal(units), Decimal(increment)) == Decimal(expected)
+
+    def test_whole_units_rejects_a_non_positive_increment(self):
+        from src.core.position_sizing import whole_units
+
+        with pytest.raises(ValueError, match="size_increment"):
+            whole_units(Decimal("10"), Decimal("0"))
+
+    def test_is_fx_pair_reads_the_info_asset_class(self):
+        from types import SimpleNamespace
+
+        from src.core.position_sizing import is_fx_pair
+
+        assert is_fx_pair(_fx("EUR", "USD"))
+        assert not is_fx_pair(SimpleNamespace(info={"asset_class": "CRYPTO"}))
+        assert not is_fx_pair(SimpleNamespace(size_precision=0))
+        assert not is_fx_pair(None)

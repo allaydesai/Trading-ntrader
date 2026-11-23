@@ -1,9 +1,11 @@
 """Pure position sizing logic with no framework dependencies."""
 
-from decimal import ROUND_FLOOR, Decimal
+from collections.abc import Mapping
+from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
 from enum import Enum
 
 ONE = Decimal("1")
+UNIT_NOISE = Decimal("1e-9")  # base units: far finer than any size increment
 
 
 def contract_notional(quantity: Decimal, price: Decimal, multiplier: Decimal = ONE) -> Decimal:
@@ -47,6 +49,111 @@ def instrument_multiplier(instrument: object | None) -> Decimal:
         return ONE
     as_decimal = getattr(multiplier, "as_decimal", None)
     return as_decimal() if callable(as_decimal) else Decimal(str(multiplier))
+
+
+def is_fx_pair(instrument: object | None) -> bool:
+    """A spot FX pair built from ``pair_specs.yaml`` (``info.asset_class == "FX"``).
+
+    Duck-typed so this module stays framework-free; Kraken crypto ``CurrencyPair``s carry no
+    such ``info`` and keep the equity path.
+    """
+    info = getattr(instrument, "info", None) or {}
+    return isinstance(info, dict) and info.get("asset_class") == "FX"
+
+
+def _code(currency: object) -> str:
+    return str(getattr(currency, "code", currency))
+
+
+def quote_to_account_rate(
+    instrument: object,
+    price: Decimal,
+    rates: Mapping[str, Decimal] | None = None,
+    account: str = "USD",
+) -> Decimal:
+    """Account-currency (USD) value of one unit of ``instrument``'s quote currency.
+
+    1 for a USD quote (EURUSD), ``1 / price`` for a USD base (USDJPY: one JPY is 1/157 USD),
+    otherwise ``rates[quote]`` (a cross: EURGBP needs the GBP rate).
+
+    Raises:
+        ValueError: A USD-base price that is not positive, or a cross with no rate.
+    """
+    quote = _code(getattr(instrument, "quote_currency"))
+    base = _code(getattr(instrument, "base_currency"))
+    if quote == account:
+        return ONE
+    if base == account:
+        if price <= 0:
+            raise ValueError(f"price must be positive to convert {quote} to {account}")
+        return ONE / price
+    rate = (rates or {}).get(quote)
+    if rate is None:
+        raise ValueError(f"no {quote}/{account} rate to size {base}{quote} in {account}")
+    return Decimal(str(rate))
+
+
+def fx_units_for_notional(notional: Decimal, price: Decimal, quote_rate: Decimal) -> Decimal:
+    """Unrounded base units worth ``notional`` USD: ``notional / (price x quote_rate)``.
+
+    USDJPY at 157 (quote rate 1/157): USD 100,000 is 100,000 units, not the 636 an equity-style
+    ``notional / price`` gives.
+
+    Raises:
+        ValueError: ``price`` or ``quote_rate`` is not positive.
+    """
+    if price <= 0 or quote_rate <= 0:
+        raise ValueError("price and quote_rate must be positive")
+    return _exact(notional / (price * quote_rate))
+
+
+def fx_units_for_risk(risk: Decimal, stop_distance: Decimal, quote_rate: Decimal) -> Decimal:
+    """Unrounded base units that lose ``risk`` USD over ``stop_distance`` (in quote units).
+
+    Returns 0 for a zero stop distance (no sizeable risk), like ``calculate_risk_based_size``.
+
+    Raises:
+        ValueError: A negative stop distance or a non-positive ``quote_rate``.
+    """
+    if stop_distance < 0 or quote_rate <= 0:
+        raise ValueError("stop_distance must not be negative and quote_rate must be positive")
+    if stop_distance == 0:
+        return Decimal(0)
+    return _exact(risk / (stop_distance * quote_rate))
+
+
+def _exact(units: Decimal) -> Decimal:
+    """Drop 28-digit division noise (1/157 x 157 is 0.999...9) before a caller floors units."""
+    return units.quantize(UNIT_NOISE, rounding=ROUND_HALF_EVEN)
+
+
+def whole_units(units: Decimal, size_increment: Decimal = ONE) -> Decimal:
+    """Floor ``units`` to a multiple of ``size_increment``; 0 means no order.
+
+    No minimum of 1 (design D13): a budget below one increment trades nothing.
+
+    Raises:
+        ValueError: ``size_increment`` is not positive.
+    """
+    if size_increment <= 0:
+        raise ValueError("size_increment must be positive")
+    if units <= 0:
+        return Decimal(0)
+    steps = (units / size_increment).to_integral_value(rounding=ROUND_FLOOR)
+    return steps * size_increment
+
+
+def fx_units_for_budget(
+    notional: Decimal,
+    price: Decimal,
+    instrument: object,
+    rates: Mapping[str, Decimal] | None = None,
+) -> Decimal:
+    """Whole base units of FX ``instrument`` worth ``notional`` USD at ``price`` (0: no order)."""
+    rate = quote_to_account_rate(instrument, price, rates)
+    increment = getattr(instrument, "size_increment", None)
+    step = Decimal(str(increment)) if increment is not None else ONE
+    return whole_units(fx_units_for_notional(notional, price, rate), step)
 
 
 class SizingMethod(str, Enum):

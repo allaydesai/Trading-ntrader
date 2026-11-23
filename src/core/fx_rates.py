@@ -22,6 +22,7 @@ See ``docs/agent/fx-backtesting.md`` for what that means per order type.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from decimal import Decimal
 
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.common.actor import Actor
@@ -34,6 +35,7 @@ from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.instruments import CurrencyPair, Instrument
 from nautilus_trader.model.objects import Currency, Quantity
 
+from src.core.position_sizing import fx_units_for_budget, quote_to_account_rate
 from src.services.fx.pair_specs import pair_names
 
 ACCOUNT_CURRENCY = USD
@@ -94,6 +96,39 @@ def conversion_pairs_for(instruments: Iterable[Instrument]) -> list[str]:
     traded = {fx_ticker(i) for i in instruments if is_fx(i)}
     needed = {conversion_pair(i) for i in instruments}
     return sorted(pair for pair in needed if pair is not None and pair not in traded)
+
+
+def usd_per_quote(
+    instrument: Instrument, price: Decimal, cache, side: OrderSide | None = None
+) -> Decimal | None:
+    """USD per unit of ``instrument``'s quote currency at ``price``; None for a missing rate.
+
+    Closed-form for a USD quote (1) and a USD base (``1 / price``); a cross reads the cache's
+    rate table, the accounts manager's own lookup (``BID`` for a sell, ``ASK`` for a buy,
+    ``MID`` without a side). M4's fee model, margin gate and FX sizing all convert with it.
+    """
+    if ACCOUNT_CURRENCY in (instrument.quote_currency, instrument.base_currency):
+        return quote_to_account_rate(instrument, price)
+    price_type = PriceType.MID if side is None else _side_price_type(side)
+    rate = cache.get_xrate(
+        instrument.id.venue, instrument.quote_currency, ACCOUNT_CURRENCY, price_type
+    )
+    return None if rate is None else Decimal(str(rate))
+
+
+def _side_price_type(side: OrderSide) -> PriceType:
+    return PriceType.BID if side == OrderSide.SELL else PriceType.ASK
+
+
+def fx_units(notional_usd: Decimal, price: Decimal, instrument: Instrument, cache) -> Decimal:
+    """Whole base units of FX ``instrument`` worth ``notional_usd`` (0: no order).
+
+    Raises:
+        ValueError: A cross whose quote currency has no USD rate in the cache yet.
+    """
+    rate = usd_per_quote(instrument, price, cache)
+    rates = {instrument.quote_currency.code: rate} if rate is not None else None
+    return fx_units_for_budget(notional_usd, price, instrument, rates)
 
 
 class FxRateBook:
