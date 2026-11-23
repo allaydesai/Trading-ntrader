@@ -125,3 +125,63 @@ class TestFxSymbols:
     def test_a_non_fx_catalog_keeps_last(self):
         request = resolve(_spec(symbol="EURUSD"), default_catalog="").request
         assert request.bar_type == "1-DAY-LAST"
+
+
+class TestSizingOverrides:
+    """QA fix (c): ``units`` (FX) and ``contracts`` (futures), as ``--units``/``--contracts``."""
+
+    @pytest.fixture(autouse=True)
+    def fx_row(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from src.services.fx import symbols
+
+        rows = {("firstrate-fx", "EURUSD"): SimpleNamespace(asset_class="FX")}
+        monkeypatch.setattr(symbols, "_catalog_row", lambda c, t: rows.get((c, t)))
+
+    def _fx(self, **overrides):
+        return _spec(symbol="EUR/USD", catalog="firstrate-fx", params={}, **overrides)
+
+    def _es(self, **overrides):
+        return _spec(symbol="ES", catalog="firstrate-futures", params={}, **overrides)
+
+    def test_units_on_an_fx_pair_set_the_strategy_s_units(self):
+        sized = resolve(self._fx(units=100_000), default_catalog="")
+        assert sized.request.strategy_config["units"] == 100_000
+        assert sized.config_hash != resolve(self._fx(), default_catalog="").config_hash
+        assert sized.spec.units == 100_000
+
+    def test_contracts_on_a_futures_root_set_the_strategy_s_contracts(self):
+        sized = resolve(self._es(contracts=2), default_catalog="")
+        assert sized.request.strategy_config["contracts"] == 2
+
+    def test_unset_overrides_leave_the_config_and_hash_alone(self):
+        plain = resolve(self._fx(), default_catalog="")
+        assert "units" not in plain.request.strategy_config
+        assert "contracts" not in plain.request.strategy_config
+
+    def test_units_are_for_fx_only(self):
+        with pytest.raises(ToolFailure) as exc:
+            resolve(_spec(units=1000), default_catalog="")
+        assert exc.value.code == "invalid_params"
+        assert "units is for FX only" in exc.value.message
+        assert "'QQQ'" in exc.value.message
+
+    def test_contracts_are_for_futures_only(self):
+        with pytest.raises(ToolFailure) as exc:
+            resolve(self._fx(contracts=1), default_catalog="")
+        assert exc.value.code == "invalid_params"
+        assert "contracts applies to futures only" in exc.value.message
+
+    def test_a_strategy_without_the_setting_is_refused_naming_those_with_it(self):
+        with pytest.raises(ToolFailure) as exc:
+            resolve(self._fx(strategy="buy_and_hold", units=1000), default_catalog="")
+        assert exc.value.code == "invalid_params"
+        assert "no 'units' setting" in exc.value.message
+        assert "sma_crossover" in exc.value.fix
+
+    @pytest.mark.parametrize("field", ["units", "contracts"])
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_sizes_must_be_positive(self, field, bad):
+        with pytest.raises(ValueError):
+            _spec(**{field: bad})

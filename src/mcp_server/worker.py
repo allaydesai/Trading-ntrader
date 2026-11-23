@@ -80,7 +80,14 @@ async def _load(resolved: ResolvedRequest):
 
 async def _execute(resolved: ResolvedRequest, data, reproduces: UUID | None = None) -> UUID:
     from src.core.backtest_orchestrator import BacktestOrchestrator
+    from src.services.sizing_overrides import check_contracts_instrument, check_units_instrument
 
+    config = resolved.request.strategy_config
+    try:  # an equity row named like a futures root (CL) is caught here, as in the CLI
+        check_contracts_instrument(config, data.instrument)
+        check_units_instrument(config, data.instrument)
+    except ValueError as exc:
+        raise ToolFailure("invalid_params", str(exc), fix="Drop units/contracts.") from None
     orchestrator = BacktestOrchestrator()
     try:
         _, run_id = await orchestrator.execute(

@@ -18,22 +18,15 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from src.cli.commands._fx_options import (
-    apply_fx_options,
-    check_units_instrument,
-    with_spread_pips,
-)
-from src.cli.commands._strategy_params import (
-    _cli_strategy_params,
-    apply_contracts,
-    check_contracts_instrument,
-)
+from src.cli.commands._fx_options import apply_fx_options, with_spread_pips
+from src.cli.commands._strategy_params import _cli_strategy_params, apply_contracts
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
 from src.models.data_load_result import DataLoadResult
 from src.services.data_catalog import DataCatalogService
 from src.services.firstrate.backtest_loader import reconcile_equity_price_precision
+from src.services.sizing_overrides import check_contracts_instrument, check_units_instrument
 from src.utils.mock_data import generate_mock_data_from_yaml
 
 # Re-export for backwards compatibility — callers that import DataLoadResult

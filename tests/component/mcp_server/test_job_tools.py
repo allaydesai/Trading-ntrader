@@ -97,6 +97,28 @@ async def test_invalid_request_queues_nothing(ctx):
         assert (await _call(client, "list_jobs"))["jobs"] == []
 
 
+async def test_contracts_reach_the_stored_spec_and_the_strategy_config(ctx):
+    """QA fix (c): ``contracts`` (and ``units``) mirror ``backtest run --contracts``."""
+    es = {**REQUEST, "symbol": "ES", "catalog": "e2e-test", "contracts": 2}
+    async with Client(build_server(ctx)) as client:
+        submitted = await _call(client, "submit_backtest", es)
+    assert submitted["ok"] is True, submitted
+    assert submitted["resolved"]["params"]["contracts"] == 2
+    assert ctx.runner.store.request(submitted["job_id"])["spec"]["contracts"] == 2
+
+
+async def test_units_on_a_non_fx_symbol_queue_nothing(ctx):
+    async with Client(build_server(ctx)) as client:
+        result = await _call(client, "submit_backtest", {**REQUEST, "units": 100_000})
+        assert result["ok"] is False
+        [error] = result["error"]["details"]["errors"]
+        assert error["code"] == "invalid_params"
+        assert "units is for FX only" in error["message"]
+        checked = await _call(client, "validate_config", {**REQUEST, "units": 100_000})
+        assert checked["errors"] == [error]
+        assert (await _call(client, "list_jobs"))["jobs"] == []
+
+
 async def test_unknown_job_ids(ctx):
     async with Client(build_server(ctx)) as client:
         for tool in ("get_job", "cancel_job"):

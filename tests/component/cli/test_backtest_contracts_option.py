@@ -10,8 +10,9 @@ from click.testing import CliRunner
 from rich.console import Console
 
 from src.cli.commands._backtest_helpers import resolve_backtest_request
-from src.cli.commands._strategy_params import apply_contracts, check_contracts_instrument
+from src.cli.commands._strategy_params import apply_contracts
 from src.cli.commands.backtest import run_backtest
+from src.services.sizing_overrides import check_contracts_instrument
 
 pytestmark = pytest.mark.component
 
