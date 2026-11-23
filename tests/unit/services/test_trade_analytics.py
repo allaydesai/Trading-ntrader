@@ -722,6 +722,45 @@ class TestTradeStatistics:
         # Win rate: 2 / 4 = 50%
         assert result.win_rate == Decimal("50.00")
 
+    def test_net_profit_includes_breakeven_trades(self):
+        """Net profit is the sum of every closed trade, breakeven ones included.
+
+        A trade between -10 and 0 is *counted* as breakeven, but its P&L is still real
+        money: dropping it made the dashboard's Net Profit disagree with the account
+        (FX QA 2026-11-23: EURGBP showed -154.17 for trades summing to -156.89, because a
+        -2.72 trade, all costs, was bucketed as breakeven).
+        """
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        pnls = ["425.74", "-2.72", "-253.54", "0.73"]
+        trades = [
+            Trade(
+                id=i,
+                backtest_run_id=1,
+                instrument_id="EUR/GBP.IDEALPRO",
+                trade_id=f"t-{i}",
+                venue_order_id=f"o-{i}",
+                order_side="SELL",
+                quantity=Decimal("91250"),
+                entry_price=Decimal("0.86674"),
+                exit_price=Decimal("0.86293"),
+                entry_timestamp=base_time + timedelta(hours=2 * i),
+                exit_timestamp=base_time + timedelta(hours=2 * i + 1),
+                profit_loss=Decimal(pnl),
+                holding_period_seconds=3600,
+                created_at=base_time,
+            )
+            for i, pnl in enumerate(pnls)
+        ]
+
+        result = calculate_trade_statistics(trades)
+
+        assert result.breakeven_trades == 1
+        assert result.net_profit == Decimal("170.21")  # 425.74 - 2.72 - 253.54 + 0.73
+        assert result.expectancy == Decimal("42.55")  # 170.21 / 4
+        # Wins and losses stay as before: the breakeven trade is in neither bucket.
+        assert result.total_profit == Decimal("426.47")
+        assert result.total_loss == Decimal("253.54")
+
 
 class TestDrawdownCalculation:
     """Test suite for drawdown calculation logic."""
