@@ -1,0 +1,173 @@
+<!-- Backtest List Table Fragment (HTMX partial) -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-700">
+            <thead class="border-b border-slate-700">
+                <tr>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                        Run ID
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                        Strategy
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                        Symbol
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                        Date Range
+                    </th>
+                    
+
+
+
+
+<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
+    <button
+        type="button"
+        hx-get="/backtests/fragment?sort=total_return&order=desc&page=1"
+        hx-target="#backtest-table"
+        hx-swap="innerHTML"
+        hx-push-url="/backtests?sort=total_return&order=desc&page=1"
+        class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider ml-auto"
+    >
+        Return
+        
+    </button>
+</th>
+
+                    
+
+
+
+
+<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
+    <button
+        type="button"
+        hx-get="/backtests/fragment?sort=sharpe_ratio&order=desc&page=1"
+        hx-target="#backtest-table"
+        hx-swap="innerHTML"
+        hx-push-url="/backtests?sort=sharpe_ratio&order=desc&page=1"
+        class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider ml-auto"
+    >
+        Sharpe
+        
+    </button>
+</th>
+
+                    
+
+
+
+
+<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
+    <button
+        type="button"
+        hx-get="/backtests/fragment?sort=max_drawdown&order=desc&page=1"
+        hx-target="#backtest-table"
+        hx-swap="innerHTML"
+        hx-push-url="/backtests?sort=max_drawdown&order=desc&page=1"
+        class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider ml-auto"
+    >
+        Max DD
+        
+    </button>
+</th>
+
+                    <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-slate-400 uppercase tracking-wider">
+                        Status
+                    </th>
+                    
+
+
+
+
+    
+
+<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+    <button
+        type="button"
+        hx-get="/backtests/fragment?sort=created_at&order=asc&page=1"
+        hx-target="#backtest-table"
+        hx-swap="innerHTML"
+        hx-push-url="/backtests?sort=created_at&order=asc&page=1"
+        class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider "
+    >
+        Created
+        
+        <span class="text-blue-400">&#9660;</span>
+        
+    </button>
+</th>
+
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                
+                <tr class="table-row-hover cursor-pointer transition-colors"
+                    onclick="window.location='/backtests/12345678-1234-5678-1234-567812345678'">
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <a href="/backtests/12345678-1234-5678-1234-567812345678"
+                           class="font-mono text-sm text-slate-400 hover:text-slate-200"
+                           onclick="event.stopPropagation()">12345678</a>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="text-slate-200 font-medium" title="SMA Crossover">
+                            
+                            SMA Crossover
+                            
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="font-mono text-sm text-slate-300">ES</span> <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300" title="Futures run">FUT</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="font-mono text-xs text-slate-400">2024-03-01 to 2024-03-31</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right">
+                        <span class="font-mono text-sm text-green-400 tabular-nums" title="Return on margin: net P&amp;L / peak initial margin">RoM +2.70%</span>
+                        <span class="block font-mono text-xs text-slate-500 tabular-nums" title="Account return (what this column sorts by)">acct +1.49%</span>
+                        
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right">
+                        
+                        <span class="font-mono text-sm text-slate-200 tabular-nums">1.10</span>
+                        
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right">
+                        
+                        <span class="font-mono text-sm text-red-400 tabular-nums">-2.00%</span>
+                        
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-center">
+                        
+                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-400">Success</span>
+                        
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="font-mono text-xs text-slate-400">
+                            2024-04-01 09:30
+                        </span>
+                    </td>
+                </tr>
+                
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination Controls -->
+    
+</div>

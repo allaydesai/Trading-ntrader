@@ -1,0 +1,3 @@
+instrument_id,trade_id,order_side,entry_timestamp,entry_price,exit_timestamp,exit_price,quantity,profit_loss,profit_pct,commission_amount,holding_period_seconds,contracts,multiplier,notional_usd,margin_used_usd,points_adjusted,return_on_underlying_pct,return_on_margin_pct
+ES.CME,T-1,BUY,2024-03-01T14:00:00+00:00,5000.00,2024-03-01T19:00:00+00:00,5020.00,2,1991.00,0.4000,4.50,18000,2,50,500000.00,55000.00,20.00,0.4000,3.6200
+ES.CME,T-2,SELL,2024-03-01T20:00:00+00:00,5030.00,2024-03-01T23:00:00+00:00,5040.00,1,-504.50,0.1988,4.50,10800,1,50,251500.00,27500.00,-10.00,-0.1988,-1.8345
