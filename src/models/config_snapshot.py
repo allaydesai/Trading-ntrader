@@ -8,6 +8,16 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 
+#: Optional keys dropped from the dump while None, so rows without them stay byte-identical.
+_OMITTED_WHEN_UNSET = (
+    "cost_multiplier",
+    "fill_model",
+    "futures_contracts",
+    "profit_pct_basis",
+    "account_currency",
+    "fx_pairs",
+)
+
 
 class StrategyConfigSnapshot(BaseModel):
     """
@@ -77,7 +87,7 @@ class StrategyConfigSnapshot(BaseModel):
         data = handler(self)
         if not self.session_conditions:
             data.pop("session_conditions", None)
-        for optional in ("cost_multiplier", "fill_model", "futures_contracts", "profit_pct_basis"):
+        for optional in _OMITTED_WHEN_UNSET:
             if getattr(self, optional) is None:
                 data.pop(optional, None)
         return data
@@ -106,6 +116,17 @@ class StrategyConfigSnapshot(BaseModel):
         default=None,
         description="Futures runs only: what trades.profit_pct is a return on ('underlying' "
         "= the price move, not margin). Omitted from the dump otherwise.",
+    )
+    account_currency: str | None = Field(
+        default=None,
+        description="FX runs only (M3): the single currency the venue account settles in "
+        "('USD'); every trade's profit_loss is in it. Omitted from the dump otherwise.",
+    )
+    fx_pairs: dict[str, dict[str, Any]] | None = Field(
+        default=None,
+        description="FX runs only: per instrument id, base, quote, pip size, margin %, "
+        "commission terms, spread, as-of and conversion pair the run used (filled from M4). "
+        "Omitted from the dump otherwise, so equity and futures rows stay byte-identical.",
     )
 
     metrics_basis: str | None = Field(
