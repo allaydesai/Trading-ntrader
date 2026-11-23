@@ -15,10 +15,9 @@ from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
 
 from src.config import get_settings
-from src.core.backtest_venue import setup_backtest_venues
+from src.core.backtest_venue import cost_snapshot, setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
-from src.core.futures_costs import futures_snapshot
 from src.core.metrics import net_profit_factor
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.core.strategy_factory import StrategyFactory
@@ -38,14 +37,13 @@ logger = structlog.get_logger(__name__)
 def _runtime_config_snapshot(
     strategy_type: str, strategy_config: dict[str, Any], engine: BacktestEngine | None
 ) -> dict[str, Any]:
-    """The run's ``config_snapshot``; a futures run adds ``futures_snapshot``'s keys."""
-    instruments = engine.cache.instruments() if engine else []
+    """The run's ``config_snapshot``; a futures or FX run adds ``cost_snapshot``'s keys."""
     return {
         "strategy_path": f"src.core.strategies.{strategy_type}",
         "config_path": "runtime_config",
         "version": "1.0",
         "config": strategy_config,
-        **futures_snapshot(instruments),
+        **(cost_snapshot(engine.cache) if engine else {}),
     }
 
 

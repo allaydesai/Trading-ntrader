@@ -21,6 +21,10 @@ in USD. Pinned here:
     bar N's GBPUSD rate, while gap-aware releases (which happen at the start of the first
     data point of bar N, the GBPUSD bar) still convert at bar N-1's.
 
+Costs (FX M4) are switched off here (``cost_multiplier=0``) so every amount is the conversion
+alone; commission, spread and margin through the same wiring are pinned in
+``tests/integration/core/test_fx_margin_engine.py``.
+
 Run with ``--forked`` (C extensions).
 """
 
@@ -47,6 +51,7 @@ from src.core.backtest_venue import setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
 from src.core.fill_models import MOO_EXIT_TAG, bind_fill_model
+from src.core.fx_costs import FxCommissionModel
 from src.core.fx_rates import FxConversionPairError, FxRateFeeder
 from src.core.fx_results import FxRateMissingError, usd_realised_pnls
 from src.core.results_extractor import ResultsExtractor, mark_to_market
@@ -143,6 +148,7 @@ def _run(traded, data, rate_sources=(), fill_model=None, **trade) -> tuple[Backt
         starting_balance=START,
         fill_model=fill_model,
         equity_fee_model=IBKRCommissionModel(),
+        cost_multiplier=0,  # conversion only: M4 costs are pinned in test_fx_margin_engine
         data=data,
         rate_sources=rate_sources,
     )
@@ -209,7 +215,8 @@ def test_only_fx_venues_get_a_usd_base_currency_and_the_equity_call_is_unchanged
     }  # exactly the pre-FX call: no base_currency
     assert equity_call["fee_model"] is fee
     assert fx_call["base_currency"] == USD
-    assert fx_call["fee_model"] is not fee  # FX costs are M4's; the per-share model is wrong
+    assert isinstance(fx_call["fee_model"], FxCommissionModel)  # M4: not the per-share model
+    assert fx_call["default_leverage"] == 1  # margin_init is the spec % (Nautilus default: 10)
     engine.dispose()
 
 
@@ -468,6 +475,7 @@ def _request(symbol: str) -> BacktestRequest:
         bar_type="1-HOUR-MID",
         starting_balance=START,
         persist=False,
+        cost_multiplier=0,  # conversion only (see the module docstring)
     )
 
 
