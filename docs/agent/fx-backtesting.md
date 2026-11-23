@@ -1,13 +1,15 @@
 # FX backtesting: pairs, instruments, conversion
 
 Spot FX on IB IDEALPRO, planned in `openspec/changes/add-fx-backtesting/` (M1-M6; decisions
-D1-D16 approved 2026-11-22). **Status: M1-M4** (specs, instruments, the engine gate, the
-FirstRate importer and the `firstrate-fx` catalog, USD account conversion, and costs, margin
-and base-unit sizing). An FX run settles in USD end to end through the orchestrator (MCP and
-direct callers) and pays IB's spot commission plus a modelled half-spread, under 3% margin.
-**Every cost and margin figure is an UNVERIFIED default** (table below). The CLI and web forms
-still build `-LAST` bar types, and no report shows FX figures yet (both M5). The sections
-marked *(planned)* describe later milestones.
+D1-D16 approved 2026-11-22). **Status: M1-M6 implemented** (specs, instruments, the engine
+gate, the FirstRate importer and the `firstrate-fx` catalog, USD account conversion, costs,
+margin and base-unit sizing, reporting in CLI/MCP/dashboard, and Riptide/Bollinger on FX),
+unmerged as the stack #63 -> #64 -> #65 + strategies #4 (QA fixes: #66, strategies #5). An FX
+run settles in USD end to end on every surface and pays IB's spot commission plus a modelled
+half-spread, under 3% margin. **Every cost and margin figure is an UNVERIFIED default** (table
+below). End-to-end QA: `docs/agent/fx-qa-2026-11-23.md`. Known gap: the dashboard Run form
+cannot run a cross yet (it does not pass the conversion pair's bars; needs a FROZEN_VIEWS
+ruling, see the QA notes).
 
 ## Data: the `firstrate-fx` catalog (M2)
 
