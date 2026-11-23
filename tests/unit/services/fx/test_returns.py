@@ -192,7 +192,8 @@ class TestFields:
         f = report_fields(summarise_run(SNAPSHOT, [TRADE_A, TRADE_B], Decimal("1000000")))
         assert f["asset_class"] == "fx"
         assert f["account_currency"] == "USD"
-        assert f["net_pnl_usd"] == "-180.90"
+        assert f["closed_trade_pnl_usd"] == "-180.90"
+        assert "net_pnl_usd" not in f  # QA Q5: closed trades only
         assert f["peak_leverage"] == "0.31"
         assert f["commission_usd"] == "12.00"
         assert f["spread_usd"] == "7.10"
