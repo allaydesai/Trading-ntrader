@@ -1,11 +1,10 @@
 """Pure position sizing logic with no framework dependencies."""
 
 from collections.abc import Mapping
-from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_FLOOR, Decimal
 from enum import Enum
 
 ONE = Decimal("1")
-UNIT_NOISE = Decimal("1e-9")  # base units: far finer than any size increment
 
 
 def contract_notional(quantity: Decimal, price: Decimal, multiplier: Decimal = ONE) -> Decimal:
@@ -104,7 +103,7 @@ def fx_units_for_notional(notional: Decimal, price: Decimal, quote_rate: Decimal
     """
     if price <= 0 or quote_rate <= 0:
         raise ValueError("price and quote_rate must be positive")
-    return _exact(notional / (price * quote_rate))
+    return notional / (price * quote_rate)
 
 
 def fx_units_for_risk(risk: Decimal, stop_distance: Decimal, quote_rate: Decimal) -> Decimal:
@@ -119,12 +118,7 @@ def fx_units_for_risk(risk: Decimal, stop_distance: Decimal, quote_rate: Decimal
         raise ValueError("stop_distance must not be negative and quote_rate must be positive")
     if stop_distance == 0:
         return Decimal(0)
-    return _exact(risk / (stop_distance * quote_rate))
-
-
-def _exact(units: Decimal) -> Decimal:
-    """Drop 28-digit division noise (1/157 x 157 is 0.999...9) before a caller floors units."""
-    return units.quantize(UNIT_NOISE, rounding=ROUND_HALF_EVEN)
+    return risk / (stop_distance * quote_rate)
 
 
 def whole_units(units: Decimal, size_increment: Decimal = ONE) -> Decimal:
@@ -149,10 +143,20 @@ def fx_units_for_budget(
     instrument: object,
     rates: Mapping[str, Decimal] | None = None,
 ) -> Decimal:
-    """Whole base units of FX ``instrument`` worth ``notional`` USD at ``price`` (0: no order)."""
-    rate = quote_to_account_rate(instrument, price, rates)
+    """Whole base units of FX ``instrument`` worth ``notional`` USD at ``price`` (0: no order).
+
+    A USD-base pair (USDJPY) is sized algebraically, ``price x 1/price = 1``: its units are the
+    USD notional itself. Dividing by the Decimal reciprocal instead leaves 28-digit noise
+    (``1/157 x 157`` is ``0.999...9``) that flooring would turn into one unit fewer, and no
+    rounding is applied anywhere else, so a genuine fraction below an increment stays below it.
+    """
     increment = getattr(instrument, "size_increment", None)
     step = Decimal(str(increment)) if increment is not None else ONE
+    if _code(getattr(instrument, "base_currency")) == "USD":
+        if price <= 0:
+            raise ValueError("price must be positive to size a USD-base pair")
+        return whole_units(notional, step)
+    rate = quote_to_account_rate(instrument, price, rates)
     return whole_units(fx_units_for_notional(notional, price, rate), step)
 
 

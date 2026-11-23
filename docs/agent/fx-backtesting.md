@@ -254,11 +254,13 @@ sum of the trade rows equals the USD balance change, and mark-to-market reconcil
   unit x margin_pct`). An entry needing more than the free USD balance is denied
   `MARGIN_EXCEEDS_FREE_BALANCE: 400000 EUR/USD.IDEALPRO unit(s) need 13200.00 USD initial
   margin, free=10000.00 USD`; closes are credited and never denied; a quantity-increase modify
-  is rejected `FX_QTY_INCREASE_NOT_SUPPORTED` (and `FX_MODIFY_PENDING` while one is open). The
+  is rejected `FX_QTY_INCREASE_NOT_SUPPORTED` (and `FX_MODIFY_PENDING` while one is open), and
+  a new limit or trigger that raises an entry's margin by more than is free is rejected
+  `MARGIN_EXCEEDS_FREE_BALANCE` (futures margin ignores price, so their reprices pass). The
   reference price is the order's limit or stop trigger, else the latest `MID` price. Futures
   names, reasons and behaviour are unchanged (`src/core/futures_margin_gate.py` keeps them).
 - Limit: an order the gate cannot price (no bar yet, or a cross before its first GBPUSD bar) is
-  passed through; a fill in that state has no rate either and the M3 guard fails the run, but a
+  passed through (its priced siblings in an order list are still checked); a fill in that state has no rate either and the M3 guard fails the run, but a
   resting order submitted then and filled later goes unchecked. Same known limits as futures: no
   unrealised P&L in buying power, no margin calls or liquidation.
 

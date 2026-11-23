@@ -434,7 +434,8 @@ class TestFxSizingHelpers:
 
         price = Decimal("157")
         rate = quote_to_account_rate(_fx("USD", "JPY"), price)
-        assert fx_units_for_notional(Decimal("100000"), price, rate) == Decimal("100000")
+        units = fx_units_for_notional(Decimal("100000"), price, rate)
+        assert abs(units - Decimal("100000")) < Decimal("1e-15")  # unrounded: reciprocal noise
 
     @pytest.mark.parametrize("price", ["144.657", "157.123", "149.999", "101.001"])
     def test_usd_base_units_survive_decimal_division_noise(self, price):
@@ -443,6 +444,13 @@ class TestFxSizingHelpers:
 
         units = fx_units_for_budget(Decimal("100000"), Decimal(price), _fx("USD", "JPY"))
         assert units == Decimal("100000")
+
+    def test_a_genuine_fraction_just_below_one_unit_is_not_rounded_up(self):
+        from src.core.position_sizing import fx_units_for_budget
+
+        budget = Decimal("0.9999999996")
+        assert fx_units_for_budget(budget, Decimal("1"), _fx("EUR", "USD")) == 0
+        assert fx_units_for_budget(budget, Decimal("150"), _fx("USD", "JPY")) == 0
 
     def test_eurusd_and_cross_units(self):
         from src.core.position_sizing import fx_units_for_budget
@@ -461,7 +469,8 @@ class TestFxSizingHelpers:
         assert fx_units_for_risk(Decimal("1000"), Decimal("0.0050"), Decimal("1")) == 200000
         # USDJPY: 50 pips = 0.50 JPY a unit = 0.50 / 150 USD -> 300,000 units
         rate = Decimal(1) / Decimal(150)
-        assert fx_units_for_risk(Decimal("1000"), Decimal("0.50"), rate) == 300000
+        units = fx_units_for_risk(Decimal("1000"), Decimal("0.50"), rate)
+        assert abs(units - 300000) < Decimal("1e-15")  # unrounded; callers floor
         assert fx_units_for_risk(Decimal("1000"), Decimal("0"), Decimal("1")) == 0
 
     @pytest.mark.parametrize(

@@ -77,8 +77,17 @@ class MarginRequirement(Protocol):
     def unit(self) -> str:
         """How quantities read in reasons: ``contract(s)``, ``unit(s)``."""
 
-    def initial_usd(self, quantity: Decimal, order: Order, cache) -> Decimal | None:
-        """USD initial margin for ``quantity`` of ``order``'s instrument; None: unpriceable."""
+    @property
+    def price_sensitive(self) -> bool:
+        """Whether the requirement moves with the order's price (FX yes, futures no)."""
+
+    def initial_usd(
+        self, quantity: Decimal, order: Order, cache, price: Decimal | None = None
+    ) -> Decimal | None:
+        """USD initial margin for ``quantity`` of ``order``'s instrument; None: unpriceable.
+
+        ``price`` overrides the order's reference price (a modify's new limit or trigger).
+        """
 
 
 @dataclass(frozen=True)
@@ -88,8 +97,11 @@ class FuturesRequirement:
     terms: FuturesTerms
     prefix: str = "FUTURES"
     unit: str = "contract(s)"
+    price_sensitive: bool = False
 
-    def initial_usd(self, quantity: Decimal, order: Order, cache) -> Decimal | None:  # noqa: D102
+    def initial_usd(  # noqa: D102
+        self, quantity: Decimal, order: Order, cache, price: Decimal | None = None
+    ) -> Decimal | None:
         return quantity * self.terms.initial_margin_usd
 
 
@@ -100,10 +112,13 @@ class FxRequirement:
     margin_fraction: Decimal
     prefix: str = "FX"
     unit: str = "unit(s)"
+    price_sensitive: bool = True
 
-    def initial_usd(self, quantity: Decimal, order: Order, cache) -> Decimal | None:  # noqa: D102
+    def initial_usd(  # noqa: D102
+        self, quantity: Decimal, order: Order, cache, price: Decimal | None = None
+    ) -> Decimal | None:
         instrument = cache.instrument(order.instrument_id)
-        price = _reference_price(order, cache)
+        price = price if price is not None else _reference_price(order, cache)
         if instrument is None or price is None:
             return None
         rate = usd_per_quote(instrument, price, cache, order.side)
@@ -111,6 +126,17 @@ class FxRequirement:
             return None
         required = quantity * price * rate * self.margin_fraction
         return required.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
+
+
+def _new_reference(order: Order, new_price, new_trigger) -> Decimal | None:
+    """The reference price a modify would leave (limit first, as ``_reference_price``)."""
+    if new_price is None and new_trigger is None:
+        return None
+    if getattr(order, "price", None) is not None:
+        return (new_price or order.price).as_decimal()  # type: ignore[attr-defined]
+    if getattr(order, "trigger_price", None) is not None:
+        return (new_trigger or order.trigger_price).as_decimal()  # type: ignore[attr-defined]
+    return None
 
 
 def _reference_price(order: Order, cache) -> Decimal | None:
@@ -156,7 +182,13 @@ class MarginGate:
                 self._risk._deny_order_list(command.order_list, reason)
         elif isinstance(command, ModifyOrder):
             order = self._cache.order(command.client_order_id)
-            reason = self.modify_denial_reason(order, command.quantity) if order else None
+            reason = (
+                self.modify_denial_reason(
+                    order, command.quantity, command.price, command.trigger_price
+                )
+                if order
+                else None
+            )
             if reason is not None:
                 self._risk._reject_modify_order(order, reason)
         if reason is not None:
@@ -185,7 +217,7 @@ class MarginGate:
                 continue
             needed = self._terms[order.instrument_id].initial_usd(exposure, order, self._cache)
             if needed is None:
-                return None  # unpriceable: its fill would have no rate either (see module)
+                continue  # unpriceable: its fill has no rate either (module); siblings still count
             units += exposure
             required += needed
         if required <= 0:
@@ -200,7 +232,9 @@ class MarginGate:
             f"initial margin, free={free} USD"
         )
 
-    def modify_denial_reason(self, order: Order, new_quantity) -> str | None:
+    def modify_denial_reason(
+        self, order: Order, new_quantity, new_price=None, new_trigger_price=None
+    ) -> str | None:
         """Why modifying ``order`` to ``new_quantity`` must be rejected, or ``None``.
 
         A gated order's quantity may not be raised by a modify, whatever the margin: an
@@ -210,10 +244,17 @@ class MarginGate:
         that sets a quantity is also refused while an earlier modify of the order is still
         outstanding; price-only modifies are not (the venue applies them to whatever the
         quantity is by then).
+
+        Where the requirement moves with price (FX), a new limit or trigger that raises the
+        order's initial margin by more than the account has free is refused too
+        (``MARGIN_EXCEEDS_FREE_BALANCE``); futures margin ignores price, so their price-only
+        modifies always pass.
         """
         requirement = self._terms.get(order.instrument_id)
-        if requirement is None or new_quantity is None:
+        if requirement is None:
             return None
+        if new_quantity is None:
+            return self._reprice_denial(order, requirement, new_price, new_trigger_price)
         if _earlier_modifies_outstanding(order) > 0:
             return (
                 f"{requirement.prefix}_MODIFY_PENDING: an earlier modify of "
@@ -221,32 +262,66 @@ class MarginGate:
             )
         current, new = order.quantity.as_decimal(), new_quantity.as_decimal()
         if new <= current:
-            return None
+            return self._reprice_denial(order, requirement, new_price, new_trigger_price, new)
         return (
             f"{requirement.prefix}_QTY_INCREASE_NOT_SUPPORTED: modify would raise "
             f"{order.instrument_id} from {current} to {new} {requirement.unit}; "
             "cancel and resubmit instead"
         )
 
+    def _reprice_denial(self, order, requirement, new_price, new_trigger, quantity=None):
+        return _reprice_denial(
+            self._cache, self._terms, order, requirement, (new_price, new_trigger), quantity
+        )
+
     def _free_usd(self, instrument_id: InstrumentId) -> Decimal:
         """Venue free balance less the margin of its submitted-but-unaccepted orders."""
-        venue: Venue = instrument_id.venue
-        account = self._cache.account_for_venue(venue)
-        instrument = self._cache.instrument(instrument_id)
-        if account is None or instrument is None:
-            return ZERO
-        currency = getattr(account, "base_currency", None) or instrument.quote_currency
-        free_money = account.balance_free(currency)
-        free = free_money.as_decimal() if free_money is not None else ZERO
-        for order in self._cache.orders_inflight(venue=venue):
-            requirement = self._terms.get(order.instrument_id)
-            # PENDING_UPDATE/PENDING_CANCEL are in flight too, but already reserved.
-            if requirement is None or order.status != OrderStatus.SUBMITTED:
-                continue
-            if not order.is_reduce_only and order.parent_order_id is None:
-                held = requirement.initial_usd(order.leaves_qty.as_decimal(), order, self._cache)
-                free -= held or ZERO
-        return free
+        return _free_usd(self._cache, self._terms, instrument_id)
+
+
+def _reprice_denial(
+    cache, terms, order: Order, requirement, new_prices: tuple, quantity: Decimal | None = None
+) -> str | None:
+    """Why a new limit/trigger on a price-sensitive entry must be refused, or ``None``."""
+    reference = _new_reference(order, *new_prices)
+    if not requirement.price_sensitive or reference is None or order.is_reduce_only:
+        return None
+    if order.parent_order_id is not None:
+        return None  # contingent children are not margined as entries (denial_reason)
+    leaves = order.leaves_qty.as_decimal()
+    after = min(leaves, quantity) if quantity is not None else leaves
+    before = requirement.initial_usd(leaves, order, cache)
+    new = requirement.initial_usd(after, order, cache, reference)
+    if before is None or new is None or new <= before:
+        return None
+    extra, free = new - before, _free_usd(cache, terms, order.instrument_id)
+    if extra <= free:
+        return None
+    return (
+        f"{DENIAL_REASON}: modify of {order.client_order_id} to {reference} raises "
+        f"{order.instrument_id} initial margin by {extra} USD, free={free} USD"
+    )
+
+
+def _free_usd(cache, terms, instrument_id: InstrumentId) -> Decimal:
+    """Venue free balance less the margin of its submitted-but-unaccepted orders."""
+    venue: Venue = instrument_id.venue
+    account = cache.account_for_venue(venue)
+    instrument = cache.instrument(instrument_id)
+    if account is None or instrument is None:
+        return ZERO
+    currency = getattr(account, "base_currency", None) or instrument.quote_currency
+    free_money = account.balance_free(currency)
+    free = free_money.as_decimal() if free_money is not None else ZERO
+    for order in cache.orders_inflight(venue=venue):
+        requirement = terms.get(order.instrument_id)
+        # PENDING_UPDATE/PENDING_CANCEL are in flight too, but already reserved.
+        if requirement is None or order.status != OrderStatus.SUBMITTED:
+            continue
+        if not order.is_reduce_only and order.parent_order_id is None:
+            held = requirement.initial_usd(order.leaves_qty.as_decimal(), order, cache)
+            free -= held or ZERO
+    return free
 
 
 def _closing_credit(cache, position, submitting: set) -> Decimal:

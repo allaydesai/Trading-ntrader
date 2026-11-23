@@ -18,6 +18,7 @@ Run with ``--forked`` (C extensions).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
 
 import pandas as pd
@@ -28,15 +29,16 @@ from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, Strategy
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import OrderSide
-from nautilus_trader.model.events import OrderDenied
+from nautilus_trader.model.events import OrderDenied, OrderModifyRejected
 from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.instruments import CurrencyPair
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy
 
 from src.core.backtest_venue import cost_snapshot, setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fx_results import usd_realised_pnls
-from src.core.margin_gate import DENIAL_REASON
+from src.core.margin_gate import DENIAL_REASON, MarginGate
 from src.core.results_extractor import mark_to_market
 from src.models.backtest_request import BacktestRequest
 from src.services.fx.instrument_builder import build_fx_pair
@@ -50,14 +52,14 @@ T0 = pd.Timestamp("2025-03-06 15:00", tz="UTC").value
 BAR_VOLUME = Quantity.from_int(100_000_000)
 
 
-def _pair(name: str):
+def _pair(name: str) -> CurrencyPair:
     return build_fx_pair(get_pair_spec(name))
 
 
 EURUSD, USDJPY, EURGBP, GBPUSD = (_pair(n) for n in ("EURUSD", "USDJPY", "EURGBP", "GBPUSD"))
 
 
-def _bars(instrument, closes: list[str]) -> list[Bar]:
+def _bars(instrument: CurrencyPair, closes: list[str]) -> list[Bar]:
     bar_type = BarType.from_str(f"{instrument.id}-1-HOUR-MID-EXTERNAL")
     bars = []
     for i, close in enumerate(closes):
@@ -102,6 +104,8 @@ class _Script(Strategy):
                 self.submit_order(self.resting)
             elif action == "MODIFY":
                 self.modify_order(self.resting, quantity=Quantity.from_int(units))
+            elif action == "REPRICE":
+                self.modify_order(self.resting, price=instrument.make_price(Decimal(price)))
             else:
                 side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
                 self.submit_order(self.order_factory.market(iid, side, Quantity.from_int(units)))
@@ -109,11 +113,22 @@ class _Script(Strategy):
     def on_order_denied(self, event: OrderDenied) -> None:
         self.denials.append(event.reason)
 
-    def on_order_modify_rejected(self, event) -> None:
+    def on_order_modify_rejected(self, event: OrderModifyRejected) -> None:
         self.modify_rejections.append(event.reason)
 
 
-def _run(traded, closes, script, balance, rate_sources=(), cost_multiplier=1):
+Script = list[tuple[int, str, int, str | None]]  # (bar, action, units, price)
+RunResult = tuple[BacktestEngine, "_Script", MarginGate | None]
+
+
+def _run(
+    traded: CurrencyPair,
+    closes: list[str],
+    script: Script,
+    balance: float,
+    rate_sources: Sequence[tuple[list[Bar], CurrencyPair]] = (),
+    cost_multiplier: float = 1,
+) -> RunResult:
     engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
     data = [(_bars(traded, closes), traded)]
     gate = setup_backtest_venues(
@@ -133,7 +148,7 @@ def _run(traded, closes, script, balance, rate_sources=(), cost_multiplier=1):
     return engine, strategy, gate
 
 
-def _usd_change(engine, start) -> Decimal:
+def _usd_change(engine: BacktestEngine, start: float) -> Decimal:
     account = engine.cache.account_for_venue(IDEALPRO)
     return account.balance_total(USD).as_decimal() - Decimal(start)
 
@@ -157,8 +172,13 @@ GBP_RATES = [(_bars(GBPUSD, ["1.25000"] * 4), GBPUSD)]
 )
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
 def test_over_margin_is_denied_within_fills_and_the_close_is_never_denied(
-    pair, closes, over, within, rate_sources, side
-):
+    pair: CurrencyPair,
+    closes: list[str],
+    over: int,
+    within: int,
+    rate_sources: Sequence[tuple[list[Bar], CurrencyPair]],
+    side: str,
+) -> None:
     script = [(1, side, over, None), (2, side, within, None), (3, "CLOSE", 0, None)]
     engine, strategy, gate = _run(pair, closes, script, 10_000, rate_sources)
     try:
@@ -175,7 +195,9 @@ def test_over_margin_is_denied_within_fills_and_the_close_is_never_denied(
     "pair, px, locked",
     [(EURUSD, "1.10000", "6600.00"), (USDJPY, "150.000", "6000.00")],
 )
-def test_a_position_locks_3_percent_and_a_second_entry_sees_it(pair, px, locked):
+def test_a_position_locks_3_percent_and_a_second_entry_sees_it(
+    pair: CurrencyPair, px: str, locked: str
+) -> None:
     # 200,000 holds 3% of its USD notional (leverage 1, not Nautilus' default 10); another
     # 200,000 would need the same again of the ~3,400-4,000 left free.
     script = [(1, "BUY", 200_000, None), (2, "BUY", 200_000, None)]
@@ -188,7 +210,7 @@ def test_a_position_locks_3_percent_and_a_second_entry_sees_it(pair, px, locked)
         engine.dispose()
 
 
-def test_a_quantity_increase_modify_is_rejected_even_with_ample_margin():
+def test_a_quantity_increase_modify_is_rejected_even_with_ample_margin() -> None:
     script = [(1, "LIMIT", 100_000, "1.00000"), (2, "MODIFY", 200_000, None)]
     engine, strategy, gate = _run(EURUSD, ["1.10000"] * 3, script, 10_000_000)
     try:
@@ -200,10 +222,36 @@ def test_a_quantity_increase_modify_is_rejected_even_with_ample_margin():
         engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "new_price, rejected",
+    [
+        ("1.12000", True),  # 300,000 x 1.12 x 3% = 10,080: +180 USD of ~100 free
+        ("1.10300", False),  # 9,927: +27 USD fits
+        ("1.05000", False),  # lowers the margin
+    ],
+)
+def test_a_reprice_raising_fx_margin_past_free_is_rejected(new_price: str, rejected: bool) -> None:
+    # A 300,000 EURUSD buy limit at 1.10000 below a 1.20000 market locks 9,900 of 10,000.
+    script = [(1, "LIMIT", 300_000, "1.10000"), (2, "REPRICE", 0, new_price)]
+    engine, strategy, gate = _run(EURUSD, ["1.20000"] * 3, script, 10_000)
+    try:
+        order = engine.cache.order(strategy.resting.client_order_id)
+        if rejected:
+            assert len(strategy.modify_rejections) == 1
+            assert strategy.modify_rejections[0].startswith(DENIAL_REASON)
+            assert str(order.price) == "1.10000"
+            assert gate is not None and gate.denied_count == 1
+        else:
+            assert strategy.modify_rejections == []
+            assert str(order.price) == new_price
+    finally:
+        engine.dispose()
+
+
 # -- costs -----------------------------------------------------------------------------------
 
 
-def test_eurusd_round_trip_pays_bps_with_minimum_plus_the_spread():
+def test_eurusd_round_trip_pays_bps_with_minimum_plus_the_spread() -> None:
     # 100,000 at 1.10000 -> 1.10100: +100.00 USD. Commission 0.2 bp x 110,000 = 2.20 and
     # x 110,100 = 2.20; spread 100,000 x 0.5 pip / 2 = 2.50 a side. 100 - 4.40 - 5.00 = 90.60.
     script = [(1, "BUY", 100_000, None), (2, "CLOSE", 0, None)]
@@ -220,7 +268,7 @@ def test_eurusd_round_trip_pays_bps_with_minimum_plus_the_spread():
         engine.dispose()
 
 
-def test_small_orders_pay_the_usd_2_minimum_per_side():
+def test_small_orders_pay_the_usd_2_minimum_per_side() -> None:
     # 10,000 at 1.10000: 0.22 bp-commission < 2.00 each side; spread 0.25 a side; P&L +10.00
     script = [(1, "BUY", 10_000, None), (2, "CLOSE", 0, None)]
     engine, _, _ = _run(EURUSD, ["1.10000", "1.10100", "1.10100"], script, 100_000)
@@ -230,7 +278,7 @@ def test_small_orders_pay_the_usd_2_minimum_per_side():
         engine.dispose()
 
 
-def test_usdjpy_round_trip_costs_convert_and_the_trade_row_matches_the_balance():
+def test_usdjpy_round_trip_costs_convert_and_the_trade_row_matches_the_balance() -> None:
     # 100,000 USDJPY 150.000 -> 151.000: 100,000 JPY = 662.25 USD. Commission 2.00 a side
     # (0.2 bp x 100,000 USD); spread 250 JPY a side = 1.67 (/150) and 1.66 (/151).
     # 662.25 - 4.00 - 3.33 = 654.92.
@@ -247,7 +295,7 @@ def test_usdjpy_round_trip_costs_convert_and_the_trade_row_matches_the_balance()
         engine.dispose()
 
 
-def test_eurgbp_cross_costs_convert_through_gbpusd():
+def test_eurgbp_cross_costs_convert_through_gbpusd() -> None:
     # 100,000 EURGBP 0.85000 -> 0.86000 = 1,000 GBP x 1.25 = 1,250.00 USD. Commission
     # 0.2 bp x 106,250 = 2.125 -> 2.12 (cents, half-even) and x 107,500 = 2.15; spread
     # 1.0 pip / 2 = 5 GBP = 6.25 a side. 1,250 - 4.27 - 12.50 = 1,233.23.
@@ -261,7 +309,7 @@ def test_eurgbp_cross_costs_convert_through_gbpusd():
         engine.dispose()
 
 
-def test_the_cost_multiplier_scales_every_fx_cost():
+def test_the_cost_multiplier_scales_every_fx_cost() -> None:
     script = [(1, "BUY", 100_000, None), (2, "CLOSE", 0, None)]
     closes = ["1.10000", "1.10100", "1.10100"]
     engine, _, _ = _run(EURUSD, closes, script, 100_000, cost_multiplier=2)
@@ -281,7 +329,7 @@ def _wave(n: int = 60) -> list[str]:
     return [f"{150 + 1.5 * math.sin(i * 2 * math.pi / 20):.3f}" for i in range(n)]
 
 
-async def test_the_orchestrator_sizes_sma_crossover_usdjpy_in_base_units():
+async def test_the_orchestrator_sizes_sma_crossover_usdjpy_in_base_units() -> None:
     from src.core.backtest_orchestrator import BacktestOrchestrator
 
     bars = _bars(USDJPY, _wave())
