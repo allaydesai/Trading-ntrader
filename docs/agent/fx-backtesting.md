@@ -332,8 +332,63 @@ EURUSD trade 1 by hand: long 91,239 units (USD 100,000 / 1.09602, floored), fill
 -398.66. Costs 8.56 (commission 2.00 a side: 0.2 bp of ~USD 100,000 and ~99,601 both round to
 the minimum; spread 91,239 x 0.000025 = 2.28 a side). Net **-407.22**, stored -407.22.
 
-## Planned (M5-M6)
+## Reporting, CLI and dashboard (M5)
 
-- M5: reporting (pips, lots, notional, leverage, the costs split from `fx_pairs.costs_usd`),
-  dashboard, `--units`, `--spread-pips`, `MID` bar types from the CLI. M6: Riptide and
-  Bollinger Reversal on FX.
+`src/services/fx/returns.py` (pure, like `futures/returns.py`) computes everything from a run's
+`config_snapshot.fx_pairs` and its trade rows; `src/services/fx/display.py` words it once for
+every renderer. A run without `fx_pairs` is not FX and every renderer prints what it did before.
+
+| Figure | Definition |
+|---|---|
+| units / lots | `quantity`, `quantity / 100,000` |
+| USD notional | USD quote: `quantity x entry`; USD base (USDJPY): `quantity`; a cross: not shown (its quote/USD rate at entry is not stored) |
+| margin used | `notional x margin_pct` |
+| pips | side-aware `(exit - entry) / pip_size` |
+| underlying % | side-aware `(exit - entry) / entry` (the stored `profit_pct` is not side-aware for shorts) |
+| P&L USD | the stored `profit_loss` (converted and net of USD costs since M3/M4) |
+| peak leverage | max concurrent USD notional / (starting balance + P&L of trades closed so far) |
+| costs split | `fx_pairs[...].costs_usd.commission` vs `.spread`, summed over pairs |
+
+The account return on USD equity stays the headline (D10). Return on margin is shown as
+secondary. Every FX view carries `FINANCING_NOTE` (D9: rollover is not modelled).
+
+- **CLI**: `backtest show` and `report summary` print an FX table after the account metrics;
+  `report` text/CSV/JSON add it (`fx_*` CSV rows, a JSON `fx` object with per-trade figures);
+  `history` marks `EURUSD (fx)` and keeps the account return; `compare` adds pips, peak
+  leverage and total costs (and the asset class row).
+- **MCP**: `get_run`/`compare_runs` rows have `asset_class: "fx"` and an `fx` object plus a
+  warning; `export_results` adds the FX trade columns only for FX runs. The mixed-asset-class
+  warning fires only when futures is in the set (FX and equity share the account return).
+- **`backtest run`** (and config mode, the MCP `resolve` path and the dashboard's Run form):
+  `EURUSD`, `EUR/USD`, `eur/usd` and `EUR.USD` name the catalog ticker `EURUSD`; an FX catalog
+  row (`asset_class FX`) loads `MID` bars from `--timeframe` (`src/services/fx/symbols.py`).
+  Only a symbol naming a shipped pair spec is looked up, so equity and futures runs never
+  touch the DB for it. `--units N` (N >= 1) sets `SMAConfig.units`: exactly N base units per
+  entry, FX only (exit 2 otherwise, like `--contracts`). `--spread-pips X` rebuilds the pair
+  with `typical_spread_pips = X` (`BacktestRequest.fx_spread_pips`, hashed only when set; it
+  shows in `fx_pairs[...].typical_spread_pips`). The `FX_SPREAD_PIPS_<PAIR>` env setting the
+  design mentions is not implemented (an env value outside the config hash would make runs
+  unreproducible). The CLI now passes a cross's conversion bars (`rate_sources`) too.
+- **Dashboard** (D12 FROZEN_VIEWS ruling): a Spot FX panel after the metrics, an FX trades
+  table (units, lots, pair-precision prices, USD notional, pips, underlying %, USD P&L), FX
+  export columns, an `FX` badge in the run list. Equity and futures pages are pinned byte for
+  byte against goldens captured before M5 (`tests/component/api/test_fx_dashboard.py`).
+- **Import summary**: `ImportResult.ohlc_flags` separates OHLC flags from the FX/futures
+  counters (rounding, session anomalies, out-of-order rows), which get an "Other warnings"
+  row; the FX dry-run labels timeframes `-MID`.
+
+### Smoke (task 5.7, 2026-11-23)
+
+CLI, `firstrate-fx`, `sma_crossover`, 1-HOUR, 2024-01-02 to 2024-02-01, persisted:
+
+| Run | Input | Result |
+|---|---|---|
+| `226b08b2` | `--symbol USDJPY` (CLI default USD 10M) | 1-HOUR-MID bars, 12 trade rows, total return -0.15% |
+| `573c5ed6` | `--symbol EUR/USD --starting-balance 1000000 --units 50000 --spread-pips 1.0` | ticker EURUSD; 16 closed; every trade 50,000 units; commission USD 66.00 (33 orders x 2.00 minimum); spread USD 82.50 (50,000 x 1.0 pip x 0.0001 / 2 = 2.50 a side x 33); peak notional USD 54,913.99, leverage 0.05x |
+| `4d7ce72b` (MCP `submit_backtest`, stdio) | `symbol "EUR/USD"`, USD 1M | resolved `EURUSD` / `1-HOUR-MID`; `get_run` `asset_class fx`, 16 closed, peak notional USD 100,000.84 (10% of 1M), leverage 0.10x, commission 66.00, spread 75.62 |
+
+`AAPL --units 1000` exits 2 ("--units is for FX only").
+
+## Planned (M6)
+
+- Riptide and Bollinger Reversal on FX (submodule sizing, `units` configs).

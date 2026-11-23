@@ -18,6 +18,11 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from src.cli.commands._fx_options import (
+    apply_fx_options,
+    check_units_instrument,
+    with_spread_pips,
+)
 from src.cli.commands._strategy_params import (
     _cli_strategy_params,
     apply_contracts,
@@ -116,6 +121,8 @@ def resolve_backtest_request(
     timeframe: str | None = None,
     catalog_name: str | None = None,
     contracts: int | None = None,
+    units: int | None = None,
+    spread_pips: float | None = None,
 ) -> tuple[BacktestRequest, str]:
     """Resolve inputs into BacktestRequest based on mode (config vs CLI).
 
@@ -137,6 +144,8 @@ def resolve_backtest_request(
         trade_size: Trade size in shares (CLI mode only)
         timeframe: Bar timeframe (CLI mode only)
         contracts: Futures only: whole contracts per entry (both modes; see apply_contracts)
+        units: FX only: base units per entry (both modes; see ``_fx_options``)
+        spread_pips: FX only: the modelled spread override (both modes)
 
     Returns:
         Tuple of (BacktestRequest, resolved_data_source)
@@ -185,7 +194,8 @@ def resolve_backtest_request(
         messages = "; ".join(err.get("msg", "") for err in e.errors())
         messages = messages.replace("Value error, ", "")
         raise click.UsageError(messages or str(e)) from e
-    return apply_contracts(request, contracts), source
+    # FX (M5): EUR/USD -> EURUSD, MID bars for an FX catalog row, --units, --spread-pips
+    return apply_fx_options(apply_contracts(request, contracts), units, spread_pips), source
 
 
 def _resolve_config_mode(
@@ -711,6 +721,7 @@ async def execute_backtest(
     instrument: Instrument,
     console: Console,
     progress_message: str = "Running backtest...",
+    rate_sources: list = (),  # type: ignore[assignment]
 ) -> tuple[BacktestResult, UUID | None]:
     """Execute backtest with progress indicator and proper cleanup.
 
@@ -724,6 +735,8 @@ async def execute_backtest(
         instrument: The instrument to trade
         console: Rich console for progress display
         progress_message: Custom message for the progress spinner
+        rate_sources: FX only: a cross's conversion-only ``(bars, instrument)`` pairs
+            (``DataLoadResult.rate_sources``)
 
     Returns:
         Tuple of (BacktestResult, run_id if persisted else None)
@@ -732,6 +745,8 @@ async def execute_backtest(
         ValueError: If bars are empty or strategy cannot be created
     """
     check_contracts_instrument(request.strategy_config, instrument)
+    check_units_instrument(request.strategy_config, instrument)
+    instrument = with_spread_pips(instrument, request.fx_spread_pips)
     orchestrator = BacktestOrchestrator()
 
     try:
@@ -742,7 +757,9 @@ async def execute_backtest(
             console=console,
         ) as progress:
             task = progress.add_task(progress_message, total=None)
-            result, run_id = await orchestrator.execute(request, bars, instrument)
+            result, run_id = await orchestrator.execute(
+                request, bars, instrument, rate_sources=rate_sources
+            )
             progress.update(task, completed=True)
 
         return result, run_id

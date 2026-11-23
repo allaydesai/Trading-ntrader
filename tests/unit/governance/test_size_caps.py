@@ -192,7 +192,7 @@ SIZE_BASELINE: dict[str, int] = {
     # Phase 2 pre-work, 176 -> 177: `fill_seed` makes the fill model's draws part of the request.
     # MCP phase 4, 177 -> 178: `cost_multiplier` (cost stress) is part of the request.
     # Riptide, 178 -> 180: `fill_model` (gap-aware opt-in) is a field read from YAML.
-    "src/models/backtest_request.py::BacktestRequest": 180,
+    "src/models/backtest_request.py::BacktestRequest": 179,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
     # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
     "src/services/backtest_persistence.py::BacktestPersistenceService": 260,

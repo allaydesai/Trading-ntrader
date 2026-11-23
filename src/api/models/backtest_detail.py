@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, computed_field
 
 from src.services.futures.display import dashboard_panel
+from src.services.fx.display import dashboard_panel as fx_dashboard_panel
 
 
 class MetricDisplayItem(BaseModel):
@@ -290,6 +291,9 @@ class BacktestDetailView(BaseModel):
 
     futures: Optional[dict] = Field(
         default=None, description="Futures panel (return on margin first); None for equity"
+    )
+    fx: Optional[dict] = Field(
+        default=None, description="FX panel (M5: pips, leverage, costs split); None if not FX"
     )
     breadcrumbs: list[dict[str, str | None]] = Field(
         ...,
@@ -586,6 +590,7 @@ def to_detail_view(run, base_url: str = "") -> BacktestDetailView:
         trading_summary=build_trading_summary(run.metrics),
         data_quality_flag=getattr(run, "data_quality_flag", None),
         futures=dashboard_panel(run),
+        fx=fx_dashboard_panel(run),
         breadcrumbs=[
             {"label": "Dashboard", "url": f"{base_url}/"},
             {"label": "Backtests", "url": f"{base_url}/backtests"},

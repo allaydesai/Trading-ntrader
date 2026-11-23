@@ -19,6 +19,7 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.strategies import resolve_params, resolve_strategy
 from src.models.backtest_request import DEFAULT_FILL_SEED, BacktestRequest
+from src.services.fx.symbols import fx_ticker, resolve_fx_symbol
 from src.services.provenance import compute_config_hash
 
 
@@ -98,7 +99,11 @@ def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
             fix="Pass catalog (list_catalogs) or set NTRADER_MCP_DEFAULT_CATALOG.",
         )
     start, end = _window(spec)
-    symbol = spec.symbol.strip().upper()
+    symbol = fx_ticker(spec.symbol) or spec.symbol.strip().upper()
+    bar_type = timeframe_spec(spec.timeframe)
+    # FX (M5): an FX catalog row has MID bars, not the -LAST default
+    if fx := resolve_fx_symbol(catalog, symbol, bar_type):
+        symbol, bar_type = fx
     try:
         request = BacktestRequest(
             strategy_type=ref.name,
@@ -111,7 +116,7 @@ def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
             instrument_id=f"{symbol}.NAMED_CATALOG",
             start_date=start,
             end_date=end,
-            bar_type=timeframe_spec(spec.timeframe),
+            bar_type=bar_type,
             persist=True,
             starting_balance=spec.starting_balance,
             data_source="catalog",

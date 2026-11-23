@@ -95,6 +95,9 @@ class ImportResult(BaseModel):
             but each flag is logged and surfaced in the import summary so it
             never silently passes. Empty for a clean import. Distinct from
             ``error``, which carries a blocking failure reason.
+        ohlc_flags: How many leading ``warnings`` are OHLC/integrity flags; the rest are
+            importer counters (FX rounding and session anomalies, out-of-order rows). ``None``
+            (the equity importer) means every warning is an OHLC flag.
     """
 
     ticker: str
@@ -104,6 +107,7 @@ class ImportResult(BaseModel):
     duration: float = Field(..., ge=0)
     outcome: Optional[ImportOutcome] = None
     warnings: list[str] = Field(default_factory=list)
+    ohlc_flags: Optional[int] = Field(default=None, ge=0)
 
 
 class SchemaMismatch(BaseModel):

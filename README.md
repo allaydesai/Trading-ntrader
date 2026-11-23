@@ -223,8 +223,8 @@ files (compact `YYYYMMDD` dates, US/Eastern wall clock). Bars are `MID`
 peaked at 750 MB RSS), stored at one precision per pair (EURUSD/GBPUSD 5, USDJPY 3, which also
 rounds USDJPY's 2014 float noise), and daily bars are stamped at their 17:00 ET session open
 (the row dated `D` opens `D-1 17:00` New York). Bars outside Sunday 17:00 to Friday 17:00 ET are
-kept and reported as session-anomaly warnings. FX backtests arrive with M3-M5 of
-`openspec/changes/add-fx-backtesting/`; see `docs/agent/fx-backtesting.md`.
+kept and reported as session-anomaly warnings (the import summary counts them under "Other
+warnings", apart from "Flagged (OHLC)"). See `docs/agent/fx-backtesting.md`.
 
 ```bash
 uv run python -m src.cli.main import --format firstrate --catalog firstrate-fx \
@@ -253,6 +253,26 @@ dashboard shows them too: a Futures panel on the run page, a futures trades tabl
 with `RoM` in the run list. Details, limits and a sizing guide
 for external strategies: `docs/agent/futures-backtesting.md`.
 
+**Backtesting spot FX**: run `backtest run` with `--catalog firstrate-fx` and `--symbol EURUSD`
+(or `EUR/USD`; also `GBPUSD`, `USDJPY`). `--timeframe 1-HOUR` loads the pair's `MID` bars. The
+account is USD: P&L is converted at the exit rate, IB's 0.2 bp commission (USD 2 minimum per
+order) and a modelled half-spread per side are charged in USD, margin is 3% of notional, and
+`sma_crossover`/`buy_and_hold` size in base units by USD notional. `--units N` trades exactly N
+base units per entry (100,000 = 1 lot; FX only, `sma_crossover`), `--spread-pips X` overrides
+the pair's modelled spread (part of the run's config hash):
+
+```bash
+uv run python -m src.cli.main backtest run --symbol EUR/USD --catalog firstrate-fx \
+  --timeframe 1-HOUR --start 2024-01-02 --end 2024-02-01 --starting-balance 1000000 --units 50000
+```
+
+The account return on USD equity stays the headline. `backtest show`, `report`, `compare`, the
+MCP run tools (`asset_class: "fx"`, an `fx` object) and the dashboard (a Spot FX panel, an FX
+trades table and export, `FX` in the run list) add pips, units/lots, USD notional, peak
+leverage, commission vs modelled spread and a "financing not modelled" note; `history` marks
+`EURUSD (fx)`. Cost and margin values are UNVERIFIED working defaults; details in
+`docs/agent/fx-backtesting.md`.
+
 **Execution realism (opt-in).** A config file's `backtest:` section can set
 `fill_model: gap_aware` (as `configs/riptide.yaml` does): stops gapped through overnight fill
 at the open, and market-on-open exits execute on the next bar at its open. The env var
@@ -278,6 +298,7 @@ fills never pay it. Details: `docs/agent/nautilus.md` (Fill and Fee Models).
 | `backtest run --strategy <type> --symbol <SYM> [--data-source <src>] ...` | Run a backtest (sources: catalog, ibkr, kraken, mock) |
 | `backtest run --strategy <type> --symbol <SYM> --catalog <name> ...` | Run against a named FirstRate catalog (resolves the ticker via the import DB; overrides the default `NAUTILUS_PATH`) |
 | `backtest run --symbol ES --catalog firstrate-futures --contracts N ...` | Futures: trade exactly N whole contracts per entry (instead of notional sizing) |
+| `backtest run --symbol EURUSD --catalog firstrate-fx [--units N] [--spread-pips X] ...` | Spot FX on `MID` bars: N base units per entry; override the modelled spread |
 | `backtest run <config.yaml>` | Run backtest with YAML config |
 | `backtest run-multi --symbols <A,B> --catalog <name> --start <date> --end <date>` | Run ONE backtest across several ETFs from a named catalog (not persisted yet) |
 | `backtest list` | List available strategies and data |

@@ -16,6 +16,7 @@ from rich.text import Text
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
 from src.services.futures.display import run_summary, signed_pct
+from src.services.fx import display as fx_display
 
 console = Console()
 
@@ -188,7 +189,8 @@ def _display_comparison_table(backtests: List):
     add_metric_row("Strategy", lambda bt: bt.strategy_name, lambda x: x)
     add_metric_row("Symbol", lambda bt: bt.instrument_symbol, lambda x: x)
     add_metric_row("Date", lambda bt: bt.created_at, lambda x: x.strftime("%Y-%m-%d"))
-    for row in _futures_rows(backtests):  # only when a compared run is futures (M4)
+    # Only when a compared run is futures (M4) or FX (M5)
+    for row in _futures_rows(backtests) + _fx_rows(backtests):
         table.add_row(*row)
 
     # Performance metric rows
@@ -231,13 +233,19 @@ def _display_comparison_table(backtests: List):
     console.print()  # Add blank line at end
 
 
+def _asset_class(bt) -> str:
+    if futures := run_summary(bt):
+        return futures.asset_class
+    return "fx" if fx_display.run_summary(bt) else "equity"
+
+
 def _futures_rows(backtests: List) -> list[list[str]]:
     """Asset class, return on margin and on the underlying; none for an all-equity set."""
     summaries = [run_summary(bt) for bt in backtests]
     if not any(summaries):
         return []
     return [
-        ["Asset Class", *(s.asset_class if s else "equity" for s in summaries)],
+        ["Asset Class", *(_asset_class(bt) for bt in backtests)],
         [
             "Return on Margin",
             *(signed_pct(s.return_on_margin_pct) if s else "-" for s in summaries),
@@ -246,6 +254,26 @@ def _futures_rows(backtests: List) -> list[list[str]]:
             "Return on Underlying",
             *(signed_pct(s.return_on_underlying_pct) if s else "-" for s in summaries),
         ],
+    ]
+
+
+def _fx_rows(backtests: List) -> list[list[str]]:
+    """FX figures beside the account return; none unless a compared run is FX.
+
+    The asset class row comes from :func:`_futures_rows` when a futures run is compared too.
+    """
+    summaries = [fx_display.run_summary(bt) for bt in backtests]
+    if not any(summaries):
+        return []
+    rows = (
+        []
+        if any(run_summary(bt) for bt in backtests)
+        else [["Asset Class", *(_asset_class(bt) for bt in backtests)]]
+    )
+    return rows + [
+        ["Pips", *(fx_display.pips(s.pips) if s else "-" for s in summaries)],
+        ["Peak Leverage", *(fx_display.leverage(s.peak_leverage) if s else "-" for s in summaries)],
+        ["Total Costs", *(fx_display.usd(s.costs_usd) if s else "-" for s in summaries)],
     ]
 
 

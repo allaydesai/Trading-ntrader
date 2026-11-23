@@ -28,6 +28,7 @@ from src.models.trade import (
 )
 from src.services.futures.returns import TRADE_COLUMNS as FUTURES_TRADE_COLUMNS
 from src.services.futures.returns import terms_from_snapshot, trade_rows
+from src.services.fx import returns as fx_returns
 from src.services.trade_analytics import (
     calculate_drawdowns,
     calculate_trade_statistics,
@@ -594,7 +595,7 @@ async def export_trades(
 
     rows = _with_futures_columns(backtest.config_snapshot, pydantic_trades)
     if format == "csv":
-        # Create CSV in memory; a futures run adds its columns after the equity ones
+        # Create CSV in memory; a futures or FX run adds its columns after the equity ones
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=_export_columns(backtest.config_snapshot))
         writer.writeheader()
@@ -665,9 +666,10 @@ def _csv_cell(column: str, value):
 
 
 def _export_columns(snapshot) -> list[str]:
-    """The CSV header: the equity columns, plus the futures ones for a futures run."""
+    """The CSV header: the equity columns, plus the futures (or FX, M5) ones for such a run."""
     futures = list(FUTURES_TRADE_COLUMNS) if terms_from_snapshot(snapshot) else []
-    return EXPORT_COLUMNS + futures
+    fx = list(fx_returns.TRADE_COLUMNS) if fx_returns.terms_from_snapshot(snapshot) else []
+    return EXPORT_COLUMNS + futures + fx
 
 
 def _with_futures_columns(snapshot, trades) -> list[dict]:
@@ -677,6 +679,10 @@ def _with_futures_columns(snapshot, trades) -> list[dict]:
     zero P&L (exported as empty) still gives zero returns rather than none.
     """
     rows = [_export_row(trade) for trade in trades]
+    if fx_returns.terms_from_snapshot(snapshot):  # FX (M5): units, lots, USD notional, pips
+        blank = dict.fromkeys(fx_returns.TRADE_COLUMNS)
+        cols = fx_returns.trade_rows(snapshot, trades)
+        return [{**row, **blank, **fx} for row, fx in zip(rows, cols)]
     if not terms_from_snapshot(snapshot):
         return rows
     blank = dict.fromkeys(FUTURES_TRADE_COLUMNS)

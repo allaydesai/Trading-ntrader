@@ -235,3 +235,32 @@ class TestProgressLineSkipReason:
         out = capsys.readouterr().out
         assert "venue unresolved" in out
         assert "already complete" not in out
+
+
+class TestOhlcFlagsVersusOtherWarnings:
+    """M5: an FX/futures counter (rounding, session anomalies) is not an OHLC flag.
+
+    ``ohlc_flags`` counts the leading OHLC entries of ``warnings``; ``None`` (equity) means
+    all of them are OHLC, as before.
+    """
+
+    def _fx(self, warnings, ohlc):
+        result = _success("EURUSD", warnings=warnings)
+        return result.model_copy(update={"ohlc_flags": ohlc})
+
+    def test_rounding_only_is_not_flagged_ohlc(self):
+        text = build_summary_text([self._fx(["12 row(s) rounded to 3 decimals"], 0)])
+        assert "Flagged (OHLC):  0" in text
+        assert "Other warnings:  1" in text
+        assert "EURUSD — 12 row(s) rounded to 3 decimals" in text
+
+    def test_ohlc_and_counters_count_once_each(self):
+        warnings = ["bar[0] ts=42: high (90.0) < low (95.0)", "3 session anomaly bar(s) kept"]
+        text = build_summary_text([self._fx(warnings, 1)])
+        assert "Flagged (OHLC):  1" in text
+        assert "Other warnings:  1" in text
+
+    def test_equity_summary_has_no_other_warnings_row(self):
+        text = build_summary_text([_success("SPY", warnings=["bar[0]: high < low"])])
+        assert "Flagged (OHLC):  1" in text
+        assert "Other warnings" not in text

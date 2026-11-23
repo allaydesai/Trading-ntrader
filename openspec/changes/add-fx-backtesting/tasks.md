@@ -177,23 +177,33 @@ and the "financing not modelled" note for FX runs. `--units N` and `EURUSD`/`EUR
 work. `--timeframe 1-HOUR` loads `MID` bars for FX. The dashboard FX panel renders (after the
 D12 ruling). Equity and futures output is byte-identical to the pre-M5 goldens.
 
-- [ ] 5.1 Unit (failing first): `tests/unit/services/fx/test_returns.py` (hand-computed EURUSD
+- [x] 5.1 Unit (failing first): `tests/unit/services/fx/test_returns.py` (hand-computed EURUSD
       long win plus USDJPY short loss: pips, underlying %, USD notional, margin, peak leverage,
       costs split); `test_display.py`.
-- [ ] 5.2 Implement `src/services/fx/returns.py`, `display.py`.
-- [ ] 5.3 Component (failing first): `tests/component/cli/test_backtest_fx_options.py`: symbol
+- [x] 5.2 Implement `src/services/fx/returns.py`, `display.py`.
+- [x] 5.3 Component (failing first): `tests/component/cli/test_backtest_fx_options.py`: symbol
       normalisation, `MID` price type from the catalog row, `--units` validation (exit 2
       cases as `--contracts`), `--spread-pips`.
-- [ ] 5.4 Wire `price_type_for`, symbol normalisation, `--units`, `--spread-pips` through
+- [x] 5.4 Wire `price_type_for`, symbol normalisation, `--units`, `--spread-pips` through
       `backtest run` (no growth of `run_backtest`, baseline 173).
-- [ ] 5.5 Unit (failing first) and implement: the FX blocks in `show.py`, `report.py`,
+- [x] 5.5 Unit (failing first) and implement: the FX blocks in `show.py`, `report.py`,
       `history.py`, MCP `runs.py`/`export.py`.
-- [ ] 5.6 Dashboard after the D12 ruling: goldens first (pre-M5 tree, equity and futures runs),
+- [x] 5.6 Dashboard after the D12 ruling: goldens first (pre-M5 tree, equity and futures runs),
       component tests red first (`tests/component/api/test_fx_dashboard.py`), then the
       panel, trades table, export, list badge and compare; regenerate `FROZEN_VIEWS` for
       exactly the approved files and record the diff in `design.md`.
 - [ ] 5.7 Manual: FX run pages and trades tables on 127.0.0.1:3000 return 200 with the FX
       numbers.
+- [x] 5.8 Import summary (found in M2/M4 smokes): "Flagged (OHLC)" counted the FX counters
+      (rounding, session anomalies) as OHLC flags; `ImportResult.ohlc_flags` splits them into
+      an "Other warnings" row (shown only when non-zero). The FX dry-run labels `-MID`.
+- **M5 notes (2026-11-23):** a cross has no USD notional/margin/leverage figure (its
+  quote/USD rate at entry is not stored; D11 adds no column). `--spread-pips` is a CLI flag
+  and part of the config hash; the `FX_SPREAD_PIPS_<PAIR>` env setting is not implemented
+  (outside the hash, it would make runs unreproducible). `run_backtest` stays at 173 (a
+  no-op `UsageError` re-raise dropped); `BacktestRequest` shrinks to 179. The CLI and the
+  MCP/web request paths share `src/services/fx/symbols.py`. Smokes in
+  `docs/agent/fx-backtesting.md` ("Smoke (task 5.7)").
 
 ## M6. Strategies: Riptide and Bollinger Reversal on FX
 

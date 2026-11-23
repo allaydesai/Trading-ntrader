@@ -40,7 +40,8 @@ from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.core.strategy_registry import StrategyRegistry
 from src.models.backtest_request import BacktestRequest
 from src.services.exceptions import DataNotFoundError
-from src.services.futures.display import trade_cells
+from src.services.fx.display import trade_table_cells
+from src.services.fx.symbols import run_target
 
 logger = structlog.get_logger(__name__)
 
@@ -302,8 +303,8 @@ async def run_backtest_submit(request: Request) -> Response:
 
     async with _backtest_lock:
         # Build backtest request
-        # LAST = last-traded price; standard for equity/crypto bar aggregation
-        bar_type_spec = f"{form_data.timeframe}-LAST"
+        # LAST bars for equity/crypto; an FX catalog row's ticker and MID bars (FX M5)
+        symbol, bar_type_spec = run_target(form_data)
         start_dt = datetime.combine(form_data.start_date, datetime.min.time(), tzinfo=timezone.utc)
         # end_date is inclusive: treat as end-of-day UTC so bars on end_date
         # (e.g., NYSE close at 21:00 UTC) are included in the backtest window.
@@ -312,7 +313,7 @@ async def run_backtest_submit(request: Request) -> Response:
         try:
             bt_request = BacktestRequest.from_cli_args(
                 strategy=form_data.strategy,
-                symbol=form_data.symbol,
+                symbol=symbol,
                 start=start_dt,
                 end=end_dt,
                 bar_type_spec=bar_type_spec,
@@ -822,7 +823,8 @@ async def get_trades_table(
     The trades come from the trades API endpoint called in-process, not over HTTP, so the
     table works on whatever host and port serve the app (it used to fetch a hardcoded
     ``localhost:8000``). An unknown sort field or order falls back to entry time, ascending.
-    A futures run also gets per-trade contracts, notional, margin, points and returns.
+    A futures run also gets per-trade contracts, notional, margin, points and returns; an FX
+    run units, lots, USD notional, pips, the underlying move and USD P&L (M5).
 
     Args:
         request: FastAPI request object
@@ -852,7 +854,7 @@ async def get_trades_table(
     trade_data = trade_list.model_dump(mode="json")
     backtest = await service.get_backtest_by_internal_id(backtest_id)
     context = {"request": request, "backtest_id": backtest_id, "response": trade_data}
-    context["futures_cells"] = trade_cells(backtest.config_snapshot, trade_data["trades"])
+    context.update(trade_table_cells(backtest.config_snapshot, trade_data["trades"]))
 
     return templates.TemplateResponse("partials/trades_table.html", context)
 

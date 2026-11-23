@@ -20,6 +20,8 @@ from src.services.futures.display import (
     summary_text,
 )
 from src.services.futures.returns import RATIO_ADJUSTED_NOTE, report_fields, trade_rows
+from src.services.fx import display as fx_display
+from src.services.fx import returns as fx_returns
 from src.services.reports.csv_exporter import CSVExporter
 from src.services.reports.text_report import TextReportGenerator
 
@@ -59,6 +61,9 @@ def summary(result_id: str):
 
             # Display key metrics table
             _display_metrics_table(backtest)
+
+            # FX runs: the account return above stays the headline (M5, D10)
+            _display_fx(backtest)
 
     except Exception as e:
         console.print(f"❌ Error loading result: {e}", style="red bold")
@@ -215,13 +220,14 @@ def _display_futures(backtest):
     print_futures(console, backtest)
 
 
-def _futures_json(backtest) -> dict:
-    """``{"futures": ...}`` for a futures run's JSON report (with per-trade figures); else {}."""
-    summary = run_summary(backtest)
-    if summary is None:
-        return {}
-    trades = backtest.trades or []
-    rows = [
+def _display_fx(backtest):
+    """The FX table for an FX run; nothing otherwise."""
+    fx_display.print_fx(console, backtest)
+
+
+def _trade_json(backtest, rows):
+    """Per-trade report rows: identity and timestamps, then the asset class's figures."""
+    return [
         {
             "trade_id": t.trade_id,
             "order_side": t.order_side,
@@ -229,8 +235,25 @@ def _futures_json(backtest) -> dict:
             "exit_timestamp": t.exit_timestamp,
             **row,
         }
-        for t, row in zip(trades, trade_rows(backtest.config_snapshot, trades))
+        for t, row in zip(backtest.trades or [], rows)
     ]
+
+
+def _fx_json(backtest) -> dict:
+    """``{"fx": ...}`` for an FX run's JSON report (with per-trade figures); else {}."""
+    summary = fx_display.run_summary(backtest)
+    if summary is None:
+        return {}
+    rows = fx_returns.trade_rows(backtest.config_snapshot, backtest.trades or [])
+    return {"fx": {**fx_returns.report_fields(summary), "trades": _trade_json(backtest, rows)}}
+
+
+def _futures_json(backtest) -> dict:
+    """``{"futures": ...}`` for a futures run's JSON report (with per-trade figures); else {}."""
+    summary = run_summary(backtest)
+    if summary is None:
+        return {}
+    rows = _trade_json(backtest, trade_rows(backtest.config_snapshot, backtest.trades or []))
     return {"futures": {**report_fields(summary), "note": RATIO_ADJUSTED_NOTE, "trades": rows}}
 
 
@@ -385,6 +408,8 @@ def _generate_text_report(backtest, output_path=None):
     report_content = generator.generate_performance_report(metrics_dict)
     if futures := run_summary(backtest):
         report_content = summary_text(futures) + "\n\n" + report_content
+    elif fx := fx_display.run_summary(backtest):
+        report_content = report_content + "\n\n" + fx_display.summary_text(fx)
 
     if output_path:
         # Save to file
@@ -432,6 +457,8 @@ def _generate_csv_report(backtest, output_path):
 
     if futures := run_summary(backtest):
         metrics_dict.update(flat_report_fields(futures))
+    elif fx := fx_display.run_summary(backtest):
+        metrics_dict.update(fx_display.flat_report_fields(fx))
 
     success = exporter.export_metrics(metrics_dict, output_path)
 
@@ -483,6 +510,7 @@ def _generate_json_report(backtest, output_path):
             else None
         ),
         **_futures_json(backtest),
+        **_fx_json(backtest),
     }
 
     # Write to JSON file

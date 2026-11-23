@@ -46,6 +46,9 @@ class SMAConfig(StrategyConfig):
     contracts : int, optional
         Futures only (``backtest run --contracts N``): trade exactly this many whole
         contracts per entry, ignoring the notional budget. Unset sizes by notional.
+    units : int, optional
+        FX only (``backtest run --units N``): trade exactly this many base-currency units
+        per entry, ignoring the notional budget. Unset sizes by notional.
     """
 
     instrument_id: InstrumentId
@@ -55,13 +58,14 @@ class SMAConfig(StrategyConfig):
     portfolio_value: Decimal = Decimal("1000000")
     position_size_pct: Decimal = Decimal("10.0")
     contracts: int | None = None
+    units: int | None = None
 
 
 def _sized_quantity(
     position_value: Decimal,
     price: Decimal,
     instrument: object | None,
-    fixed_contracts: int | None = None,
+    config: object | None = None,
     cache=None,
 ) -> tuple[Quantity | None, Decimal, Decimal]:
     """``(quantity, raw units, multiplier)`` for ``position_value`` of exposure at ``price``.
@@ -70,16 +74,24 @@ def _sized_quantity(
 
     Shares (multiplier 1) are whole, at least 1; crypto (size precision > 0) is fractional;
     a multiplied contract (futures) floors to whole contracts and is ``None`` below one.
-    ``fixed_contracts`` (futures only) replaces the budget with exactly that many contracts.
+    ``config.contracts`` (futures only) replaces the budget with exactly that many contracts,
+    ``config.units`` (FX only, M5) with exactly that many base units.
     A spot FX pair (FX M4) is sized in base units worth ``position_value`` USD, floored to its
     size increment and ``None`` below one: USD 100,000 of USDJPY is 100,000 units, not
     ``100,000 / 157``. A cross reads its quote/USD rate from ``cache``.
 
     Raises:
-        ValueError: ``fixed_contracts`` for an instrument with no multiplier (not futures),
-            or a cross with no USD rate in ``cache`` yet.
+        ValueError: ``contracts`` for an instrument with no multiplier (not futures),
+            ``units`` for one that is not an FX pair, or a cross with no USD rate in ``cache``.
     """
     multiplier = instrument_multiplier(instrument)
+    fixed_contracts = getattr(config, "contracts", None)
+    if (fixed_units := getattr(config, "units", None)) is not None:
+        if not is_fx_pair(instrument):
+            raise ValueError("units applies to FX pairs only")
+        if (rate := usd_per_quote(instrument, price, cache)) is None:  # type: ignore[arg-type]
+            raise ValueError(f"No USD rate for {instrument.id} yet: USD notional unknown")  # type: ignore[union-attr]
+        return Quantity.from_int(fixed_units), Decimal(fixed_units), rate
     if fixed_contracts is not None:
         if multiplier == 1:
             raise ValueError("contracts applies to futures instruments only")
@@ -245,7 +257,7 @@ class SMACrossover(Strategy):
         current_price = Decimal(str(self._current_bar.close))
 
         sizing = (position_value, current_price, self.cache.instrument(self.instrument_id))
-        quantity, raw_qty, multiplier = _sized_quantity(*sizing, self.config.contracts, self.cache)
+        quantity, raw_qty, multiplier = _sized_quantity(*sizing, self.config, self.cache)
         if quantity is None:
             self.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
             return None

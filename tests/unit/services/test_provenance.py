@@ -180,3 +180,16 @@ class TestFillModel:
         assert compute_config_hash(_request(fill_model="gap_aware")) != compute_config_hash(
             _request()
         )
+
+
+class TestFxSpreadPips:
+    """An FX spread override (``--spread-pips``, M5) is identity only when set."""
+
+    def test_unset_leaves_every_existing_hash_unchanged(self):
+        assert compute_config_hash(_request(fx_spread_pips=None)) == TestFillModel.CONFIG_HASH
+        assert compute_candidate_hash(_request()) == TestFillModel.CANDIDATE_HASH
+
+    def test_an_override_is_a_different_run(self):
+        wide = compute_config_hash(_request(fx_spread_pips=Decimal("1.5")))
+        assert wide != TestFillModel.CONFIG_HASH
+        assert wide != compute_config_hash(_request(fx_spread_pips=Decimal("2")))

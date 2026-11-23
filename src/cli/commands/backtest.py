@@ -140,6 +140,21 @@ def backtest():
     ),
 )
 @click.option(
+    "--units",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "FX only: trade exactly N base-currency units per entry (100,000 = 1 lot) instead of "
+        "sizing by notional. Applies to any strategy whose config has a 'units' setting."
+    ),
+)
+@click.option(
+    "--spread-pips",
+    type=click.FloatRange(min=0),
+    default=None,
+    help="FX only: override the pair's modelled bid/ask spread in pips (default: pair spec).",
+)
+@click.option(
     "--timeframe",
     "-t",
     default=None,
@@ -176,6 +191,8 @@ def run_backtest(
     slow_period: int | None,
     trade_size: int | None,
     contracts: int | None,
+    units: int | None,
+    spread_pips: float | None,
     timeframe: str | None,
     catalog_name: str | None,
     persist: bool,
@@ -225,6 +242,8 @@ def run_backtest(
             timeframe=timeframe,
             catalog_name=catalog_name,
             contracts=contracts,
+            units=units,
+            spread_pips=spread_pips,
         )
 
         # Display mode indicator
@@ -352,7 +371,7 @@ def run_backtest(
                 bars=bars,
                 instrument=instrument,
                 console=console,
-                progress_message="Running backtest...",
+                rate_sources=data_result.rate_sources,
             )
 
             # Calculate total execution time
@@ -419,11 +438,8 @@ def run_backtest(
             console.print(f"Unexpected error: {e}", style="red")
             return False
 
-    # Run async function
-    try:
-        result = asyncio.run(run_backtest_async())
-    except click.UsageError:
-        raise
+    # Run async function (a click.UsageError propagates: exit 2)
+    result = asyncio.run(run_backtest_async())
 
     if not result:
         raise click.ClickException("Backtest failed")

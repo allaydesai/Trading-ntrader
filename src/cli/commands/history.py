@@ -13,6 +13,7 @@ from rich.table import Table
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
 from src.services.futures.display import history_return_cell, run_summary, symbol_cell
+from src.services.fx.display import symbol_cell as fx_symbol_cell
 
 console = Console()
 
@@ -237,7 +238,7 @@ def _list_history_sync(
                 str(bt.run_id),
                 bt.created_at.strftime("%Y-%m-%d %H:%M"),
                 bt.strategy_name,
-                symbol_cell(bt.instrument_symbol, bt.config_snapshot),
+                _symbol_cell(bt),
                 f"[{return_style}]{return_display}[/{return_style}]",
                 sharpe_display,
                 f"[{status_style}]{status_display}[/{status_style}]",
@@ -262,6 +263,14 @@ def _list_history_sync(
         console.print(f"❌ Error: {e}", style="red")
         console.print("💡 Check database is running and credentials are correct", style="dim")
         raise
+
+
+def _symbol_cell(bt) -> str:
+    """The symbol, marked ``(fx)`` for an FX run (M5) or ``(fut)`` for a futures run."""
+    snapshot = bt.config_snapshot
+    return fx_symbol_cell(bt.instrument_symbol, snapshot) or symbol_cell(
+        bt.instrument_symbol, snapshot
+    )
 
 
 def _return_cell(bt, sort: str = "date") -> str:
