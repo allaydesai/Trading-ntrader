@@ -257,7 +257,7 @@ def resolve_timeframes(timeframe: str | None, asset_class: AssetClass) -> list[s
     """Resolve which timeframe specs an import should cover.
 
     An explicit ``--timeframe`` always wins (Story 2.4 AC3). With no restriction,
-    the ETF and futures paths import all five native timeframes (AC2; futures M2);
+    the ETF, futures and FX paths import all five native timeframes (AC2; futures/FX M2);
     every other asset class keeps the historical ``daily`` default.
 
     Args:
@@ -269,7 +269,7 @@ def resolve_timeframes(timeframe: str | None, asset_class: AssetClass) -> list[s
     """
     if timeframe:
         return parse_timeframes(timeframe)
-    all_native = asset_class in (AssetClass.ETF, AssetClass.FUTURES)
+    all_native = asset_class in (AssetClass.ETF, AssetClass.FUTURES, AssetClass.FX)
     default = ETF_DEFAULT_TIMEFRAMES if all_native else "daily"
     return parse_timeframes(default)
 
@@ -628,7 +628,7 @@ def _run_dry_run(
                 ac,
                 catalog=catalog,
                 cache_reader=cache_reader,
-                include_date_ranges=is_etf or ac == AssetClass.FUTURES,
+                include_date_ranges=is_etf or ac in (AssetClass.FUTURES, AssetClass.FX),
             )
         except (OperationalError, DatabaseConnectionError) as e:
             # DB went away while computing the estimate — degrade gracefully:
@@ -642,7 +642,7 @@ def _run_dry_run(
                 ac,
                 catalog=catalog,
                 cache_reader=None,
-                include_date_ranges=is_etf or ac == AssetClass.FUTURES,
+                include_date_ranges=is_etf or ac in (AssetClass.FUTURES, AssetClass.FX),
             )
     except (PermissionError, OSError) as e:
         console.print(f"❌ Fatal filesystem error: {e}", style="red")
@@ -682,7 +682,7 @@ def _run_dry_run(
     default=None,
     help=(
         "Comma-separated timeframes: daily,hourly,minute,1min,5min,30min "
-        "(default: all five for etf/futures, daily otherwise)."
+        "(default: all five for etf/futures/fx, daily otherwise)."
     ),
 )
 @click.option(
@@ -727,6 +727,12 @@ def import_firstrate(
 
         timeframes = resolve_timeframes(timeframe, AssetClass.FUTURES)
         exit_code = run_futures_import(catalog, source_path, timeframes)
+    elif (asset_class or "").lower() == "fx":
+        from src.cli.commands.import_fx import run_fx_import
+
+        exit_code = run_fx_import(
+            catalog, source_path, resolve_timeframes(timeframe, AssetClass.FX)
+        )
     else:
         exit_code = _run_import(
             format_name,
