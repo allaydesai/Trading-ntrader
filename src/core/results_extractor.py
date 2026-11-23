@@ -50,7 +50,7 @@ from nautilus_trader.model.objects import Currency, Money
 
 from src.config import get_settings
 from src.core.fx_rates import is_fx, needs_conversion
-from src.core.fx_results import exit_rates, require_fx_rates, settle_fx_results, usd_pnl
+from src.core.fx_results import require_fx_rates, settle_fx_results, usd_pnl, usd_realised_pnls
 from src.core.mark_to_market import Fill, RiskMetrics, daily_equity, fx_daily_equity, risk_metrics
 from src.core.metrics import net_profit_factor
 from src.models.backtest_result import BacktestResult
@@ -502,7 +502,7 @@ class ResultsExtractor:
             key=lambda x: x.ts_closed,
         )
 
-        fx_rates = exit_rates(self.engine)
+        fx_rates = usd_realised_pnls(self.engine)
         for position in sorted_positions:
             pnl = usd_pnl(position, fx_rates)
             cumulative_pnl += pnl

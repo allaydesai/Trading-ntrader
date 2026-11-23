@@ -1,6 +1,6 @@
 """FX M3 (task 3.5): the trade writer stores USD ``profit_loss`` for FX positions.
 
-The service against a mocked repository: a USDJPY row converts at its ``usd_rates`` entry, a
+The service against a mocked repository: a USDJPY row stores its ``usd_pnls`` amount, a
 missing rate fails the write, and USD rows beside it are untouched. The scalar parsing rules
 are unit-tested in ``tests/unit/services/test_backtest_persistence_fx.py``.
 """
@@ -16,7 +16,7 @@ from src.services.backtest_persistence import BacktestPersistenceService
 
 pytestmark = pytest.mark.component
 
-RATE_151 = Decimal(str(1 / 151))  # what get_xrate returned at the USDJPY 151.000 exit
+USD_662 = Decimal(str(100_000 / 151))  # 100,000 JPY at the USDJPY 151.000 exit
 
 
 def _row(position_id: str, instrument: str, pnl) -> dict:
@@ -37,19 +37,19 @@ def _row(position_id: str, instrument: str, pnl) -> dict:
     }
 
 
-async def _save(frame_rows: list[dict], usd_rates=None) -> list:
+async def _save(frame_rows: list[dict], usd_pnls=None) -> list:
     repository = AsyncMock()
     service = BacktestPersistenceService(repository)
     frame = pd.DataFrame(frame_rows).set_index("position_id")
     await service.save_trades_from_positions(
-        backtest_run_id=1, positions_report_df=frame, usd_rates=usd_rates
+        backtest_run_id=1, positions_report_df=frame, usd_pnls=usd_pnls
     )
     return repository.bulk_create_trades.call_args.args[0]
 
 
 async def test_a_usdjpy_trade_row_stores_usd_profit_loss():
     saved = await _save(
-        [_row("P-1", "USD/JPY.IDEALPRO", "100000.00 JPY")], usd_rates={"P-1": RATE_151}
+        [_row("P-1", "USD/JPY.IDEALPRO", "100000.00 JPY")], usd_pnls={"P-1": USD_662}
     )
     assert saved[0].profit_loss == Decimal("662.25")
 
@@ -65,6 +65,6 @@ async def test_usd_rows_are_unchanged_beside_an_fx_row():
             _row("P-1", "USD/JPY.IDEALPRO", "100000.00 JPY"),
             _row("P-2", "EUR/USD.IDEALPRO", "90.00 USD"),
         ],
-        usd_rates={"P-1": RATE_151},
+        usd_pnls={"P-1": USD_662},
     )
     assert [t.profit_loss for t in saved] == [Decimal("662.25"), Decimal("90.00")]

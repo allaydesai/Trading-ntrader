@@ -152,8 +152,8 @@ Tests: `tests/component/core/test_fx_rates.py`,
   failed when persisting) instead of reporting a frozen balance. FX fills with no feeder at
   all fail the same way.
 - **Results in USD.** Trade rows store `profit_loss` in USD: the positions report's
-  `"100000.00 JPY"` is converted at the rate(s) the account used for the position's
-  reducing fills (its exit, for a single exit), rounded to cents; a non-USD P&L with no rate fails the trade write. The
+  `"100000.00 JPY"` is replaced by the position's USD as the account booked it (every
+  reducing fill converted at its own recorded rate, `usd_realised_pnls`), rounded to cents; a non-USD P&L with no rate fails the trade write. The
   analyzer gets each converted trade in USD, so `total_pnl`, `largest_win`, profit factor and
   the other P&L statistics are USD. Mark-to-market equity for an FX run books each fill's
   realised P&L at its own recorded rate (average cost per position, as Nautilus' `Position`)
@@ -161,8 +161,8 @@ Tests: `tests/component/core/test_fx_rates.py`,
   a flat run rebuilds to the engine's USD balance, so `metrics_basis` is `mark_to_market`.
   `config_snapshot` declares `account_currency` and `fx_pairs` (filled from M4).
 - A position closed in several parts converts each part at its own fill's rate, as the
-  account does: the stored `profit_loss` uses the P&L-weighted rate of its reducing fills
-  (`exit_rates`), so it equals the balance change (pinned: USD 497.24 for two halves).
+  account does, so the stored `profit_loss` equals the balance change (pinned: USD 497.24 for
+  two halves; halves at 151 and 149 net 0 JPY but USD -4.44, and store -4.44).
 
 ### When a fill converts (the rate lag, pinned)
 

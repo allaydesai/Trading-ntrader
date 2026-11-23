@@ -3,8 +3,8 @@
 ``FxRateFeeder`` (``src/core/fx_rates.py``) records the rate the account converted every FX
 fill at, and a miss for every fill the cache had no rate for. Here a finished engine is read
 back: a miss (or FX fills with no feeder at all) fails the run, because Nautilus left the USD
-balance unchanged for that fill. Otherwise each position's quote-currency P&L converts at the
-rate the account used for each of its reducing fills (for a single exit, the exit's rate).
+balance unchanged for that fill. Otherwise each position's realised P&L is rebuilt in USD,
+every reducing fill converted at the rate the account used for it.
 """
 
 from __future__ import annotations
@@ -62,21 +62,17 @@ def require_fx_rates(engine: BacktestEngine) -> FxRateBook | None:
     return book
 
 
-def _effective_rate(position, book: FxRateBook) -> float | None:
-    """USD per quote unit that converts ``position``'s whole realised P&L exactly.
+def _usd_realised(position, book: FxRateBook) -> float:
+    """``position``'s realised P&L in USD, each reducing fill converted at its own rate.
 
-    The account converts each reducing fill's P&L at that fill's rate, so a position closed in
-    parts is replayed (average cost, as Nautilus' ``Position``) and the summed USD divided by
-    the summed quote P&L. A position with no realised P&L yet uses its last fill's rate.
+    The account converts every reducing fill's quote P&L at that fill's rate, so the position
+    is replayed (average cost, as Nautilus' ``Position``) and the USD amounts summed. No single
+    rate could stand in: parts closed at 151 and 149 net 0 JPY but not 0 USD.
     """
-    quantity = average = quote_pnl = usd = 0.0
-    last_rate = None
+    quantity = average = usd = 0.0
     multiplier = position.multiplier.as_double()
     for fill in position.events:
-        rate = book.fill_rate(fill.trade_id)
-        if rate is None:
-            continue
-        last_rate = rate
+        rate = book.fill_rate(fill.trade_id) or 0.0  # a missing rate already failed the run
         signed = fill.last_qty.as_double() * (1.0 if fill.order_side == OrderSide.BUY else -1.0)
         price = fill.last_px.as_double()
         if quantity == 0.0 or (quantity > 0) == (signed > 0):
@@ -84,20 +80,13 @@ def _effective_rate(position, book: FxRateBook) -> float | None:
             quantity += signed
             continue
         closed = math.copysign(min(abs(signed), abs(quantity)), quantity)
-        pnl = closed * (price - average) * multiplier
-        quote_pnl += pnl
-        usd += pnl * rate
+        usd += closed * (price - average) * multiplier * rate
         quantity -= closed
-    if abs(quote_pnl) < 1e-9:
-        return last_rate
-    return usd / quote_pnl
+    return usd
 
 
-def exit_rates(engine: BacktestEngine) -> dict[str, Decimal]:
-    """USD per quote unit converting each converting position's realised P&L, by position id.
-
-    For a single exit this is the exit fill's rate; for a position closed in parts, the
-    P&L-weighted rate of its reducing fills, so ``P&L x rate`` equals the account's USD.
+def usd_realised_pnls(engine: BacktestEngine) -> dict[str, Decimal]:
+    """Each converting position's realised P&L in USD, by position id (as the account booked).
 
     Raises:
         FxRateMissingError: as :func:`require_fx_rates`.
@@ -105,27 +94,24 @@ def exit_rates(engine: BacktestEngine) -> dict[str, Decimal]:
     book = require_fx_rates(engine)
     if book is None:
         return {}
-    rates: dict[str, Decimal] = {}
-    for position in engine.cache.positions():
-        rate = _effective_rate(position, book)
-        if rate is not None:
-            rates[position.id.value] = Decimal(str(rate))
-    return rates
+    return {
+        position.id.value: Decimal(str(_usd_realised(position, book)))
+        for position in engine.cache.positions()
+        if needs_conversion(engine.cache.instrument(position.instrument_id))
+    }
 
 
-def usd_pnl(position, rates: dict[str, Decimal]) -> float:
-    """``position``'s realised P&L in USD: at its exit rate when ``rates`` has one.
+def usd_pnl(position, usd_pnls: dict[str, Decimal]) -> float:
+    """``position``'s realised P&L in USD: its converted amount when ``usd_pnls`` has one.
 
-    Without a rate (every equity and futures position) this is the raw ``realized_pnl`` as
+    Without one (every equity and futures position) this is the raw ``realized_pnl`` as
     before; :func:`settle_fx_results` has already failed any FX fill that had no rate.
     """
     pnl = getattr(position, "realized_pnl", None)
-    if not pnl:
-        return 0.0
-    rate = rates.get(position.id.value) if rates else None
-    if rate is None or pnl.currency == ACCOUNT_CURRENCY:
-        return pnl.as_double()
-    return pnl.as_double() * float(rate)
+    usd = usd_pnls.get(position.id.value) if usd_pnls else None
+    if usd is not None and (pnl is None or pnl.currency != ACCOUNT_CURRENCY):
+        return float(usd)
+    return pnl.as_double() if pnl else 0.0
 
 
 def settle_fx_results(engine: BacktestEngine) -> dict[str, Decimal]:
@@ -134,12 +120,12 @@ def settle_fx_results(engine: BacktestEngine) -> dict[str, Decimal]:
     Nautilus' analyzer keys realised P&L by the position's settlement currency, so a USDJPY
     trade would be missing from every USD statistic. Each converted trade is added in USD
     (``add_trade`` replaces by position id, so calling this twice is harmless). Returns
-    :func:`exit_rates`; a run with no conversion returns ``{}`` and touches nothing.
+    :func:`usd_realised_pnls`; a run with no conversion returns ``{}`` and touches nothing.
     """
-    rates = exit_rates(engine)
+    usd_pnls = usd_realised_pnls(engine)
     analyzer = engine.portfolio.analyzer
     for position in engine.cache.positions_closed():
-        if position.id.value in rates:
-            usd = Money(usd_pnl(position, rates), ACCOUNT_CURRENCY)
+        if position.id.value in usd_pnls:
+            usd = Money(usd_pnl(position, usd_pnls), ACCOUNT_CURRENCY)
             analyzer.add_trade(position.id, usd)
-    return rates
+    return usd_pnls

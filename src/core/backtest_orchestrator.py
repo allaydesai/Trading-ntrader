@@ -29,7 +29,7 @@ from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
 from src.core.fill_models import bind_fill_model
 from src.core.futures_costs import futures_snapshot
-from src.core.fx_results import exit_rates
+from src.core.fx_results import usd_realised_pnls
 from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.core.strategy_registry import StrategyRegistry
@@ -578,7 +578,7 @@ class BacktestOrchestrator:
                                 await service.save_trades_from_positions(
                                     backtest_run_id=backtest_run.id,
                                     positions_report_df=positions_df,
-                                    usd_rates=exit_rates(self.engine),
+                                    usd_pnls=usd_realised_pnls(self.engine),
                                 )
                     except Exception as e:
                         logger.warning(

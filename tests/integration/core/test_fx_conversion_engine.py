@@ -48,7 +48,7 @@ from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
 from src.core.fill_models import MOO_EXIT_TAG, bind_fill_model
 from src.core.fx_rates import FxConversionPairError, FxRateFeeder
-from src.core.fx_results import FxRateMissingError, exit_rates
+from src.core.fx_results import FxRateMissingError, usd_realised_pnls
 from src.core.results_extractor import ResultsExtractor, mark_to_market
 from src.models.backtest_request import BacktestRequest
 from src.services.backtest_persistence import usd_profit_loss
@@ -278,8 +278,27 @@ def test_a_position_closed_in_parts_converts_each_part_at_its_own_rate():
         assert position.realized_pnl == Money(75_000, JPY)
         change = _usd_change(engine)
         assert change == Decimal("497.24")
-        rate = exit_rates(engine)[position.id.value]
-        assert usd_profit_loss("75000.00 JPY", rate) == change  # not 75,000 / 151 = 496.69
+        usd = usd_realised_pnls(engine)[position.id.value]
+        assert usd_profit_loss("75000.00 JPY", usd) == change  # not 75,000 / 151 = 496.69
+    finally:
+        engine.dispose()
+
+
+def test_a_position_netting_zero_quote_pnl_keeps_its_usd_result():
+    # 50k closed at 151.000 (+50,000 JPY at 1/151) and 50k at 149.000 (-50,000 JPY at 1/149):
+    # 0 JPY in total, but the account booked 331.13 - 335.57 = -4.44 USD.
+    engine, _ = _run(
+        USDJPY,
+        [(_bars(USDJPY, ["150.000", "151.000", "149.000", "149.000"]), USDJPY)],
+        exit_kind="partial",
+    )
+    try:
+        position = _closed(engine)
+        assert position.realized_pnl == Money(0, JPY)
+        change = _usd_change(engine)
+        assert change == Decimal("-4.44")
+        usd = usd_realised_pnls(engine)[position.id.value]
+        assert usd_profit_loss("0.00 JPY", usd) == change
     finally:
         engine.dispose()
 
@@ -328,7 +347,7 @@ def test_a_fill_without_a_rate_fails_the_run():
         with pytest.raises(FxRateMissingError, match="GBP/USD"):
             extractor.extract_results()
         with pytest.raises(FxRateMissingError):
-            exit_rates(engine)
+            usd_realised_pnls(engine)
     finally:
         engine.dispose()
 
@@ -458,9 +477,9 @@ async def test_the_orchestrator_reports_a_usdjpy_run_in_usd_marked_to_market():
         assert result.max_drawdown == marked.risk.max_drawdown
         # the trade row's profit_loss, from the positions report and the exit rates
         report = engine.trader.generate_positions_report()
-        rates = exit_rates(engine)
+        usd_pnls = usd_realised_pnls(engine)
         (position_id,) = report.index
-        assert usd_profit_loss(report.loc[position_id, "realized_pnl"], rates[position_id]) == (
+        assert usd_profit_loss(report.loc[position_id, "realized_pnl"], usd_pnls[position_id]) == (
             Decimal("662.25")
         )
     finally:
