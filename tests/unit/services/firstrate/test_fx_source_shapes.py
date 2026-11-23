@@ -91,6 +91,6 @@ class TestDryRun:
         )
         report = build_dry_run_report(tmp_path, AssetClass.FX, include_date_ranges=True)
         assert report.schema_mismatches == []
-        assert set(report.timeframes) == {"1-DAY-LAST", "1-HOUR-LAST"}
+        assert set(report.timeframes) == {"1-DAY-MID", "1-HOUR-MID"}  # FX bars are MID (M5)
         rng = report.ticker_date_ranges["EURUSD"]
         assert (rng.earliest, rng.latest) == ("2010-01-03", "2026-04-30")
