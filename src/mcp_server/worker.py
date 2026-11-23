@@ -84,7 +84,11 @@ async def _execute(resolved: ResolvedRequest, data, reproduces: UUID | None = No
     orchestrator = BacktestOrchestrator()
     try:
         _, run_id = await orchestrator.execute(
-            resolved.request, data.bars, data.instrument, reproduced_from_run_id=reproduces
+            resolved.request,
+            data.bars,
+            data.instrument,
+            reproduced_from_run_id=reproduces,
+            rate_sources=data.rate_sources,  # an FX cross's conversion pair (FX M3)
         )
     finally:
         orchestrator.dispose()

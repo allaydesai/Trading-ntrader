@@ -7,6 +7,7 @@ persistence, regardless of whether the request comes from CLI arguments or YAML 
 
 import asyncio
 import time
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -28,6 +29,7 @@ from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
 from src.core.fill_models import bind_fill_model
 from src.core.futures_costs import futures_snapshot
+from src.core.fx_results import exit_rates
 from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.core.strategy_registry import StrategyRegistry
@@ -125,6 +127,7 @@ class BacktestOrchestrator:
         instrument: Instrument,
         provenance: RunProvenance | None = None,
         reproduced_from_run_id: UUID | None = None,
+        rate_sources: Sequence[tuple[list[Bar], Instrument]] = (),
     ) -> tuple[BacktestResult, UUID | None]:
         """
         Execute backtest with optional persistence.
@@ -137,6 +140,8 @@ class BacktestOrchestrator:
                 working tree and ``request`` when omitted
             reproduced_from_run_id: The run this one reproduces, recorded on the
                 persisted run (MCP ``reproduce_run``)
+            rate_sources: Conversion-only ``(bars, instrument)`` pairs an FX cross needs
+                (GBPUSD for EURGBP; ``DataLoadResult.rate_sources``), fed to the rate feeder
 
         Returns:
             Tuple of (BacktestResult, run_id if persisted else None)
@@ -155,7 +160,7 @@ class BacktestOrchestrator:
 
         try:
             # Setup engine
-            self._setup_engine(request, bars, instrument)
+            self._setup_engine(request, bars, instrument, rate_sources)
 
             # Create and add strategy
             strategy = self._create_strategy(request, bars, instrument)
@@ -332,6 +337,7 @@ class BacktestOrchestrator:
         request: BacktestRequest,
         bars: list[Bar],
         instrument: Instrument,
+        rate_sources: Sequence[tuple[list[Bar], Instrument]] = (),
     ) -> None:
         """
         Setup the backtest engine with venue, instrument, and data.
@@ -340,6 +346,7 @@ class BacktestOrchestrator:
             request: Backtest request with configuration
             bars: Bar data for the backtest
             instrument: Instrument to trade
+            rate_sources: Conversion-only FX pairs and their bars (see ``execute``)
         """
         # Configure engine — bypass Nautilus logging if already initialized
         # (e.g., when running from the web server process)
@@ -365,7 +372,8 @@ class BacktestOrchestrator:
 
         self._venue = venue
 
-        # Add venue (cost models chosen by instrument type) and, for futures, the margin gate
+        # Venue (cost models by instrument type), futures margin gate, instrument and data,
+        # and for FX the rate sources and rate feeder (registered before the strategy)
         setup_backtest_venues(
             self.engine,
             {venue: [instrument]},
@@ -373,11 +381,9 @@ class BacktestOrchestrator:
             fill_model=fill_model,
             equity_fee_model=self._make_fee_model(request.cost_multiplier),
             cost_multiplier=request.cost_multiplier,
+            data=[(bars, instrument)],
+            rate_sources=rate_sources,
         )
-
-        # Add instrument and data
-        self.engine.add_instrument(instrument)
-        self.engine.add_data(bars)
 
     def _setup_engine_multi(
         self,
@@ -410,10 +416,8 @@ class BacktestOrchestrator:
             fill_model=fill_model,
             equity_fee_model=self._make_fee_model(request.cost_multiplier),
             cost_multiplier=request.cost_multiplier,
+            data=instruments_data,
         )
-        for bars, instrument in instruments_data:
-            engine.add_instrument(instrument)
-            engine.add_data(bars)
 
         self.engine = engine
         # Primary venue for summary results extraction = first instrument's venue.
@@ -574,6 +578,7 @@ class BacktestOrchestrator:
                                 await service.save_trades_from_positions(
                                     backtest_run_id=backtest_run.id,
                                     positions_report_df=positions_df,
+                                    usd_rates=exit_rates(self.engine),
                                 )
                     except Exception as e:
                         logger.warning(
