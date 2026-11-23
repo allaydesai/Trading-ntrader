@@ -431,6 +431,14 @@ to it.
   `src/api/models/backtest_list.py` and `templates/backtests/list_fragment.html` (`FX` badge),
   `src/cli/commands/compare.py`. Equity and futures pages stay byte-identical against goldens
   captured before the change.
+- **As built (M5, 2026-11-23), the D12 regeneration diff**: exactly the nine files above
+  changed or were added (`templates/partials/fx_panel.html` added; `backtest_detail.py`,
+  `backtest_list.py`, `rest/trades.py`, `ui/backtests.py`, `detail.html`,
+  `list_fragment.html`, `trades_table.html`, `compare.py` changed), 61 files in
+  `FROZEN_VIEWS`. `ui/backtests.py` also carries the Run form's FX bar type
+  (`symbols.run_target`, replacing the `-LAST` hardcode). Futures goldens were captured from
+  the pre-M5 tree (`tests/fixtures/futures_dashboard_golden/`); equity uses the existing
+  `equity_dashboard_golden/`. Both render byte for byte after the change.
 
 ## 12. Live-trading compatibility notes (not implemented here)
 
