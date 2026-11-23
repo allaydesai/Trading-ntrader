@@ -12,7 +12,8 @@ Before M2-M6 build on it, this proves in a real ``BacktestEngine`` that:
    trade converts through GBPUSD added as a conversion-only instrument.
 
 The feeder here is a prototype; M3 ships the real one in ``src/core/fx_rates.py``.
-See ``openspec/changes/add-fx-backtesting/design.md`` sections 1 and 3 (decision D4).
+See sections 1 and 3 (decision D4) of
+``openspec/changes/archive/2026-11-23-add-fx-backtesting/design.md``.
 
 Run with ``--forked`` (C extensions).
 """

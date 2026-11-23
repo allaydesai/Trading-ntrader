@@ -1,15 +1,19 @@
 # FX backtesting: pairs, instruments, conversion
 
-Spot FX on IB IDEALPRO, planned in `openspec/changes/add-fx-backtesting/` (M1-M6; decisions
-D1-D16 approved 2026-11-22). **Status: M1-M6 implemented** (specs, instruments, the engine
-gate, the FirstRate importer and the `firstrate-fx` catalog, USD account conversion, costs,
-margin and base-unit sizing, reporting in CLI/MCP/dashboard, and Riptide/Bollinger on FX),
-unmerged as the stack #63 -> #64 -> #65 + strategies #4 (QA fixes: #66, strategies #5). An FX
+Spot FX on IB IDEALPRO, planned in `openspec/changes/archive/2026-11-23-add-fx-backtesting/`
+(M1-M6; decisions D1-D16 approved 2026-11-22, D17-D21 2026-11-23); the shipped requirements are
+in `openspec/specs/fx-*/spec.md`. **Status: M1-M6 merged and archived** (main `f3a5809`; specs,
+instruments, the engine gate, the FirstRate importer and the `firstrate-fx` catalog, USD account
+conversion, costs, margin and base-unit sizing, reporting in CLI/MCP/dashboard, and
+Riptide/Bollinger on FX; QA fixes #66, including the dashboard Run form running a cross). An FX
 run settles in USD end to end on every surface and pays IB's spot commission plus a modelled
 half-spread, under 3% margin. **Every cost and margin figure is an UNVERIFIED default** (table
-below). End-to-end QA: `docs/agent/fx-qa-2026-11-23.md`. Known gap: the dashboard Run form
-cannot run a cross yet (it does not pass the conversion pair's bars; needs a FROZEN_VIEWS
-ruling, see the QA notes).
+below). End-to-end QA: `docs/agent/fx-qa-2026-11-23.md`.
+
+Open follow-ups (listed in the archived `tasks.md`): Allay to confirm the UNVERIFIED cost and
+margin values (task 4.7, QA Q6); riptide `limit_offset_pct` (0.5 in `configs/riptide_fx.yaml`)
+is untuned (QA Q4); `/srv/market-data/raw/README.md` still says FX has no parser (Allay's edit;
+the raw tree is read-only to agents).
 
 ## Data: the `firstrate-fx` catalog (M2)
 
