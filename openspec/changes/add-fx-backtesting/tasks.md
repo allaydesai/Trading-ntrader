@@ -264,7 +264,7 @@ Allay's rulings of 2026-11-23 on the QA's open questions (design D17-D21).
 - [x] Q.5 (D20, Q3) Load-time refusal of a cross whose conversion series misses dates
       (`backtest_loader._check_rate_coverage`; MCP `conversion_outside_coverage` /
       `conversion_pair_missing` before queueing). Tests red first.
-- [x] Q.6 (D21, Q1) Document the daily-bar rate lag (~1.2% on one USDJPY stop trade) in
+- [x] Q.6 (D21, Q1) Document the daily-bar rate lag (1.2% on one USDJPY stop trade) in
       `docs/agent/fx-backtesting.md` and the QA notes; no code change.
 - [ ] Q.7 Still open for Allay: Q4 (riptide `limit_offset_pct` untuned), Q6 (UNVERIFIED cost
       and margin values, task 4.7).

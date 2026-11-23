@@ -210,16 +210,19 @@ typically under 0.1% of the trade's P&L. A gap-aware Sunday-open fill converts a
 Friday close, so a weekend gap in USDJPY is the worst case. M3 does not close it: the rate at
 an intrabar fill is not knowable from one `MID` bar without looking ahead.
 
-**On daily bars the lag is a full day (accepted, Allay 2026-11-23, QA Q1).** A stop or limit
-fill, or a gap-aware fill, on a pair settling outside USD (USDJPY, a cross) converts at the
-**previous day's** close, so the USD figure carries a day of the rate's move. Example from the
-QA (`b339bdb8`, bollinger_reversal USDJPY 1-DAY, trade 1): a stop-out at 122.977, a loss of
-roughly USD 10,000, converted at the previous close 121.54 instead of the exit bar's close
-123.04, so USD -10,010 instead of about -9,889: about **1.2%** of that trade's P&L. Market
-exits from `on_bar` are exact (the fill bar's close). The account's balance and the trade rows
+**On daily bars the lag is a full day (accepted, Allay 2026-11-23, QA Q1).** Per the table
+above, a USDJPY resting stop or limit fill, and any gap-aware fill on USDJPY or a cross,
+converts at the **previous day's** close, so the USD figure carries a day of the rate's move.
+A cross's resting stop or limit converts at the same bar's GBPUSD close (rate sources are
+handled first), so it does not lag. Example from the QA (`b339bdb8`, bollinger_reversal USDJPY
+1-DAY, trade 1): a stop-out at 122.977, a loss of roughly USD 10,000, converted at the previous
+close 121.54 instead of the exit bar's close 123.04, so USD -10,010 instead of about -9,889:
+about **1.2% for that trade**; the size on any other trade depends on that day's rate move.
+Market exits from `on_bar` are exact (the fill bar's close). The account's balance and the trade rows
 agree (both use the rate the account booked); only the comparison with a hand conversion at
-the fill bar's close differs. Read daily USDJPY and cross P&L as accurate to about a percent per
-stop/limit trade; USD-quoted pairs (EURUSD, GBPUSD) are unaffected. No code change: closing it
+the fill bar's close differs. Expect daily USDJPY stop/limit trades (and gap-aware fills on
+USDJPY or a cross) to carry up to a day's rate move; USD-quoted pairs (EURUSD, GBPUSD) are
+unaffected. No code change: closing it
 would need the rate at the fill time, which one daily `MID` bar cannot give without looking
 ahead.
 

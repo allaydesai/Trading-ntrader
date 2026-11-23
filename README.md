@@ -271,8 +271,8 @@ uv run python -m src.cli.main backtest run --symbol EUR/USD --catalog firstrate-
 The research MCP's `submit_backtest`/`validate_config` take the same sizes as optional `units`
 (FX) and `contracts` (futures). A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
 the same catalog for the whole window, or the run is refused before it starts. On daily bars a
-stop/limit fill on USDJPY or a cross converts at the previous day's rate (about 1% of such a
-trade's P&L; see the FX doc).
+USDJPY stop/limit fill (and a gap-aware fill on USDJPY or a cross) converts at the previous
+day's rate (1.2% of one QA trade's P&L; see the FX doc).
 
 The account return on USD equity stays the headline; the FX figure beside it is "Closed-trade
 P&L" (open positions excluded). `backtest show`, `report`, `compare`, the
