@@ -297,8 +297,7 @@ async def run_backtest_submit(request: Request) -> Response:
             form_data=raw_data,
         )
         return _htmx_full_page_response(
-            request,
-            templates.TemplateResponse("backtests/run.html", context, status_code=409),
+            request, templates.TemplateResponse("backtests/run.html", context, status_code=409)
         )
 
     async with _backtest_lock:
@@ -349,9 +348,10 @@ async def run_backtest_submit(request: Request) -> Response:
 
         # Execute backtest with timeout
         orchestrator = BacktestOrchestrator()
+        d = data_result  # rate_sources: an FX cross's conversion pair (QA Q7, as CLI and MCP)
         try:
             result, run_id = await asyncio.wait_for(
-                orchestrator.execute(bt_request, data_result.bars, data_result.instrument),
+                orchestrator.execute(bt_request, d.bars, d.instrument, rate_sources=d.rate_sources),
                 timeout=form_data.timeout_seconds,
             )
             logger.info("Backtest completed", run_id=str(run_id))

@@ -152,6 +152,35 @@ class TestPostRunBacktest:
         assert response.headers.get("HX-Redirect") == f"/backtests/{run_id}"
         mock_orchestrator.dispose.assert_called_once()
 
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_an_fx_cross_runs_with_its_conversion_pair(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """QA Q7 (Allay, 2026-11-23): EURGBP needs GBPUSD, as in the CLI and MCP worker."""
+        mock_request = MagicMock()
+        mock_request.instrument_id = "EUR/GBP.IDEALPRO"
+        mock_request.bar_type = "1-HOUR-MID"
+        mock_request_cls.from_cli_args.return_value = mock_request
+        loaded = MagicMock()
+        loaded.rate_sources = [([MagicMock()], MagicMock(name="GBP/USD.IDEALPRO"))]
+        mock_load_data.return_value = loaded
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(return_value=(MagicMock(), uuid4()))
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(symbol="EURGBP", timeframe="1-HOUR"),
+            follow_redirects=False,
+        )
+
+        assert response.headers.get("HX-Redirect", "").startswith("/backtests/")
+        mock_orchestrator.execute.assert_awaited_once_with(
+            mock_request, loaded.bars, loaded.instrument, rate_sources=loaded.rate_sources
+        )
+
     def test_validation_error_rerenders_form(self, client):
         response = client.post(
             "/backtests/run",

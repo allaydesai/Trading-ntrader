@@ -11,6 +11,7 @@ import asyncio
 from datetime import datetime
 
 import structlog
+from nautilus_trader.core.datetime import unix_nanos_to_dt
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
@@ -252,7 +253,7 @@ async def load_from_catalog(
     instrument = build_instrument(row.asset_class, nautilus_id, ticker, bars)
     _check_bar_venue(bars, instrument, ticker, catalog_name)
     rate_sources = await _load_rate_sources(
-        instrument, catalog_name, bar_type_spec, start, end, catalog_manager, metadata_service
+        instrument, bars, catalog_name, bar_type_spec, start, end, catalog_manager, metadata_service
     )
     return DataLoadResult(
         bars=bars,
@@ -278,8 +279,54 @@ def _check_bar_venue(bars, instrument, ticker: str, catalog_name: str) -> None:
         )
 
 
+def _bar_dates(bars: list[Bar]) -> tuple[str, str]:
+    """The UTC dates of the first and last bar, ISO formatted."""
+    first, last = (unix_nanos_to_dt(b.ts_event).date().isoformat() for b in (bars[0], bars[-1]))
+    return first, last
+
+
+def _check_rate_coverage(
+    pair: str, rate_bars: list[Bar], instrument: Instrument, traded_bars: list[Bar], **where
+) -> None:
+    """Refuse a conversion series that does not span the traded pair's dates (QA fix, Q3).
+
+    Compared by UTC date of the first and last bar, so a pair whose hourly edges differ by a
+    bar is accepted; a series that starts later or ends earlier than the traded one would
+    leave part of the run without a USD rate and fail it at the first signal there.
+
+    Raises:
+        DataNotFoundError: The conversion series misses dates the traded pair has.
+    """
+    covered, traded = _bar_dates(rate_bars), _bar_dates(traded_bars)
+    if covered[0] <= traded[0] and covered[1] >= traded[1]:
+        return
+    ticker = fx_ticker(instrument)
+    start, end = where["start"], where["end"]
+    window = f"{start.date().isoformat()} to {end.date().isoformat()}"
+    overlap = f"{max(covered[0], traded[0])} to {min(covered[1], traded[1])}"
+    raise DataNotFoundError(
+        instrument_id=pair,
+        start=start,
+        end=end,
+        message=(
+            f"FX conversion pair {pair} in catalog '{where['catalog']}' covers {covered[0]} to "
+            f"{covered[1]} at {where['spec']}, but {ticker} has bars from {traded[0]} to "
+            f"{traded[1]} in the requested window ({window}); {ticker} P&L cannot be "
+            f"converted to USD outside {pair}'s dates. Import {pair} for the whole window, or "
+            f"run {overlap} only."
+        ),
+        context={
+            "catalog": where["catalog"],
+            "conversion_pair_for": str(instrument.id),
+            "conversion_coverage": covered,
+            "traded_coverage": traded,
+        },
+    )
+
+
 async def _load_rate_sources(
     instrument: Instrument,
+    traded_bars: list[Bar],
     catalog_name: str,
     bar_type_spec: str,
     start: datetime,
@@ -291,7 +338,8 @@ async def _load_rate_sources(
 
     Every other instrument (USD-quote and USD-base pairs, equities, futures) needs none and
     costs no extra read. A run never proceeds unconverted: a conversion pair the catalog
-    lacks, or has no bars for in the window, fails the load naming it (FX M3, design D4).
+    lacks, has no bars for in the window, or covers fewer dates than the traded pair's bars
+    (:func:`_check_rate_coverage`), fails the load naming it (FX M3, design D4).
     """
     sources: list[tuple[list[Bar], Instrument]] = []
     for pair in conversion_pairs_for([instrument]):
@@ -317,6 +365,16 @@ async def _load_rate_sources(
                 ),
                 context={"catalog": catalog_name, "conversion_pair_for": str(instrument.id)},
             ) from e
+        _check_rate_coverage(
+            pair,
+            loaded.bars,
+            instrument,
+            traded_bars,
+            catalog=catalog_name,
+            spec=bar_type_spec,
+            start=start,
+            end=end,
+        )
         sources.append((loaded.bars, loaded.instrument))
     return sources
 

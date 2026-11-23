@@ -149,7 +149,8 @@ def calculate_trade_statistics(trades: list[Trade]) -> TradeStatistics:
         Decimal('2.00')
 
     Notes:
-        - Breakeven trades (profit_loss <= 0 but > -10) are counted separately
+        - Breakeven trades (profit_loss <= 0 but > -10) are counted separately; their P&L
+          is in net_profit and expectancy, not in total_profit/total_loss
         - Win rate = (winning_trades / total_trades) * 100
         - Profit factor = total_profit / abs(total_loss) (None if no losses)
         - Expectancy = net_profit / total_trades (average profit per trade)
@@ -221,7 +222,9 @@ def calculate_trade_statistics(trades: list[Trade]) -> TradeStatistics:
     total_loss = abs(
         sum((t.profit_loss for t in losing_trades if t.profit_loss is not None), Decimal("0"))
     )
-    net_profit = total_profit - total_loss
+    # Every closed trade's P&L, breakeven ones included: they are bucketed apart for the
+    # counts, but their (small, usually cost-only) P&L is still in the account.
+    net_profit = Decimal(sum(t.profit_loss or 0 for t in closed_trades))
 
     average_win = total_profit / num_wins if num_wins > 0 else Decimal("0.00")
     average_loss = total_loss / num_losses if num_losses > 0 else Decimal("0.00")

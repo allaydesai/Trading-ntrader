@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from mcp.server import MCPServer
+from pydantic import StrictInt
 
 from src.mcp_server import catalogs, strategies, validation
 from src.mcp_server.context import ServerContext
@@ -52,11 +53,14 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         catalog: str | None = None,
         params: dict[str, Any] | None = None,
         starting_balance: Decimal = Decimal("1000000"),
+        units: StrictInt | None = None,
+        contracts: StrictInt | None = None,
     ) -> dict[str, Any]:
         """Resolve a backtest request and check its data without running it.
 
         Returns the resolved run (full parameters, config hash), the data coverage,
-        and every error with its fix. Submit only when ok is true.
+        and every error with its fix. Submit only when ok is true. units (FX) and
+        contracts (futures) are checked as submit_backtest applies them.
         """
 
         def run() -> dict[str, Any]:
@@ -69,6 +73,8 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
                 catalog=catalog,
                 params=params or {},
                 starting_balance=starting_balance,
+                units=units,
+                contracts=contracts,
             )
             return validation.validate(
                 spec, default_catalog=ctx.settings.resolved_default_catalog()

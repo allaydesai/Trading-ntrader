@@ -30,12 +30,18 @@ IDS = {
 PRICES = {"EURGBP": "0.85710", "GBPUSD": "1.26512", "USDJPY": "149.871", "EURUSD": "1.08431"}
 
 
-def _bars(ticker: str) -> list[Bar]:
+HOUR_NS = 3_600_000_000_000
+DAY_NS = 24 * HOUR_NS
+
+
+def _bars(ticker: str, first_day: int = 0, days: int = 2) -> list[Bar]:
+    """Two bars a day (00:00 and 01:00 UTC) from ``START + first_day`` for ``days`` days."""
     price_type = "LAST" if ticker == "AAPL" else "MID"
     bar_type = BarType.from_str(f"{IDS[ticker]}-1-HOUR-{price_type}-EXTERNAL")
     p = Price.from_str(PRICES.get(ticker, "190.25"))
-    ts = int(START.timestamp() * 1_000_000_000)
-    return [Bar(bar_type, p, p, p, p, Quantity.from_int(10), ts + i, ts + i) for i in range(2)]
+    ts = int(START.timestamp() * 1_000_000_000) + first_day * DAY_NS
+    stamps = [ts + d * DAY_NS + h * HOUR_NS for d in range(days) for h in range(2)]
+    return [Bar(bar_type, p, p, p, p, Quantity.from_int(10), t, t) for t in stamps]
 
 
 def _row(ticker: str):
@@ -46,12 +52,17 @@ def _row(ticker: str):
     return row
 
 
-def _sources(tickers: set[str]):
-    """A catalog and metadata service holding ``tickers``; bars are looked up by bar type."""
+def _sources(tickers: set[str], spans: dict[str, tuple[int, int]] | None = None):
+    """A catalog and metadata service holding ``tickers``; bars are looked up by bar type.
+
+    ``spans`` gives a ticker's ``(first_day, days)``; the default is two days from START.
+    """
     by_bar_type = {}
     for ticker in tickers:
         spec = "1-HOUR-LAST" if ticker == "AAPL" else "1-HOUR-MID"
-        by_bar_type[f"{IDS[ticker]}-{spec}-EXTERNAL"] = _bars(ticker)
+        by_bar_type[f"{IDS[ticker]}-{spec}-EXTERNAL"] = _bars(
+            ticker, *(spans or {}).get(ticker, (0, 2))
+        )
     catalog = MagicMock()
     catalog.bars.side_effect = lambda bar_types, start, end: by_bar_type.get(bar_types[0], [])
     catalog_manager = MagicMock()
@@ -61,8 +72,8 @@ def _sources(tickers: set[str]):
     return catalog, catalog_manager, metadata
 
 
-async def _load(ticker: str, held: set[str], spec: str = "1-HOUR-MID"):
-    catalog, catalog_manager, metadata = _sources(held)
+async def _load(ticker: str, held: set[str], spec: str = "1-HOUR-MID", spans=None):
+    catalog, catalog_manager, metadata = _sources(held, spans)
     result = await load_from_catalog(
         catalog_name="firstrate-fx",
         ticker=ticker,
@@ -106,3 +117,30 @@ async def test_an_equity_row_is_loaded_as_before():
     result, catalog = await _load("AAPL", {"AAPL"}, spec="1-HOUR-LAST")
     assert result.rate_sources == []
     assert catalog.bars.call_count == 1
+
+
+# QA fix (d): a conversion series that covers only part of the traded window is refused at
+# load time, naming the pair and the dates it covers, instead of failing at the first signal.
+
+
+async def test_a_conversion_pair_that_starts_after_the_cross_is_refused_up_front():
+    spans = {"EURGBP": (0, 3), "GBPUSD": (1, 2)}
+    with pytest.raises(DataNotFoundError) as err:
+        await _load("EURGBP", {"EURGBP", "GBPUSD"}, spans=spans)
+    message = str(err.value)
+    assert "GBPUSD" in message and "EURGBP" in message
+    assert "covers 2024-01-02 to 2024-01-03" in message
+    assert "2024-01-01 to 2024-01-03" in message
+    assert err.value.context["conversion_coverage"] == ("2024-01-02", "2024-01-03")
+
+
+async def test_a_conversion_pair_that_ends_before_the_cross_is_refused_up_front():
+    spans = {"EURGBP": (0, 3), "GBPUSD": (0, 2)}
+    with pytest.raises(DataNotFoundError, match="covers 2024-01-01 to 2024-01-02"):
+        await _load("EURGBP", {"EURGBP", "GBPUSD"}, spans=spans)
+
+
+async def test_a_conversion_pair_spanning_the_cross_s_dates_is_accepted():
+    spans = {"EURGBP": (0, 3), "GBPUSD": (0, 3)}
+    result, _ = await _load("EURGBP", {"EURGBP", "GBPUSD"}, spans=spans)
+    assert len(result.rate_sources) == 1

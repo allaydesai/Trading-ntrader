@@ -245,6 +245,30 @@ one existing equity smoke).
   integration test (`tests/integration/core/test_fx_strategies_engine.py`, trimmed real daily
   excerpts under `tests/fixtures/firstrate_fx/strategies/`) skips without the submodule (CI).
 
+## QA fixes (end-to-end QA 2026-11-23, `docs/agent/fx-qa-2026-11-23.md`)
+
+Allay's rulings of 2026-11-23 on the QA's open questions (design D17-D21).
+
+- [x] Q.1 Riptide stop covers a split entry (strategies `a60dec8`/`4584fdb`, pins `be21b36`,
+      `9f5c0df`); Trade Statistics net profit includes breakeven trades (`0ff29fb`).
+- [x] Q.2 (D17, Q7) Run form passes `rate_sources` (cross runs from the dashboard):
+      `src/api/ui/backtests.py` unfrozen for this fix; route test red first; `FROZEN_VIEWS`
+      regenerated for it and `fx_panel.html` only; `run_backtest_submit` stays at its
+      size-cap ceiling (126).
+- [x] Q.3 (D18, Q5) "Net P&L (USD)" -> "Closed-trade P&L (USD)" for FX: `backtest show` /
+      `report`, the dashboard panel, MCP/report field `closed_trade_pnl_usd`. Futures and
+      equity labels unchanged.
+- [x] Q.4 (D19, Q2) MCP `units`/`contracts` on `submit_backtest`, `validate_config` and the
+      in-sample study submit; CLI checks moved to `src/services/sizing_overrides.py` (the MCP
+      may not import `src.cli`); worker re-checks the loaded instrument. Tests red first.
+- [x] Q.5 (D20, Q3) Load-time refusal of a cross whose conversion series misses dates
+      (`backtest_loader._check_rate_coverage`; MCP `conversion_outside_coverage` /
+      `conversion_pair_missing` before queueing). Tests red first.
+- [x] Q.6 (D21, Q1) Document the daily-bar rate lag (1.2% on one USDJPY stop trade) in
+      `docs/agent/fx-backtesting.md` and the QA notes; no code change.
+- [ ] Q.7 Still open for Allay: Q4 (riptide `limit_offset_pct` untuned), Q6 (UNVERIFIED cost
+      and margin values, task 4.7).
+
 ## Not in these milestones
 
 - Live/paper FX via IB (separate effort; design section 12 lists its starting points and guard

@@ -36,7 +36,9 @@ from the spec percentages.
 ### Requirement: A USD account converts non-USD P&L
 A backtest venue that lists a `CurrencyPair` SHALL be a single-currency USD margin account.
 The run SHALL keep an exchange rate for every quote currency it trades, and SHALL fail rather
-than complete if a fill happens without one.
+than complete if a fill happens without one. A cross whose conversion pair's bars start after or
+end before the traded pair's bars in the window SHALL be refused before the engine starts (and,
+through the MCP, before it is queued), naming the pair and the dates it covers.
 
 #### Scenario: USDJPY round trip
 - **WHEN** 100,000 USDJPY is bought at 150.000 and sold at 151.000 on a USD account
@@ -46,3 +48,8 @@ than complete if a fill happens without one.
 #### Scenario: missing conversion pair
 - **WHEN** an EURGBP run's catalog has no GBPUSD bars
 - **THEN** the run fails before the engine starts, naming GBPUSD
+
+#### Scenario: conversion pair starts late
+- **WHEN** an EURGBP run trades from 2024-01-02 and the catalog's GBPUSD starts 2024-01-15
+- **THEN** the run is refused before the engine starts with a message naming GBPUSD, the dates
+  it covers and the dates EURGBP trades

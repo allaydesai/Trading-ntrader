@@ -142,3 +142,73 @@ def test_a_default_a_setting_overrides_is_flagged_unless_given_explicitly(
     assert any("FAST_EMA_PERIOD" in w for w in implicit["warnings"])
     explicit = validation.validate(_spec(params={"fast_period": 7}), default_catalog="")
     assert not any("FAST_EMA_PERIOD" in w for w in explicit["warnings"])
+
+
+# QA fix (d): an FX cross whose conversion pair covers fewer dates is refused before queueing.
+
+FX_SPAN = {"start": "2024-01-01T17:00:00-05:00", "end": "2024-03-28T17:00:00-04:00", "bars": 9}
+LATE_SPAN = {**FX_SPAN, "start": "2024-01-14T17:00:00-05:00"}
+
+
+def _fx_coverage(symbol, span):
+    return {
+        **COVERAGE,
+        "symbol": symbol,
+        "catalog": "qa-fx",
+        "nautilus_id": f"{symbol[:3]}/{symbol[3:]}.IDEALPRO",
+        "asset_class": "FX",
+        "timeframes": {"1-HOUR": span},
+    }
+
+
+@pytest.fixture
+def fx_availability(monkeypatch):
+    spans = {"EURGBP": FX_SPAN, "GBPUSD": FX_SPAN, "EURUSD": FX_SPAN}
+
+    def fake(symbol, catalog):
+        if symbol not in spans:
+            raise ToolFailure("symbol_not_in_catalog", f"'{symbol}' is not in {catalog}.", fix="-")
+        return _fx_coverage(symbol, spans[symbol])
+
+    monkeypatch.setattr(validation, "catalog_availability", fake)
+    monkeypatch.setattr(
+        "src.mcp_server.request.resolve_fx_symbol",
+        lambda catalog, symbol, spec: (symbol, spec.replace("LAST", "MID")),
+    )
+    return spans
+
+
+def _fx_spec(symbol="EURGBP"):
+    return _spec(
+        symbol=symbol,
+        catalog="qa-fx",
+        timeframe="1-HOUR",
+        start=date(2024, 1, 2),
+        end=date(2024, 3, 31),
+    )
+
+
+def test_a_cross_whose_conversion_pair_covers_the_window_is_accepted(fx_availability):
+    assert validation.validate(_fx_spec(), default_catalog="")["errors"] == []
+
+
+def test_a_cross_whose_conversion_pair_starts_late_is_refused(fx_availability):
+    fx_availability["GBPUSD"] = LATE_SPAN
+    result = validation.validate(_fx_spec(), default_catalog="")
+    assert result["ok"] is False
+    [error] = result["errors"]
+    assert error["code"] == "conversion_outside_coverage"
+    assert "GBPUSD" in error["message"] and "EURGBP" in error["message"]
+    assert "2024-01-14 to 2024-03-28" in error["message"]
+
+
+def test_a_cross_whose_conversion_pair_is_missing_is_refused(fx_availability):
+    del fx_availability["GBPUSD"]
+    [error] = validation.validate(_fx_spec(), default_catalog="")["errors"]
+    assert error["code"] == "conversion_pair_missing"
+    assert "GBPUSD" in error["message"]
+
+
+def test_a_usd_quoted_pair_needs_no_conversion_check(fx_availability):
+    del fx_availability["GBPUSD"]
+    assert validation.validate(_fx_spec("EURUSD"), default_catalog="")["errors"] == []

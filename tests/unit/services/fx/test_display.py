@@ -49,7 +49,7 @@ def test_formatters():
 
 def test_summary_rows():
     rows = summary_rows(_summary())
-    assert rows[0] == ("Net P&L (USD)", "-$180.90")
+    assert rows[0] == ("Closed-trade P&L (USD)", "-$180.90")
     assert ("Pips (sum of closed trades)", "+0.0") in rows
     assert ("Largest position", "200,000 (2.00 lots)") in rows
     assert ("Peak notional (USD)", "$308,000.00") in rows
@@ -86,6 +86,7 @@ def test_flat_report_fields():
     flat = flat_report_fields(_summary())
     assert flat["asset_class"] == "fx"
     assert flat["fx_commission_usd"] == "12.00"
+    assert flat["fx_closed_trade_pnl_usd"] == "-180.90"
     assert flat["fx_USD/JPY.IDEALPRO_commission_usd"] == "4.00"
     assert flat["fx_USD/JPY.IDEALPRO_spread_usd"] == "4.60"
     assert all(not isinstance(v, (dict, list)) for v in flat.values())

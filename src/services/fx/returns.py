@@ -290,7 +290,8 @@ def report_fields(summary: RunSummary) -> dict[str, Any]:
     return {
         "asset_class": summary.asset_class,
         "account_currency": USD,
-        "net_pnl_usd": _fmt(summary.net_pnl_usd, _USD),
+        # Closed trades only (QA Q5): open positions and their entry costs are not in it
+        "closed_trade_pnl_usd": _fmt(summary.net_pnl_usd, _USD),
         "closed_trades": summary.closed_trades,
         "pips": _fmt(summary.pips, _PIP),
         "return_on_underlying_pct": _fmt(summary.return_on_underlying_pct, _PCT),

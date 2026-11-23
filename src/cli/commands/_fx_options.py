@@ -15,12 +15,9 @@ from decimal import Decimal
 
 import click
 
-from src.cli.commands._strategy_params import _config_declares, _strategies_declaring
 from src.models.backtest_request import BacktestRequest
 from src.services.fx.symbols import resolve_fx_symbol
-
-#: The setting ``--units`` writes into a strategy's config (``SMAConfig.units``).
-UNITS_KEY = "units"
+from src.services.sizing_overrides import UNITS_KEY, config_declares, strategies_declaring
 
 
 def resolve_fx_request(request: BacktestRequest) -> tuple[BacktestRequest, bool]:
@@ -35,8 +32,8 @@ def resolve_fx_request(request: BacktestRequest) -> tuple[BacktestRequest, bool]
 
 
 def _apply_units(request: BacktestRequest, units: int, is_fx: bool) -> BacktestRequest:
-    if not _config_declares(request.config_path, UNITS_KEY):
-        supported = _strategies_declaring(UNITS_KEY)
+    if not config_declares(request.config_path, UNITS_KEY):
+        supported = strategies_declaring(UNITS_KEY)
         raise click.UsageError(
             f"--units is not supported by strategy '{request.strategy_type}': its config has "
             f"no 'units' setting. Strategies with one: {supported}."
@@ -69,25 +66,6 @@ def apply_fx_options(
             )
         request = request.model_copy(update={"fx_spread_pips": Decimal(str(spread_pips))})
     return request
-
-
-def check_units_instrument(strategy_config: dict, instrument: object) -> None:
-    """Refuse a ``units`` size (flag or config file) that isn't N >= 1 on an FX pair.
-
-    Raises:
-        ValueError: ``units`` is not a positive whole number, or the instrument is not FX.
-    """
-    units = strategy_config.get(UNITS_KEY)
-    if units is None:
-        return
-    if isinstance(units, bool) or not isinstance(units, int) or units < 1:
-        raise ValueError(f"units must be a positive whole number, got {units!r}")
-    from src.core.position_sizing import is_fx_pair
-
-    if not is_fx_pair(instrument):
-        raise ValueError(
-            f"units applies to FX only; {getattr(instrument, 'id', instrument)} is not an FX pair"
-        )
 
 
 def with_spread_pips(instrument, spread_pips: Decimal | None):

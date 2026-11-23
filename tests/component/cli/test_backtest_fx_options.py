@@ -16,11 +16,11 @@ from rich.console import Console
 
 from src.cli.commands import _fx_options
 from src.cli.commands._backtest_helpers import resolve_backtest_request
-from src.cli.commands._fx_options import check_units_instrument
 from src.cli.commands.backtest import run_backtest
 from src.services.fx import symbols
 from src.services.fx.instrument_builder import build_fx_pair
 from src.services.fx.pair_specs import get_pair_spec
+from src.services.sizing_overrides import check_units_instrument
 
 pytestmark = pytest.mark.component
 

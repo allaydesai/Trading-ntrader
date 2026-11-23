@@ -112,6 +112,7 @@ Read the topic doc for your area of work:
 | Data loading, IBKR/Kraken, Parquet | `docs/agent/data-pipeline.md` |
 | Futures margin, commission, sizing, returns | `docs/agent/futures-backtesting.md` |
 | Spot FX pairs, instruments, USD conversion | `docs/agent/fx-backtesting.md` |
+| FX end-to-end QA (2026-11-23): results, hand checks, open questions | `docs/agent/fx-qa-2026-11-23.md` |
 | Web UI, HTMX, templates, charts | `docs/agent/web-ui.md` |
 | Database, repositories, persistence | `docs/agent/persistence.md` |
 | Tests, fixtures, TDD | `docs/agent/testing.md` |

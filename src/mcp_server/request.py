@@ -12,15 +12,22 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from src.mcp_server.catalogs import timeframe_spec
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
-from src.mcp_server.strategies import resolve_params, resolve_strategy
+from src.mcp_server.strategies import StrategyRef, resolve_params, resolve_strategy
 from src.models.backtest_request import DEFAULT_FILL_SEED, BacktestRequest
 from src.services.fx.symbols import fx_ticker, resolve_fx_symbol
 from src.services.provenance import compute_config_hash
+from src.services.sizing_overrides import (
+    CONTRACTS_KEY,
+    UNITS_KEY,
+    config_declares,
+    is_futures_symbol,
+    strategies_declaring,
+)
 
 
 class BacktestSpec(BaseModel):
@@ -41,6 +48,12 @@ class BacktestSpec(BaseModel):
     )
     cost_multiplier: float = Field(
         default=1.0, ge=0, description="Commission scale (cost stress); 1 is the broker's schedule"
+    )
+    units: StrictInt | None = Field(  # strict: True or 1.5 is refused, not coerced
+        default=None, gt=0, description="FX only: base units per entry (100000 = 1 lot)"
+    )
+    contracts: StrictInt | None = Field(
+        default=None, gt=0, description="Futures only: whole contracts per entry"
     )
 
 
@@ -87,6 +100,38 @@ def _window(spec: BacktestSpec) -> tuple[datetime, datetime]:
     )
 
 
+def _override(ref: StrategyRef, key: str, value: int, applies: bool, why: str) -> dict:
+    """``{key: value}`` when the strategy's config takes ``key`` and the symbol suits it."""
+    if not config_declares(ref.config_path, key):
+        raise ToolFailure(
+            "invalid_params",
+            f"{key} is not supported by strategy '{ref.name}': its config has no '{key}' setting.",
+            fix=f"Strategies with one: {strategies_declaring(key)}.",
+        )
+    if not applies:
+        raise ToolFailure("invalid_params", why, fix=f"Drop {key}, or choose a matching symbol.")
+    return {key: value}
+
+
+def _sizing(ref: StrategyRef, spec: BacktestSpec, symbol: str, catalog: str, is_fx: bool):
+    """``units``/``contracts`` as ``backtest run --units/--contracts`` apply them (QA fix c)."""
+    sizing: dict[str, int] = {}
+    if spec.units is not None:
+        why = (
+            f"units is for FX only; '{symbol}' is not an FX pair in catalog '{catalog}' "
+            "(e.g. symbol EURUSD, catalog firstrate-fx)."
+        )
+        sizing |= _override(ref, UNITS_KEY, spec.units, is_fx, why)
+    if spec.contracts is not None:
+        why = (
+            f"contracts applies to futures only; '{symbol}' is not a futures root "
+            "(ES, NQ, CL, GC, ZN in catalog firstrate-futures)."
+        )
+        futures = not is_fx and is_futures_symbol(symbol)
+        sizing |= _override(ref, CONTRACTS_KEY, spec.contracts, futures, why)
+    return sizing
+
+
 def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
     """Resolve ``spec``; raises ``ToolFailure`` naming the fix when it cannot run."""
     ref = resolve_strategy(spec.strategy)
@@ -104,6 +149,7 @@ def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
     # FX (M5): an FX catalog row has MID bars, not the -LAST default
     if fx := resolve_fx_symbol(catalog, symbol, bar_type):
         symbol, bar_type = fx
+    params = {**params, **_sizing(ref, spec, symbol, catalog, fx is not None)}
     try:
         request = BacktestRequest(
             strategy_type=ref.name,

@@ -508,3 +508,8 @@ against the account before M4 merges.
 | D14 | Session anomalies | keep the Saturday/off-hour bars, warn at import; strategies are not filtered | approved by Allay, 2026-11-22 |
 | D15 | Pair universe | EURUSD, GBPUSD, USDJPY (data) plus EURGBP spec (fixture-tested cross) | approved by Allay, 2026-11-22 |
 | D16 | OpenSpec layout | one umbrella change, tasks grouped by milestone, each PR ticks its section; archive after M6 | approved by Allay, 2026-11-22 |
+| D17 | Run form cross fix (QA Q7) | unfreeze `src/api/ui/backtests.py` to pass `rate_sources`; regenerate FROZEN_VIEWS for it (and `fx_panel.html`, D18) only | approved by Allay, 2026-11-23 |
+| D18 | FX P&L label (QA Q5) | "Closed-trade P&L (USD)" everywhere FX shows it (CLI, MCP `closed_trade_pnl_usd`, dashboard panel); futures/equity unchanged | approved by Allay, 2026-11-23 |
+| D19 | MCP sizing (QA Q2) | `submit_backtest`/`validate_config` accept `units` (FX) and `contracts` (futures) with the CLI's rules | approved by Allay, 2026-11-23 |
+| D20 | Cross rate coverage (QA Q3) | refuse at load time (and before MCP queueing) when the conversion series misses the traded dates | approved by Allay, 2026-11-23 |
+| D21 | Daily-bar rate lag (QA Q1) | accept; document (~1.2% on one USDJPY stop trade), no code change | approved by Allay, 2026-11-23 |

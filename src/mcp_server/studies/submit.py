@@ -152,6 +152,8 @@ def prepare_in_sample(
     params: dict[str, Any],
     starting_balance: Decimal | None,
     over_budget_reason: str | None,
+    units: int | None = None,
+    contracts: int | None = None,
 ) -> tuple[StudyJob, list[str]]:
     """A study's in-sample backtest, resolved and validated; the study fills the gaps."""
     with get_sync_session() as session:
@@ -185,6 +187,8 @@ def prepare_in_sample(
             catalog=study.catalog,
             params=params,
             starting_balance=starting_balance or study.starting_balance,
+            units=units,
+            contracts=contracts,
         )
         warnings = outside_space(study.param_space, params)
         slug = study.slug

@@ -77,7 +77,7 @@ def terms_line(terms: PairTerms) -> str:
 def summary_rows(summary: RunSummary) -> list[tuple[str, str]]:
     """``(label, value)`` rows, then one terms row per pair."""
     rows = [
-        ("Net P&L (USD)", usd(summary.net_pnl_usd)),
+        ("Closed-trade P&L (USD)", usd(summary.net_pnl_usd)),
         ("Closed trades", str(summary.closed_trades)),
         ("Pips (sum of closed trades)", pips(summary.pips)),
         ("Return on underlying", signed_pct(summary.return_on_underlying_pct)),

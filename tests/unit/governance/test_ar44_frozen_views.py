@@ -85,6 +85,11 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: FX row's ``MID`` bars. Equity and futures pages render byte for byte as before:
 #: ``tests/component/api/test_fx_dashboard.py`` pins futures against goldens captured from the
 #: pre-M5 tree and ``test_futures_dashboard.py`` pins equity. 61 files; nothing else changed.
+#: **Regenerated 2026-11-23 by PO ruling (Allay approved 2026-11-23, FX QA fixes Q5/Q7)** for
+#: exactly two files: ``src/api/ui/backtests.py`` (the Run form passes the load's
+#: ``rate_sources`` to the orchestrator, so an FX cross such as EURGBP runs with its
+#: conversion pair) and ``templates/partials/fx_panel.html`` (the FX panel's "Net P&L (USD)"
+#: label becomes "Closed-trade P&L (USD)"). 61 files; nothing else changed.
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -153,7 +158,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "4ae532d4155697d67b30fb436635576b3f30385ad6acea87f5139cc9da050f9a"
     ),
     "src/api/ui/__init__.py": "4eb820a851a97b3242ffeabe826021b52ed9ed8243e92839829086c05bd74457",
-    "src/api/ui/backtests.py": "87b0607934c09500f2096c9d0fdd4eb26197db20759e4ac05d7fe3cb634d8f17",
+    "src/api/ui/backtests.py": "9b7ce7fdaacaf82cd97c71994c050fa70a9a730972b17b5c8fad14ad7941b8f3",
     "src/api/ui/dashboard.py": "56e5152ebf0123debc0ce4e11f70036d5a5b69c6d4e6da58034731b7575fd5b6",
     "src/api/ui/explorer.py": "601685c8c98d90ff3aad21733709a6caebc0cbf7a54e1e6e6ff2a7ab2d141444",
     "src/api/web.py": "881521499c53a6ac85cf2a46e5a94cf6f5a4a0ce4238927c92ab6a5c2fbd7dd0",
@@ -214,7 +219,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "7a732306e8b745244408a9fcc397b454f8c1891625dfa322bf4fa02afe9d62f2"
     ),
     "templates/partials/fx_panel.html": (
-        "70454e610b20306a2ea5576a09c7711ee3a7f5a8a3ab06503d554bfb003a6693"
+        "797aba81d56c27405b23802df33598bd770a3c414095c1e9c7f69c990ccfc8f0"
     ),
     "templates/partials/htmx_error_handler.html": (
         "2dd569882b9c1213812dfd6508378e0eedbac1dcbfaadfc1360a46f76edc14bb"
