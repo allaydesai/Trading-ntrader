@@ -124,26 +124,44 @@ Acceptance: a 100k EURUSD round trip costs `2 x max(0.2bp x notional, $2)` plus
 on USDJPY with $100k notional trades 100,000 USD units. Every futures margin-gate scenario
 still passes unchanged.
 
-- [ ] 4.1 Component (failing first): `tests/component/core/test_fx_costs.py`: bps with the
+- [x] 4.1 Component (failing first): `tests/component/core/test_fx_costs.py`: bps with the
       per-order minimum across partial fills; USD-quote, USD-base and cross trade values;
       spread drag; cost-stress scaling; `venue_cost_models` picks FX models only for FX venues;
       `fx_snapshot`.
-- [ ] 4.2 Implement `src/core/fx_costs.py` (`FxCommissionModel`, `fx_snapshot`).
-- [ ] 4.3 Integration, forked (failing first): `tests/integration/core/test_fx_margin_engine.py`:
+- [x] 4.2 Implement `src/core/fx_costs.py` (`FxCommissionModel`, `fx_snapshot`).
+- [x] 4.3 Integration, forked (failing first): `tests/integration/core/test_fx_margin_engine.py`:
       over-margin long/short denied (`MARGIN_EXCEEDS_FREE_BALANCE`), within margin fills,
       closes never denied, quantity-increase modify rejected; then the full futures
       margin-engine suite unchanged.
-- [ ] 4.4 Generalise `FuturesMarginGate` to `MarginGate` (per-instrument requirement); keep
+- [x] 4.4 Generalise `FuturesMarginGate` to `MarginGate` (per-instrument requirement); keep
       the futures module path and reasons as they are.
-- [ ] 4.5 Unit (failing first): `tests/unit/test_position_sizing.py`: `quote_to_account_rate`,
+- [x] 4.5 Unit (failing first): `tests/unit/test_position_sizing.py`: `quote_to_account_rate`,
       `fx_units_for_notional`, `fx_units_for_risk`, `whole_units`; `sma_crossover`/
       `buy_and_hold` FX sizing; equity/futures cases unchanged.
-- [ ] 4.6 Implement the helpers and the `sma_crossover`/`buy_and_hold` FX branch (SMACrossover
+- [x] 4.6 Implement the helpers and the `sma_crossover`/`buy_and_hold` FX branch (SMACrossover
       stays at 101).
 - [ ] 4.7 Allay confirms the UNVERIFIED commission, margin, spread, min-tick and size values;
-      `pair_specs.yaml` `as_of`/`source` updated.
-- [ ] 4.8 Manual smoke: `sma_crossover` EURUSD and USDJPY 1-hour, 2024 H1, persisted; one trade
+      `pair_specs.yaml` `as_of`/`source` updated. **Open (2026-11-22):** M4 ships the approved
+      working defaults, still `status: UNVERIFIED` in `pair_specs.yaml` and flagged
+      "UNVERIFIED, Allay to confirm" in `docs/agent/fx-backtesting.md`.
+- [x] 4.8 Manual smoke: `sma_crossover` EURUSD and USDJPY 1-hour, 2024 H1, persisted; one trade
       per pair hand-checked (pips, USD P&L, commission, spread).
+      **Result (2026-11-22):** run on the M3 smoke window (USDJPY 1-hour, 2024-01-02 to
+      2024-02-01) before and after: 100,000 units a trade (M3: ~690), 12 trade rows, USD P&L
+      -9.69 to -1,532.09 (= the balance change), commission 46.00 and spread 39.13 (23 orders);
+      trade 1 hand-checked to the cent (USD 511.68, table and working in
+      `docs/agent/fx-backtesting.md`). 2024 H1 (2024-01-02 to 2024-06-28), persisted: EURUSD
+      87 rows, USD -5,517.65, commission 346.07, spread 399.81; USDJPY 77 rows, USD -2,234.33,
+      commission 306.00, spread 250.93; each sum of rows = the balance change; one trade per
+      pair hand-checked (EURUSD 91,239 units, -43.69 pips, -398.66 - 8.56 = -407.22).
+- **M4 notes (2026-11-22):** FX venues need `default_leverage=1` (Nautilus' margin-account
+  default 10 made 3% margin 0.3%; pinned). The bar fill model splits large orders into 2-3
+  fills, so commission **and** spread are rounded once per order (running totals per
+  `client_order_id`), and the odd-lot warning reads the order size. A USDJPY/cross trade's USD
+  `profit_loss` now deducts the USD commissions (Nautilus nets commission into `realized_pnl`
+  only in the settlement currency). The M3 conversion test runs at `cost_multiplier=0` to keep
+  its amounts pure conversion. The FX modify reasons are `FX_QTY_INCREASE_NOT_SUPPORTED` and
+  `FX_MODIFY_PENDING`; the gate passes an order it cannot price (no bar or cross rate yet).
 
 ## M5. Reporting, dashboard and CLI
 
