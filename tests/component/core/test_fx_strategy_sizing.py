@@ -50,7 +50,7 @@ def _cache(gbpusd: str | None = None) -> Cache:
     return cache
 
 
-def _sma_self(instrument, close: float, cache: Cache, pct: str = "10", contracts=None):
+def _sma_self(instrument, close: float, cache: Cache, pct: str = "10", contracts=None, units=None):
     return SimpleNamespace(
         _current_bar=SimpleNamespace(close=close),
         portfolio_value=Decimal("1000000"),
@@ -58,7 +58,7 @@ def _sma_self(instrument, close: float, cache: Cache, pct: str = "10", contracts
         instrument_id=instrument.id,
         cache=cache,
         log=MagicMock(),
-        config=SimpleNamespace(contracts=contracts),
+        config=SimpleNamespace(contracts=contracts, units=units),
     )
 
 
@@ -86,6 +86,18 @@ class TestSmaCrossover:
         sizing = _sma_self(EURUSD, 1.08, _cache(), pct="0.0000001")  # USD 0.001
         assert SMACrossover._calculate_position_size(sizing) is None
         sizing.log.warning.assert_called_once()
+
+    def test_fixed_units_replace_the_budget(self):
+        """``--units 25000`` (M5): exactly that many base units, whatever the budget."""
+        sizing = _sma_self(USDJPY, 144.657, _cache(), units=25_000)
+        assert SMACrossover._calculate_position_size(sizing) == Quantity.from_int(25_000)
+        assert "~$25,000 notional" in sizing.log.info.call_args.args[0]
+
+    def test_units_on_an_equity_is_refused(self):
+        equity = SimpleNamespace(id="AAPL.NASDAQ", info={}, multiplier=1, size_precision=0)
+        sizing = _sma_self(EURUSD, 150.0, MagicMock(instrument=lambda _: equity), units=10)
+        with pytest.raises(ValueError, match="units applies to FX"):
+            SMACrossover._calculate_position_size(sizing)
 
     def test_contracts_on_an_fx_pair_is_refused(self):
         with pytest.raises(ValueError, match="futures"):

@@ -101,3 +101,27 @@ def test_no_fill_seed_keeps_phase_1_hashes():
     unseeded = resolve(_spec(fill_seed=None), default_catalog="")
     explicit = resolve(_spec(fill_seed=DEFAULT_FILL_SEED), default_catalog="")
     assert unseeded.config_hash == explicit.config_hash
+
+
+class TestFxSymbols:
+    """FX (M5): ``EUR/USD`` names the ``EURUSD`` row, whose bars are ``MID``."""
+
+    @pytest.fixture(autouse=True)
+    def fx_row(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from src.services.fx import symbols
+
+        rows = {("firstrate-fx", "EURUSD"): SimpleNamespace(asset_class="FX")}
+        monkeypatch.setattr(symbols, "_catalog_row", lambda c, t: rows.get((c, t)))
+
+    @pytest.mark.parametrize("symbol", ["EURUSD", "eur/usd"])
+    def test_fx_row_resolves_to_its_ticker_and_mid_bars(self, symbol):
+        spec = _spec(symbol=symbol, catalog="firstrate-fx", timeframe="1-HOUR")
+        request = resolve(spec, default_catalog="").request
+        assert (request.symbol, request.instrument_id) == ("EURUSD", "EURUSD.NAMED_CATALOG")
+        assert request.bar_type == "1-HOUR-MID"
+
+    def test_a_non_fx_catalog_keeps_last(self):
+        request = resolve(_spec(symbol="EURUSD"), default_catalog="").request
+        assert request.bar_type == "1-DAY-LAST"

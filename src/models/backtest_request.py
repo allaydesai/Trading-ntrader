@@ -98,12 +98,13 @@ class BacktestRequest(BaseModel):
     # The venue's fill model (a config's ``backtest.fill_model``; gap_aware = next-bar exits).
     # Like cost_multiplier, part of the run's identity only when it is not the default.
     fill_model: Literal["default", "gap_aware"] = "default"
+    # FX only (``backtest run --spread-pips``): replaces the pair's modelled spread (design D7).
+    # Part of the run's identity only when set.
+    fx_spread_pips: Decimal | None = Field(default=None, ge=0, description="FX spread override")
 
     # Execution options
     persist: bool = Field(default=True, description="Persist results to database")
-    config_file_path: str | None = Field(
-        default=None, description="Source config file path for tracking"
-    )
+    config_file_path: str | None = Field(default=None, description="Source config file path")
     data_source: str = Field(
         default="catalog", description="Data source: catalog, ibkr, kraken, mock"
     )
