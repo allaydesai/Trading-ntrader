@@ -439,7 +439,7 @@ order was denied in any run.
 | `be0d982a` | bollinger_reversal EURUSD | 92 | +24.35% | largest loss USD 10,124.23 (the 1% risk plus costs) |
 | `02be82e5` | bollinger_reversal USDJPY | 104 | +3.29% | largest loss USD 10,265.73 |
 | `2b0d081e` | riptide EURUSD | 16 | +0.21% | every entry ~USD 100,000 (e.g. 90,957 units at 1.09942) |
-| `7388099a` | riptide USDJPY | 24 | -0.08% | every entry 100,000 units |
+| `7388099a` | riptide USDJPY | 24 | -0.08% | every entry 100,000 units; -0.09% (USD 999,093.44) after the QA stop fix below |
 
 Hand-checked (to the cent, stored `profit_loss`):
 
@@ -454,6 +454,15 @@ Hand-checked (to the cent, stored `profit_loss`):
   at 1.08699802 (the bar fill model splits the order), exit at the TP. Gross
   `0.05255198 x 380,496 = 19,995.82`; commission `8.27 + 8.67` (0.2 bp of USD 413,598 /
   433,594) plus half-spread `9.51 x 2`, total 35.96; net **19,959.86**.
+
+**Stop resize (FX QA, 2026-11-23, strategies PR #5).** The bar matcher offers a quarter of a
+bar's volume at each OHLC point, so an entry larger than that fills in parts; FX volume is a
+tick count, so most daily FX entries split (USDJPY 2023-07-10: 81,022 + 18,978). Riptide sized
+its hard stop from the first part: 13 of 16 EURUSD and 8 of 24 USDJPY stops covered part of the
+position, and a USDJPY stop-out left 18,978 units open to the next green candle. It now
+replaces the stop with one for the whole position when the entry keeps filling
+(`on_position_changed`). Bollinger's bracket children carry the full order quantity and are
+not affected. Details: `docs/agent/fx-qa-2026-11-23.md`.
 
 Found by the smoke and fixed in the submodule: a YAML config's numbers reach
 `BollingerReversalConfig` as float, and `Decimal x float` crashed the first entry of every
