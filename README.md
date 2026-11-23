@@ -268,7 +268,14 @@ uv run python -m src.cli.main backtest run --symbol EUR/USD --catalog firstrate-
   --timeframe 1-HOUR --start 2024-01-02 --end 2024-02-01 --starting-balance 1000000 --units 50000
 ```
 
-The account return on USD equity stays the headline. `backtest show`, `report`, `compare`, the
+The research MCP's `submit_backtest`/`validate_config` take the same sizes as optional `units`
+(FX) and `contracts` (futures). A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
+the same catalog for the whole window, or the run is refused before it starts. On daily bars a
+stop/limit fill on USDJPY or a cross converts at the previous day's rate (about 1% of such a
+trade's P&L; see the FX doc).
+
+The account return on USD equity stays the headline; the FX figure beside it is "Closed-trade
+P&L" (open positions excluded). `backtest show`, `report`, `compare`, the
 MCP run tools (`asset_class: "fx"`, an `fx` object) and the dashboard (a Spot FX panel, an FX
 trades table and export, `FX` in the run list) add pips, units/lots, USD notional, peak
 leverage, commission vs modelled spread and a "financing not modelled" note; `history` marks

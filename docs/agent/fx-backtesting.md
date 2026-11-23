@@ -145,9 +145,16 @@ Tests: `tests/component/core/test_fx_rates.py`,
   `{quote}USD` or `USD{quote}` (GBPUSD), which `load_from_catalog` loads from the same catalog
   and bar spec as conversion-only data (`DataLoadResult.rate_sources`; bars in, no strategy).
   A catalog without it fails the load naming GBPUSD; an orchestrator run of a cross with no rate
-  sources fails before the engine starts (`FxConversionPairError`). Only the MCP worker passes
-  rate sources today; the CLI and web paths have no FX bar type until M5 (crosses have no data
-  yet anyway).
+  sources fails before the engine starts (`FxConversionPairError`). The CLI, the MCP worker and
+  the dashboard's Run form all pass the rate sources (the Run form since the QA fixes, Q7).
+- **Coverage is checked up front (QA fix, Q3).** The loader compares the UTC dates of the
+  conversion series' first and last bars with the traded pair's bars in the window; a series
+  that starts later or ends earlier is refused before the engine starts, naming the pair, the
+  dates it covers, the dates the run trades and the overlap to run instead
+  (`_check_rate_coverage` in `backtest_loader.py`). The MCP's `validate_config` and
+  `submit_backtest` make the same check from catalog metadata and queue nothing
+  (`conversion_outside_coverage`, or `conversion_pair_missing` when the pair has no bars at
+  that timeframe). Gaps inside the series are not checked (see the rate lag below).
 - **The feeder.** `setup_backtest_venues(..., data=..., rate_sources=...)` adds the bars itself:
   conversion-only rate sources first, then traded rate sources, then the rest, and registers
   `FxRateFeeder` (only when a pair settles outside USD) **before** the caller adds strategies.
@@ -202,6 +209,19 @@ default-model runs accept it. It never touches fill prices or EURUSD/GBPUSD. On 
 typically under 0.1% of the trade's P&L. A gap-aware Sunday-open fill converts at the
 Friday close, so a weekend gap in USDJPY is the worst case. M3 does not close it: the rate at
 an intrabar fill is not knowable from one `MID` bar without looking ahead.
+
+**On daily bars the lag is a full day (accepted, Allay 2026-11-23, QA Q1).** A stop or limit
+fill, or a gap-aware fill, on a pair settling outside USD (USDJPY, a cross) converts at the
+**previous day's** close, so the USD figure carries a day of the rate's move. Example from the
+QA (`b339bdb8`, bollinger_reversal USDJPY 1-DAY, trade 1): a stop-out at 122.977, a loss of
+roughly USD 10,000, converted at the previous close 121.54 instead of the exit bar's close
+123.04, so USD -10,010 instead of about -9,889: about **1.2%** of that trade's P&L. Market
+exits from `on_bar` are exact (the fill bar's close). The account's balance and the trade rows
+agree (both use the rate the account booked); only the comparison with a hand conversion at
+the fill bar's close differs. Read daily USDJPY and cross P&L as accurate to about a percent per
+stop/limit trade; USD-quoted pairs (EURUSD, GBPUSD) are unaffected. No code change: closing it
+would need the rate at the fill time, which one daily `MID` bar cannot give without looking
+ahead.
 
 ## Costs, margin and sizing (M4)
 
@@ -349,6 +369,7 @@ every renderer. A run without `fx_pairs` is not FX and every renderer prints wha
 | pips | side-aware `(exit - entry) / pip_size` |
 | underlying % | side-aware `(exit - entry) / entry` (the stored `profit_pct` is not side-aware for shorts) |
 | P&L USD | the stored `profit_loss` (converted and net of USD costs since M3/M4) |
+| Closed-trade P&L (USD) | sum of closed trades' P&L USD; open positions and their entry costs are not in it, so it can differ from the balance change (`closed_trade_pnl_usd`; labelled "Net P&L" before the QA fixes, Q5) |
 | peak leverage | max concurrent USD notional / (starting balance + P&L of trades closed so far) |
 | costs split | `fx_pairs[...].costs_usd.commission` vs `.spread`, summed over pairs |
 
@@ -359,8 +380,13 @@ secondary. Every FX view carries `FINANCING_NOTE` (D9: rollover is not modelled)
   `report` text/CSV/JSON add it (`fx_*` CSV rows, a JSON `fx` object with per-trade figures);
   `history` marks `EURUSD (fx)` and keeps the account return; `compare` adds pips, peak
   leverage and total costs (and the asset class row).
-- **MCP**: `get_run`/`compare_runs` rows have `asset_class: "fx"` and an `fx` object plus a
-  warning; `export_results` adds the FX trade columns only for FX runs. The mixed-asset-class
+- **MCP**: `get_run`/`compare_runs` rows have `asset_class: "fx"` and an `fx` object
+  (`closed_trade_pnl_usd`, ...) plus a warning; `export_results` adds the FX trade columns only
+  for FX runs. `submit_backtest`, `validate_config` and a study's in-sample submit take
+  optional `units` (FX) and `contracts` (futures), checked as `--units`/`--contracts` are
+  (`src/services/sizing_overrides.py`, shared with the CLI): N >= 1, a strategy whose config
+  declares the setting, `units` only on an FX catalog row and `contracts` only on a futures
+  root; the worker re-checks them against the loaded instrument. The mixed-asset-class
   warning fires only when futures is in the set (FX and equity share the account return).
 - **`backtest run`** (and config mode, the MCP `resolve` path and the dashboard's Run form):
   `EURUSD`, `EUR/USD`, `eur/usd` and `EUR.USD` name the catalog ticker `EURUSD`; an FX catalog
@@ -371,8 +397,10 @@ secondary. Every FX view carries `FINANCING_NOTE` (D9: rollover is not modelled)
   with `typical_spread_pips = X` (`BacktestRequest.fx_spread_pips`, hashed only when set; it
   shows in `fx_pairs[...].typical_spread_pips`). The `FX_SPREAD_PIPS_<PAIR>` env setting the
   design mentions is not implemented (an env value outside the config hash would make runs
-  unreproducible). The CLI now passes a cross's conversion bars (`rate_sources`) too.
-- **Dashboard** (D12 FROZEN_VIEWS ruling): a Spot FX panel after the metrics, an FX trades
+  unreproducible). The CLI now passes a cross's conversion bars (`rate_sources`) too, and so
+  does the Run form (QA Q7, FROZEN_VIEWS ruling 2026-11-23).
+- **Dashboard** (D12 FROZEN_VIEWS ruling; the panel's first figure is "Closed-trade P&L (USD)"
+  since the 2026-11-23 ruling): a Spot FX panel after the metrics, an FX trades
   table (units, lots, pair-precision prices, USD notional, pips, underlying %, USD P&L), FX
   export columns, an `FX` badge in the run list. Equity and futures pages are pinned byte for
   byte against goldens captured before M5 (`tests/component/api/test_fx_dashboard.py`).
