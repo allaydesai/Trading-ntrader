@@ -49,7 +49,9 @@ from nautilus_trader.model.identifiers import InstrumentId, Venue
 from nautilus_trader.model.objects import Currency, Money
 
 from src.config import get_settings
-from src.core.mark_to_market import Fill, RiskMetrics, daily_equity, risk_metrics
+from src.core.fx_rates import is_fx, needs_conversion
+from src.core.fx_results import require_fx_rates, settle_fx_results, usd_pnl, usd_realised_pnls
+from src.core.mark_to_market import Fill, RiskMetrics, daily_equity, fx_daily_equity, risk_metrics
 from src.core.metrics import net_profit_factor
 from src.models.backtest_result import BacktestResult
 from src.models.position_reconciliation import SYNTHETIC_STRATEGY_IDS
@@ -346,7 +348,8 @@ class ResultsExtractor:
         if final_balance is None:
             return BacktestResult()
 
-        # Calculate basic metrics
+        # FX: fail on a fill the account could not convert; USD P&L for the analyzer
+        fx_rates = settle_fx_results(self.engine)
         starting_balance = self._starting_balance
         total_return = (final_balance - starting_balance) / starting_balance
 
@@ -360,11 +363,7 @@ class ResultsExtractor:
         largest_loss = 0.0
 
         for position in closed_positions:
-            pnl = (
-                position.realized_pnl.as_double()
-                if hasattr(position, "realized_pnl") and position.realized_pnl
-                else 0.0
-            )
+            pnl = usd_pnl(position, fx_rates)
             if pnl > 0:
                 winning_trades += 1
                 largest_win = max(largest_win, pnl)
@@ -503,12 +502,9 @@ class ResultsExtractor:
             key=lambda x: x.ts_closed,
         )
 
+        fx_rates = usd_realised_pnls(self.engine)
         for position in sorted_positions:
-            pnl = (
-                position.realized_pnl.as_double()
-                if hasattr(position, "realized_pnl") and position.realized_pnl
-                else 0.0
-            )
+            pnl = usd_pnl(position, fx_rates)
             cumulative_pnl += pnl
             equity_value = starting_balance + cumulative_pnl
             time_unix = int(position.ts_closed / 1_000_000_000)
@@ -534,8 +530,12 @@ class MarkToMarket:
 
 
 def _fills(engine: BacktestEngine) -> list[Fill]:
-    """Every fill of the run. Orders are read, not positions: they are never snapshotted away."""
+    """Every fill of the run. Orders are read, not positions: they are never snapshotted away.
+
+    An FX fill settling outside USD carries the rate the account converted it at.
+    """
     fills = []
+    book = require_fx_rates(engine)
     for order in engine.cache.orders():
         for event in order.events:
             if not isinstance(event, OrderFilled):
@@ -544,6 +544,7 @@ def _fills(engine: BacktestEngine) -> list[Fill]:
                 raise ValueError(f"commission in {event.commission.currency}, not USD")
             sign = 1.0 if event.order_side == OrderSide.BUY else -1.0
             instrument = engine.cache.instrument(event.instrument_id)
+            rate = book.fill_rate(event.trade_id) if book and needs_conversion(instrument) else None
             fills.append(
                 Fill(
                     ts_ns=event.ts_event,
@@ -552,6 +553,8 @@ def _fills(engine: BacktestEngine) -> list[Fill]:
                     price=event.last_px.as_double(),
                     commission=event.commission.as_double(),
                     multiplier=instrument.multiplier.as_double(),
+                    quote_rate=1.0 if rate is None else rate,
+                    position_id=str(order.position_id or ""),
                 )
             )
     return fills
@@ -580,13 +583,16 @@ def mark_to_market(
     """Daily mark-to-market equity of a finished run, or None when it cannot be rebuilt.
 
     ``starting_balance`` is per venue account, as the engine seeds it. Only
-    USD-quoted, non-inverse instruments are supported; anything else, and any
-    run whose rebuilt equity disagrees with the engine's balance, returns None
-    so the caller falls back to realised-return metrics.
+    USD-quoted, non-inverse instruments and spot FX pairs (any quote, converted to USD by
+    :func:`_equity`) are supported; anything else, and any run whose rebuilt equity
+    disagrees with the engine's balance, returns None so the caller falls back to
+    realised-return metrics.
     """
     try:
         for instrument_id in bars_by_instrument:
             instrument = engine.cache.instrument(instrument_id)
+            if is_fx(instrument):
+                continue
             if instrument.quote_currency != USD or instrument.is_inverse:
                 raise ValueError(f"{instrument_id} is not a USD-quoted linear instrument")
         venues = {instrument_id.venue for instrument_id in bars_by_instrument}
@@ -596,7 +602,7 @@ def mark_to_market(
             str(instrument_id): [(bar.ts_event, bar.close.as_double()) for bar in bars]
             for instrument_id, bars in bars_by_instrument.items()
         }
-        equity = daily_equity(capital, fills, closes)
+        equity = _equity(engine, bars_by_instrument, capital, fills, closes)
         if equity.empty:
             return None
         _check_against_accounts(engine, fills, venues, equity, capital)
@@ -604,6 +610,26 @@ def mark_to_market(
     except Exception as e:
         logger.warning("Mark-to-market equity unavailable; using realised returns", reason=str(e))
         return None
+
+
+def _equity(
+    engine: BacktestEngine,
+    bars_by_instrument: dict[InstrumentId, list[Bar]],
+    capital: float,
+    fills: list[Fill],
+    closes: dict[str, list[tuple[int, float]]],
+) -> pd.Series:
+    """The daily equity rebuild: the FX one (USD, 17:00 New York days) for spot FX runs."""
+    instruments = [engine.cache.instrument(i) for i in bars_by_instrument]
+    if not any(is_fx(i) for i in instruments):
+        return daily_equity(capital, fills, closes)
+    book = require_fx_rates(engine)
+    rates = {
+        str(i.id): book.rate_history(i.quote_currency)
+        for i in instruments
+        if book is not None and needs_conversion(i)
+    }
+    return fx_daily_equity(capital, fills, closes, rates)
 
 
 def mark_to_market_of(extractor: ResultsExtractor) -> MarkToMarket | None:

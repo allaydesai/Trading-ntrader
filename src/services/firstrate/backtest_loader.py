@@ -8,14 +8,17 @@ never falls back to IBKR or the default NAUTILUS_PATH catalog.
 """
 
 import asyncio
+from datetime import datetime
 
 import structlog
 from nautilus_trader.model.currencies import USD
+from nautilus_trader.model.data import Bar
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
-from nautilus_trader.model.instruments import Equity
+from nautilus_trader.model.instruments import Equity, Instrument
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
+from src.core.fx_rates import conversion_pairs_for, fx_ticker
 from src.models.data_load_result import DataLoadResult
 from src.services.exceptions import DataNotFoundError, UnknownCatalogError
 from src.services.firstrate.catalog_manager import CatalogManager
@@ -247,10 +250,24 @@ async def load_from_catalog(
         )
 
     instrument = build_instrument(row.asset_class, nautilus_id, ticker, bars)
+    _check_bar_venue(bars, instrument, ticker, catalog_name)
+    rate_sources = await _load_rate_sources(
+        instrument, catalog_name, bar_type_spec, start, end, catalog_manager, metadata_service
+    )
+    return DataLoadResult(
+        bars=bars,
+        instrument=instrument,
+        data_source_used=f"Catalog: {catalog_name}",
+        rate_sources=rate_sources,
+    )
 
-    # Defensive: the venue on the first bar MUST match the synthesised instrument.
-    # Silent venue drift leads to Nautilus' "strict order" error at engine setup —
-    # fail fast here with a clearer message.
+
+def _check_bar_venue(bars, instrument, ticker: str, catalog_name: str) -> None:
+    """The venue on the first bar MUST match the synthesised instrument.
+
+    Silent venue drift leads to Nautilus' "strict order" error at engine setup; fail fast
+    here with a clearer message.
+    """
     first_bar_venue = str(bars[0].bar_type.instrument_id.venue)
     instrument_venue = str(instrument.id.venue)
     if first_bar_venue != instrument_venue:
@@ -260,11 +277,48 @@ async def load_from_catalog(
             "Catalog metadata may be stale — re-run import."
         )
 
-    return DataLoadResult(
-        bars=bars,
-        instrument=instrument,
-        data_source_used=f"Catalog: {catalog_name}",
-    )
+
+async def _load_rate_sources(
+    instrument: Instrument,
+    catalog_name: str,
+    bar_type_spec: str,
+    start: datetime,
+    end: datetime,
+    catalog_manager: CatalogManager,
+    metadata_service: MetadataService,
+) -> list[tuple[list[Bar], Instrument]]:
+    """An FX cross's conversion-only pairs (GBPUSD for EURGBP), same catalog and timeframe.
+
+    Every other instrument (USD-quote and USD-base pairs, equities, futures) needs none and
+    costs no extra read. A run never proceeds unconverted: a conversion pair the catalog
+    lacks, or has no bars for in the window, fails the load naming it (FX M3, design D4).
+    """
+    sources: list[tuple[list[Bar], Instrument]] = []
+    for pair in conversion_pairs_for([instrument]):
+        try:
+            loaded = await load_from_catalog(
+                catalog_name=catalog_name,
+                ticker=pair,
+                bar_type_spec=bar_type_spec,
+                start=start,
+                end=end,
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+        except DataNotFoundError as e:
+            raise DataNotFoundError(
+                instrument_id=pair,
+                start=start,
+                end=end,
+                message=(
+                    f"FX conversion pair {pair} is not available in catalog '{catalog_name}' "
+                    f"at {bar_type_spec}; {fx_ticker(instrument)} P&L cannot be converted to "
+                    f"USD without it: {e}"
+                ),
+                context={"catalog": catalog_name, "conversion_pair_for": str(instrument.id)},
+            ) from e
+        sources.append((loaded.bars, loaded.instrument))
+    return sources
 
 
 async def load_many_from_catalog(

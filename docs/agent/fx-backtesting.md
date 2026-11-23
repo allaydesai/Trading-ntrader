@@ -1,10 +1,11 @@
 # FX backtesting: pairs, instruments, conversion
 
 Spot FX on IB IDEALPRO, planned in `openspec/changes/add-fx-backtesting/` (M1-M6; decisions
-D1-D16 approved 2026-11-22). **Status: M1-M2** (specs, instruments, the engine gate, the
-FirstRate importer and the `firstrate-fx` catalog). There is no rate conversion, cost model or
-reporting yet, so FX backtests do not run end to end. The sections marked *(planned)* describe
-later milestones.
+D1-D16 approved 2026-11-22). **Status: M1-M3** (specs, instruments, the engine gate, the
+FirstRate importer and the `firstrate-fx` catalog, and USD account conversion). An FX run now
+settles in USD end to end through the orchestrator (MCP and direct callers), but FX **costs are
+zero** until M4, and the CLI and web forms still build `-LAST` bar types (M5 adds `MID`). The
+sections marked *(planned)* describe later milestones.
 
 ## Data: the `firstrate-fx` catalog (M2)
 
@@ -104,21 +105,97 @@ into M3:
 2. The feeder must be registered **before** the strategies (`add_actor` before
    `add_strategy`), so on each bar it writes the rate before a strategy submits. In the gate
    test the closing market order, submitted from `on_bar`, used that bar's rate (no lag).
-   This covers only orders submitted from strategy callbacks. A **resting** order (stop,
-   limit) is matched by the exchange before the bar reaches any actor, so its fill converts
-   at the previous bar's rate (the one-bar lag `design.md` section 3 allows; e.g. 100,000 JPY
-   at 150 instead of 151 is USD 666.67 instead of 662.25). Untested in M1: M3 must pin it.
+   That covers orders filled from strategy callbacks only; orders the exchange matches
+   itself can lag a bar (resolved in M3, see "When a fill converts" below).
 3. A cross's conversion pair must be added to the engine **before** the traded pair's bars.
    At equal timestamps the engine dispatches bars in the order the data was added. With
    GBPUSD added after EURGBP, the EURGBP close converted at the previous bar's GBPUSD rate
    (USD 1,220 instead of 1,250 on a rate moving 1.22 to 1.25). Both orders are pinned in the
-   gate test. USD-quote and USD-base pairs are their own rate source, so rule 3 does not
-   apply to them (rule 2's resting-order lag still does).
+   gate test. A USD-base pair (USDJPY) is its own rate source, so the order between pairs
+   does not arise for it; a USD-quote pair needs no rate at all.
 
-## Planned (M3-M6)
+M3 implements all three (`setup_backtest_venues` enforces 2 and 3).
 
-- M3: `src/core/fx_rates.py` (`FxRateFeeder`), USD venues for FX only, USD `profit_loss`,
-  mark-to-market on USD equity.
+## USD account conversion (M3)
+
+Code: `src/core/fx_rates.py` (`FxRateFeeder`, `conversion_pair`, `add_fx_data`),
+`src/core/fx_results.py` (the guard and exit rates), `src/core/backtest_venue.py`,
+`src/core/mark_to_market.py` (`fx_daily_equity`), `src/services/fx/sessions.py`.
+Tests: `tests/component/core/test_fx_rates.py`,
+`tests/integration/core/test_fx_conversion_engine.py` (forked), `tests/unit/core/test_mark_to_market_fx.py`,
+`tests/unit/services/test_backtest_persistence_fx.py`.
+
+- **The account.** A venue listing spot FX pairs (a `CurrencyPair` whose `info.asset_class` is
+  `FX`; Kraken crypto pairs are not) is added with `base_currency=USD`: every balance change is
+  in USD. Equity and futures venues get exactly the `add_venue` call they had (pinned). An FX
+  venue is charged nothing (`FxNoCommissionModel`, USD 0.00) until M4's cost models; a venue
+  mixing FX pairs and other instruments is refused.
+- **Which rates a run needs.** A USD-quote pair (EURUSD, GBPUSD) needs none: its P&L is
+  already USD. A USD-base pair (USDJPY) is its own rate source. A cross (EURGBP) needs
+  `{quote}USD` or `USD{quote}` (GBPUSD), which `load_from_catalog` loads from the same catalog
+  and bar spec as conversion-only data (`DataLoadResult.rate_sources`; bars in, no strategy).
+  A catalog without it fails the load naming GBPUSD; an orchestrator run of a cross with no rate
+  sources fails before the engine starts (`FxConversionPairError`). Only the MCP worker passes
+  rate sources today; the CLI and web paths have no FX bar type until M5 (crosses have no data
+  yet anyway).
+- **The feeder.** `setup_backtest_venues(..., data=..., rate_sources=...)` adds the bars itself:
+  conversion-only rate sources first, then traded rate sources, then the rest, and registers
+  `FxRateFeeder` (only when a pair settles outside USD) **before** the caller adds strategies.
+  On each rate-source `MID` bar the feeder writes `QuoteTick(bid=ask=close)` into the cache
+  (`cache.add_quote_tick`, never published: strategies subscribed to quotes receive none) and
+  sets the mark xrate. It also checks every fill of a converting pair against
+  `cache.get_xrate(venue, quote, USD, BID|ASK)`, the accounts manager's exact lookup, recording
+  the rate used or a miss.
+- **Never unconverted.** A miss means Nautilus logged "Cannot calculate account state" and left
+  the USD balance unchanged for that fill. `ResultsExtractor.extract_results` (via
+  `settle_fx_results`) then raises `FxRateMissingError`, so the run fails (and is recorded as
+  failed when persisting) instead of reporting a frozen balance. FX fills with no feeder at
+  all fail the same way.
+- **Results in USD.** Trade rows store `profit_loss` in USD: the positions report's
+  `"100000.00 JPY"` is replaced by the position's USD as the account booked it (every
+  reducing fill converted at its own recorded rate, `usd_realised_pnls`), rounded to cents; a non-USD P&L with no rate fails the trade write. The
+  analyzer gets each converted trade in USD, so `total_pnl`, `largest_win`, profit factor and
+  the other P&L statistics are USD. Mark-to-market equity for an FX run books each fill's
+  realised P&L at its own recorded rate (average cost per position, as Nautilus' `Position`)
+  and marks open positions at the latest rate, one value per **17:00 New York trade date**;
+  a flat run rebuilds to the engine's USD balance, so `metrics_basis` is `mark_to_market`.
+  `config_snapshot` declares `account_currency` and `fx_pairs` (filled from M4).
+- A position closed in several parts converts each part at its own fill's rate, as the
+  account does, so the stored `profit_loss` equals the balance change (pinned: USD 497.24 for
+  two halves; halves at 151 and 149 net 0 JPY but USD -4.44, and store -4.44).
+
+### When a fill converts (the rate lag, pinned)
+
+A fill converts at **the latest rate-source bar close the feeder has handled when the fill
+happens**. Within one timestamp the engine hands each bar first to the simulated exchange
+(which matches resting orders against it) and only then to the data engine (feeder, then
+strategies), and it handles bars in the order they were added (rate sources first). So, with
+bar N the bar being processed:
+
+| Fill | Fills at | USDJPY (own rate source) converts at | EURGBP (GBPUSD added first) converts at |
+|---|---|---|---|
+| Market order from `on_bar(N)`, default fill model | bar N's close | bar N's close (exact: 1 / fill price) | GBPUSD bar N's close |
+| Resting limit or stop matched by bar N | within bar N | **bar N-1's close** | GBPUSD bar N's close |
+| Gap-aware venue: any order released at the start of bar N (signalled on N-1), e.g. an MOO exit at bar N's open | bar N's open (MOO), or bar N-1's close (untagged market) | **bar N-1's close** | **GBPUSD bar N-1's close** |
+
+Worked numbers from the tests (100,000 USDJPY bought at 150.000, sold at 151.000, previous bar
+150.500; JPY P&L 100,000): market exit USD 662.25 (1/151.0); resting limit or gap-aware MOO exit
+USD 664.45 (1/150.5). EURGBP (P&L 1,000 GBP, GBPUSD 1.22 then 1.25): market and resting exits
+USD 1,250.00; a gap-aware release USD 1,220.00.
+
+So with a gap-free rate series the lag is at most one bar of the **rate's** move, and only for
+pairs settling outside USD (USDJPY, crosses). The feeder does not check a rate's age: if the
+rate source is missing bars (a gap in a cross's GBPUSD series), the cache keeps the last rate
+it had, and a fill after the gap converts at that older rate, so the lag can exceed one bar.
+Gap-aware runs refuse a rate source whose timestamps differ from the traded pair's;
+default-model runs accept it. It never touches fill prices or EURUSD/GBPUSD. On 1-hour bars it is
+typically under 0.1% of the trade's P&L. A gap-aware Sunday-open fill converts at the
+Friday close, so a weekend gap in USDJPY is the worst case. M3 does not close it: the rate at
+an intrabar fill is not knowable from one `MID` bar without looking ahead.
+
+## Planned (M4-M6)
+
 - M4: `FxCommissionModel` (bps + minimum + modelled half-spread), percentage margin enforced by
-  a generalised margin gate, base-unit sizing.
-- M5: reporting, dashboard, `--units`. M6: Riptide and Bollinger Reversal on FX.
+  a generalised margin gate, base-unit sizing, `config_snapshot.fx_pairs` filled.
+- M5: reporting, dashboard, `--units`, `MID` bar types from the CLI. M6: Riptide and Bollinger
+  Reversal on FX.

@@ -80,16 +80,16 @@ Acceptance: a USDJPY and an EURGBP (fixture) round trip persist `profit_loss` in
 hand calculation. Mark-to-market equity and the risk metrics are computed (not the
 realised-only fallback). Equity and futures runs produce byte-identical results and snapshots.
 
-- [ ] 3.1 Component (failing first): `tests/component/core/test_fx_rates.py`: the feeder writes
+- [x] 3.1 Component (failing first): `tests/component/core/test_fx_rates.py`: the feeder writes
       cache quotes and mark xrates from MID bars, publishes nothing on the bus (a strategy
       subscribed to quotes gets none), records misses; conversion-pair resolution: USD quote
       none, USD base itself, cross needs `XXXUSD`/`USDXXX`; missing pair raises naming it.
-- [ ] 3.2 Implement `src/core/fx_rates.py` (`FxRateFeeder`, `conversion_pairs_for`).
-- [ ] 3.3 Integration, forked (failing first): `tests/integration/core/test_fx_conversion_engine.py`:
+- [x] 3.2 Implement `src/core/fx_rates.py` (`FxRateFeeder`, `conversion_pairs_for`).
+- [x] 3.3 Integration, forked (failing first): `tests/integration/core/test_fx_conversion_engine.py`:
       the orchestrator sets `base_currency=USD` only for FX venues; USDJPY and EURGBP USD balances
       exact; a fill without a rate fails the run; the equity venue `add_venue` call is unchanged;
       with a moving GBPUSD the EURGBP close converts at the fill bar's rate (not the prior bar's).
-- [ ] 3.4 Wire into `backtest_venue.add_backtest_venue` and the loader (conversion-only
+- [x] 3.4 Wire into `backtest_venue.add_backtest_venue` and the loader (conversion-only
       instruments from the same catalog/timeframe); no orchestrator growth. Two ordering
       rules found by the M1 gate (`test_fx_engine_acceptance.py` pins both):
       (a) register the `FxRateFeeder` **before** any strategy (`add_actor` before
@@ -99,13 +99,23 @@ realised-only fallback). Equity and futures runs produce byte-identical results 
       (b) add a cross's rate-source bars (GBPUSD for EURGBP) to the engine **before** the
       traded pair's bars. At equal timestamps bars dispatch in the order added, so the
       reverse order converts at the previous bar's rate (USD 1,220 instead of 1,250).
-- [ ] 3.5 Unit (failing first): `backtest_persistence` parses currency, converts with the exit
+      **Result (2026-11-22):** the lag is pinned, not closed (`docs/agent/fx-backtesting.md`
+      "When a fill converts"): an `on_bar` market order converts at bar N's rate; a resting
+      limit/stop at bar N-1's for USDJPY but bar N's for a cross (its GBPUSD bar comes
+      first); a gap-aware release at bar N-1's for both. FX venues are charged USD 0.00
+      until M4 (the per-share equity model is wrong for FX). Only the MCP worker passes
+      `rate_sources`; the CLI and web paths have no FX bar type until M5.
+- [x] 3.5 Unit (failing first): `backtest_persistence` parses currency, converts with the exit
       rate, raises without one; `mark_to_market` accepts `CurrencyPair` and builds USD
       equity cut at 17:00 ET for FX; `_check_against_accounts` still holds.
-- [ ] 3.6 Implement the persistence, extractor and mark-to-market changes; `fx_trade_date` in
+- [x] 3.6 Implement the persistence, extractor and mark-to-market changes; `fx_trade_date` in
       `src/services/fx/sessions.py`.
-- [ ] 3.7 Unit: `StrategyConfigSnapshot` declares `fx_pairs`/`account_currency`, omitted when
+- [x] 3.7 Unit: `StrategyConfigSnapshot` declares `fx_pairs`/`account_currency`, omitted when
       unset (`tests/unit/models/test_config_snapshot_fx.py`).
+- **M3 smoke (2026-11-22):** `sma_crossover` USDJPY 1-HOUR-MID, 2024-01-02 to 2024-02-01,
+  `firstrate-fx`, persisted: 10 closed trades, USD balance -6.79 = the sum of the trade rows'
+  `profit_loss`, `metrics_basis` `mark_to_market`. Trade 1 by hand: short 691 at 144.657,
+  covered at 143.908, 517.559 JPY / 143.908 = USD 3.60 (stored 3.60).
 
 ## M4. Costs, margin and sizing
 

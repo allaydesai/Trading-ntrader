@@ -6,6 +6,7 @@ to the database, handling metric extraction, validation, and error scenarios.
 """
 
 import math
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
@@ -51,6 +52,30 @@ def _to_utc(value) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value
+
+
+_CENTS = Decimal("0.01")
+
+
+def usd_profit_loss(realized_pnl, usd_amount: Decimal | None) -> Decimal:
+    """A positions-report ``realized_pnl`` (``"-134.66 USD"``) as USD (FX M3, decision D11).
+
+    No P&L (an open position: None or NaN) is 0.00. A USD amount is parsed as it always was.
+    Any other currency (a USDJPY trade's ``"100000.00 JPY"``) is replaced by ``usd_amount``,
+    the position's P&L as the USD account booked it (each reducing fill at its own rate),
+    rounded to cents like the balance.
+
+    Raises:
+        ValueError: A non-USD P&L with no ``usd_amount``; storing it as dollars would be wrong.
+    """
+    if realized_pnl is None or pd.isna(realized_pnl):
+        return Decimal("0.00")
+    amount, _, currency = str(realized_pnl).partition(" ")
+    if currency.strip() in ("", "USD"):
+        return Decimal(amount)
+    if usd_amount is None:
+        raise ValueError(f"realized P&L {realized_pnl} has no USD amount to store it as")
+    return Decimal(usd_amount).quantize(_CENTS)
 
 
 def _optional_str(value) -> Optional[str]:
@@ -403,6 +428,7 @@ class BacktestPersistenceService:
         self,
         backtest_run_id: int,
         positions_report_df,
+        usd_pnls: Mapping[str, Decimal] | None = None,
     ) -> int:
         """
         Save trades from Nautilus Trader positions report to database.
@@ -413,12 +439,15 @@ class BacktestPersistenceService:
         Args:
             backtest_run_id: ID of the backtest run these trades belong to
             positions_report_df: Pandas DataFrame from trader.generate_positions_report()
+            usd_pnls: Each FX position's realised P&L in USD, by position id
+                (``src/core/fx_results.usd_realised_pnls``); stored for non-USD P&L
 
         Returns:
             Number of trades saved
 
         Raises:
-            ValidationError: If positions report data is invalid
+            ValidationError: If positions report data is invalid, or a non-USD
+                realized P&L has no amount in ``usd_pnls``
 
         Example:
             >>> positions_df = trader.generate_positions_report()
@@ -504,14 +533,9 @@ class BacktestPersistenceService:
                 if duration_ns is not None and not pd.isna(duration_ns):
                     holding_period_seconds = int(duration_ns / 1_000_000_000)
 
-                # Extract realized PnL (format: "-134.66 USD"). Open positions have
-                # no realized PnL; 0.00 is the honest value, not a missing one.
-                profit_loss = Decimal("0.00")
-                realized_pnl = row.get("realized_pnl")
-                if realized_pnl is not None and not pd.isna(realized_pnl):
-                    parts = str(realized_pnl).split()
-                    if len(parts) >= 1:
-                        profit_loss = Decimal(parts[0])
+                # Realized PnL in USD (open positions: 0.00, the honest value)
+                rate = (usd_pnls or {}).get(str(position_id))
+                profit_loss = usd_profit_loss(row.get("realized_pnl"), rate)
 
                 # Quantize to 8 decimal places to avoid float artifacts
                 # from Nautilus C extension float → Decimal conversion
