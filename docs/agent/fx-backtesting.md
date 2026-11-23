@@ -7,13 +7,15 @@ instruments, the engine gate, the FirstRate importer and the `firstrate-fx` cata
 conversion, costs, margin and base-unit sizing, reporting in CLI/MCP/dashboard, and
 Riptide/Bollinger on FX; QA fixes #66, including the dashboard Run form running a cross). An FX
 run settles in USD end to end on every surface and pays IB's spot commission plus a modelled
-half-spread, under 3% margin. **Every cost and margin figure is an UNVERIFIED default** (table
+half-spread, under 3% margin. The commission schedule is **VERIFIED** against IBKR's published
+pricing (2026-11-23); **every other cost and margin figure is an UNVERIFIED default** (table
 below). End-to-end QA: `docs/agent/fx-qa-2026-11-23.md`.
 
-Open follow-ups (listed in the archived `tasks.md`): Allay to confirm the UNVERIFIED cost and
-margin values (task 4.7, QA Q6); riptide `limit_offset_pct` (0.5 in `configs/riptide_fx.yaml`)
-is untuned (QA Q4); `/srv/market-data/raw/README.md` still says FX has no parser (Allay's edit;
-the raw tree is read-only to agents).
+Open follow-ups (listed in the archived `tasks.md`): Allay to confirm the UNVERIFIED spread,
+margin, min tick, size increment and IDEALPRO minimum (task 4.7, QA Q6; the commission is
+verified); riptide `limit_offset_pct` (0.5 in `configs/riptide_fx.yaml`) is untuned (QA Q4);
+`/srv/market-data/raw/README.md` still says FX has no parser (Allay's edit; the raw tree is
+read-only to agents).
 
 ## Data: the `firstrate-fx` catalog (M2)
 
@@ -76,8 +78,9 @@ STOCK, ETF, `None` and FUTURES rows build exactly what they did before.
 
 ### UNVERIFIED values (Allay to confirm against the IBKR account, task 4.7)
 
-**UNVERIFIED, Allay to confirm.** M4 charges these (commission, spread, margin) and sizes with
-them (size increment), so they move every FX result. They are the approved working defaults
+**UNVERIFIED, Allay to confirm.** M4 charges these (spread, margin) and sizes with them (size
+increment), so they move every FX result. Margin in particular depends on the account's IB
+entity and jurisdiction and is not confirmed. They are the approved working defaults
 (D6-D8, D13), not account figures. Change them in `src/services/fx/pair_specs.yaml` (each has a
 `sources` entry with `status`, `source` and `as_of`); every run records the values it used in
 `config_snapshot.fx_pairs`.
@@ -90,7 +93,13 @@ them (size increment), so they move every FX result. They are the approved worki
 | typical spread (pips) | 0.5 | 0.8 | 0.5 | 1.0 |
 | initial / maintenance margin | 3% / 3% | 3% / 3% | 3% / 3% | 3% / 3% |
 | price precision | measured | measured | measured | **assumed** (no data) |
-| commission (all pairs) | 0.20 bp x USD trade value, USD 2.00 minimum per order | | | |
+
+**VERIFIED: the commission schedule** (all pairs): 0.20 bp x USD trade value, USD 2.00 minimum
+per order. Source: IBKR "Commissions Spot Currencies", fetched 2026-11-23,
+<https://www.interactivebrokers.ca/en/pricing/commissions-spot-currencies.php?region=americas>,
+Tier I (monthly trade value <= USD 1B). Tiers II-IV (0.15 / 0.10 / 0.08 bp, minimums
+USD 1.50 / 1.25 / 1.00) are not modelled; a high-volume account would pay less. This verifies
+the published rate, not the account's own tier.
 
 Data facts that are also UNVERIFIED (FirstRate does not document them): whether the series is
 bid, ask or mid (treated as mid, D3), and that volume is a tick count.
@@ -244,7 +253,7 @@ Tests: `tests/component/core/test_fx_costs.py`, `tests/component/core/test_fx_st
 `pyproject.toml` pins `nautilus-trader<1.222`: 1.222 and later shrink USDJPY positions when FX
 commission is charged, which changes every USDJPY result here (the smoke below included).
 
-### What a fill costs (all UNVERIFIED defaults)
+### What a fill costs (commission verified; spread UNVERIFIED)
 
 Per fill, in USD, scaled by the run's cost multiplier:
 
@@ -262,6 +271,11 @@ Per fill, in USD, scaled by the run's cost multiplier:
 - Both components are rounded to cents once per order (not per fill). The run's totals per pair
   are in `config_snapshot.fx_pairs[<id>].costs_usd` (`commission`, `spread`); M5 reports them.
   For small orders the minimum dominates: 10k EURUSD pays USD 2.00 + 0.25 a side, about 2 bp.
+- **Known simplification: the minimum is charged once per Nautilus order.** IB treats a
+  modified order as a cancel + replace and an order that persists overnight as a new order for
+  minimum-commission purposes, so live, each modify or each day a resting order survives can
+  incur another USD 2.00 minimum. The backtest does not model this (no code change planned); a
+  strategy that reprices or rests orders across days pays more live than here.
 - An order worth less than the IDEALPRO minimum (USD 25,000, UNVERIFIED) is still filled; the
   first one per pair logs `fx_odd_lot` (live it would fill worse or be rejected).
 

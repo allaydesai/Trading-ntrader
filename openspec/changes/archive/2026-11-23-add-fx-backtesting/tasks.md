@@ -144,6 +144,9 @@ still passes unchanged.
       `pair_specs.yaml` `as_of`/`source` updated. **Open (2026-11-22):** M4 ships the approved
       working defaults, still `status: UNVERIFIED` in `pair_specs.yaml` and flagged
       "UNVERIFIED, Allay to confirm" in `docs/agent/fx-backtesting.md`.
+      **Partial (2026-11-23, PR #68):** the commission (0.20 bp, USD 2.00 minimum) is VERIFIED
+      against IBKR's published pricing page; margin, spread, min-tick, size and the IDEALPRO
+      minimum remain UNVERIFIED.
 - [x] 4.8 Manual smoke: `sma_crossover` EURUSD and USDJPY 1-hour, 2024 H1, persisted; one trade
       per pair hand-checked (pips, USD P&L, commission, spread).
       **Result (2026-11-22):** run on the M3 smoke window (USDJPY 1-hour, 2024-01-02 to
@@ -276,10 +279,10 @@ Allay's rulings of 2026-11-23 on the QA's open questions (design D17-D21).
 The change is archived with these items still open. They are not done; each is tracked here
 and in `docs/agent/fx-backtesting.md`.
 
-- **4.7 / Q.7 (Q6): UNVERIFIED cost and margin values.** Allay to confirm the commission,
-  margin, spread, min-tick and size values against the IBKR account, then set
-  `status`/`source`/`as_of` in `src/services/fx/pair_specs.yaml` and drop the UNVERIFIED flags
-  in `docs/agent/fx-backtesting.md`.
+- **4.7 / Q.7 (Q6): UNVERIFIED cost and margin values.** Commission VERIFIED 2026-11-23
+  (PR #68). Allay to confirm the margin, spread, min-tick and size values against the IBKR
+  account, then set `status`/`source`/`as_of` in `src/services/fx/pair_specs.yaml` and drop
+  the UNVERIFIED flags in `docs/agent/fx-backtesting.md`.
 - **Q.7 (Q4): riptide `limit_offset_pct` untuned.** `configs/riptide_fx.yaml` ships `0.5`
   (UNTUNED); Allay to confirm or tune.
 - **2.8 remainder: raw data README.** `/srv/market-data/raw/README.md` still says FX has "no

@@ -6,8 +6,8 @@ order id). Cross rates come from the M3 rate book, exactly as the feeder writes 
 run. The model inside a running engine is pinned in
 ``tests/integration/core/test_fx_margin_engine.py``.
 
-Shipped (UNVERIFIED) terms: 0.20 bp of USD trade value, USD 2.00 minimum per order; typical
-spread EURUSD 0.5, GBPUSD 0.8, USDJPY 0.5, EURGBP 1.0 pips, charged half per side.
+Shipped terms: 0.20 bp of USD trade value, USD 2.00 minimum per order (VERIFIED); typical
+spread (UNVERIFIED) EURUSD 0.5, GBPUSD 0.8, USDJPY 0.5, EURGBP 1.0 pips, charged half per side.
 """
 
 from decimal import Decimal
@@ -225,7 +225,7 @@ class TestSnapshot:
         assert eurusd["commission"] == {
             "rate_bps": "0.20",
             "min_per_order_usd": "2.00",
-            "as_of": "2026-11-22",
+            "as_of": "2026-11-23",
         }
         assert eurusd["costs_usd"] == {"commission": "2.20", "spread": "2.50"}
         assert "margin_pct" in eurusd["unverified"]
