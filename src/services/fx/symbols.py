@@ -24,6 +24,19 @@ def fx_ticker(symbol: str) -> str | None:
     return ticker if ticker in pair_names() else None
 
 
+def conversion_ticker(ticker: str) -> str | None:
+    """The pair whose bars convert a cross's quote currency to USD (``GBPUSD`` for ``EURGBP``).
+
+    ``None`` for a USD-quoted or USD-based pair (and any non-pair); the ticker-level twin of
+    :func:`src.core.fx_rates.conversion_pair`, for checks made before an instrument exists.
+    """
+    base, quote = ticker[:3], ticker[3:]
+    if fx_ticker(ticker) is None or "USD" in (base, quote):
+        return None
+    known = pair_names()
+    return next((c for c in (f"{quote}USD", f"USD{quote}") if c in known), None)
+
+
 def price_type_for(asset_class: str | None) -> str:
     """``MID`` for FX catalog rows, ``LAST`` for everything else."""
     return FX_PRICE_TYPE if (asset_class or "").upper() == FX_ASSET_CLASS else DEFAULT_PRICE_TYPE
