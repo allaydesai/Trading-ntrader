@@ -257,9 +257,11 @@ for external strategies: `docs/agent/futures-backtesting.md`.
 (or `EUR/USD`; also `GBPUSD`, `USDJPY`). `--timeframe 1-HOUR` loads the pair's `MID` bars. The
 account is USD: P&L is converted at the exit rate, IB's 0.2 bp commission (USD 2 minimum per
 order) and a modelled half-spread per side are charged in USD, margin is 3% of notional, and
-`sma_crossover`/`buy_and_hold` size in base units by USD notional. `--units N` trades exactly N
-base units per entry (100,000 = 1 lot; FX only, `sma_crossover`), `--spread-pips X` overrides
-the pair's modelled spread (part of the run's config hash):
+`sma_crossover`/`buy_and_hold`, `riptide` and `bollinger_reversal` size in base units by USD
+notional or USD risk (`configs/riptide_fx.yaml`, `configs/bollinger_fx.yaml`; other strategies
+are not ported). `--units N` trades exactly N base units per entry (100,000 = 1 lot; FX only,
+strategies with a `units` setting), `--spread-pips X` overrides the pair's modelled spread
+(part of the run's config hash):
 
 ```bash
 uv run python -m src.cli.main backtest run --symbol EUR/USD --catalog firstrate-fx \
