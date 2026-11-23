@@ -70,10 +70,16 @@ def _usd_realised(position, book: FxRateBook) -> float:
     rate could stand in: parts closed at 151 and 149 net 0 JPY but not 0 USD. Each fill is
     rounded as the account books it (``Money`` in the quote currency, then in USD cents), so
     the sum is the balance change exactly: two 50 JPY halves at 150.001 are 0.33 + 0.33.
+
+    Each fill's USD commission (FX M4: IB commission plus the modelled spread) is deducted,
+    as the account deducts it: Nautilus nets a commission into ``realized_pnl`` only in the
+    settlement currency, so a JPY position's figure never includes it.
     """
     quantity = average = usd = 0.0
     multiplier = position.multiplier.as_double()
     for fill in position.events:
+        if fill.commission.currency == ACCOUNT_CURRENCY:
+            usd -= fill.commission.as_double()
         rate = book.fill_rate(fill.trade_id) or 0.0  # a missing rate already failed the run
         signed = fill.last_qty.as_double() * (1.0 if fill.order_side == OrderSide.BUY else -1.0)
         price = fill.last_px.as_double()

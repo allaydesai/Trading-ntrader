@@ -29,6 +29,8 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import FuturesContract, Instrument
 from nautilus_trader.model.objects import Money
 
+from src.core.fx_costs import FxCommissionModel, fx_terms_by_instrument
+
 _TERM_KEYS = ("margin_initial_usd", "margin_maintenance_usd", "commission_per_contract_usd")
 
 
@@ -185,13 +187,21 @@ def venue_cost_models(
     instruments: Iterable[Instrument],
     equity_fee_model: FeeModel,
     cost_multiplier: Decimal = Decimal("1"),
+    cache=None,
 ) -> tuple[FeeModel, MarginModel | None]:
     """The fee and margin model for one venue listing ``instruments``.
 
-    With no futures contract among them this returns ``(equity_fee_model, None)``: the venue
-    is set up exactly as before. Otherwise a per-contract commission model (falling back to
-    the equity model) and a dollar-per-contract margin model.
+    With no futures contract or spot FX pair among them this returns
+    ``(equity_fee_model, None)``: the venue is set up exactly as before. Futures get a
+    per-contract commission model (falling back to the equity model) and a dollar-per-contract
+    margin model. An FX venue (FX M4; spot pairs only, ``backtest_venue`` refuses a mix) gets
+    ``FxCommissionModel`` (``cache`` gives it cross rates and keeps its cost totals) and
+    Nautilus' default margin model, which applies the pair's percentage ``margin_init``.
     """
+    instruments = list(instruments)
+    fx = fx_terms_by_instrument(instruments)
+    if fx:
+        return FxCommissionModel(fx, cache=cache, scale=cost_multiplier), None
     terms = terms_by_instrument(instruments)
     if not terms:
         return equity_fee_model, None

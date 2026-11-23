@@ -1,11 +1,13 @@
 # FX backtesting: pairs, instruments, conversion
 
 Spot FX on IB IDEALPRO, planned in `openspec/changes/add-fx-backtesting/` (M1-M6; decisions
-D1-D16 approved 2026-11-22). **Status: M1-M3** (specs, instruments, the engine gate, the
-FirstRate importer and the `firstrate-fx` catalog, and USD account conversion). An FX run now
-settles in USD end to end through the orchestrator (MCP and direct callers), but FX **costs are
-zero** until M4, and the CLI and web forms still build `-LAST` bar types (M5 adds `MID`). The
-sections marked *(planned)* describe later milestones.
+D1-D16 approved 2026-11-22). **Status: M1-M4** (specs, instruments, the engine gate, the
+FirstRate importer and the `firstrate-fx` catalog, USD account conversion, and costs, margin
+and base-unit sizing). An FX run settles in USD end to end through the orchestrator (MCP and
+direct callers) and pays IB's spot commission plus a modelled half-spread, under 3% margin.
+**Every cost and margin figure is an UNVERIFIED default** (table below). The CLI and web forms
+still build `-LAST` bar types, and no report shows FX figures yet (both M5). The sections
+marked *(planned)* describe later milestones.
 
 ## Data: the `firstrate-fx` catalog (M2)
 
@@ -60,13 +62,19 @@ schedule (bps of USD trade value, USD minimum per order) covers all pairs.
 - price precision from the bars (else the spec: 5, or 3 for USDJPY), increment `10^-precision`
   (the data grid; the IB min tick is in `info` for live orders only);
 - `size_increment` 1 (whole base units), `margin_init`/`margin_maint` = spec % / 100, fees 0
-  (commission will come from the venue fee model, M4);
+  (commission comes from the venue fee model, `FxCommissionModel`, M4);
 - `info`: `asset_class`, pip size, min tick, IDEALPRO minimum, spread, margins and as-of,
   commission terms, the `ib` block, and the list of `unverified` fields.
 
 STOCK, ETF, `None` and FUTURES rows build exactly what they did before.
 
-### UNVERIFIED values (confirm against the IBKR account before M4 merges, task 4.7)
+### UNVERIFIED values (Allay to confirm against the IBKR account, task 4.7)
+
+**UNVERIFIED, Allay to confirm.** M4 charges these (commission, spread, margin) and sizes with
+them (size increment), so they move every FX result. They are the approved working defaults
+(D6-D8, D13), not account figures. Change them in `src/services/fx/pair_specs.yaml` (each has a
+`sources` entry with `status`, `source` and `as_of`); every run records the values it used in
+`config_snapshot.fx_pairs`.
 
 | Value | EURUSD | GBPUSD | USDJPY | EURGBP |
 |---|---|---|---|---|
@@ -128,8 +136,8 @@ Tests: `tests/component/core/test_fx_rates.py`,
 - **The account.** A venue listing spot FX pairs (a `CurrencyPair` whose `info.asset_class` is
   `FX`; Kraken crypto pairs are not) is added with `base_currency=USD`: every balance change is
   in USD. Equity and futures venues get exactly the `add_venue` call they had (pinned). An FX
-  venue is charged nothing (`FxNoCommissionModel`, USD 0.00) until M4's cost models; a venue
-  mixing FX pairs and other instruments is refused.
+  venue is charged by `FxCommissionModel` (M4, below); a venue mixing FX pairs and other
+  instruments is refused.
 - **Which rates a run needs.** A USD-quote pair (EURUSD, GBPUSD) needs none: its P&L is
   already USD. A USD-base pair (USDJPY) is its own rate source. A cross (EURGBP) needs
   `{quote}USD` or `USD{quote}` (GBPUSD), which `load_from_catalog` loads from the same catalog
@@ -159,7 +167,7 @@ Tests: `tests/component/core/test_fx_rates.py`,
   realised P&L at its own recorded rate (average cost per position, as Nautilus' `Position`)
   and marks open positions at the latest rate, one value per **17:00 New York trade date**;
   a flat run rebuilds to the engine's USD balance, so `metrics_basis` is `mark_to_market`.
-  `config_snapshot` declares `account_currency` and `fx_pairs` (filled from M4).
+  `config_snapshot` declares `account_currency` and `fx_pairs` (filled by M4, below).
 - A position closed in several parts converts each part at its own fill's rate, as the
   account does, so the stored `profit_loss` equals the balance change (pinned: USD 497.24 for
   two halves; halves at 151 and 149 net 0 JPY but USD -4.44, and store -4.44).
@@ -193,9 +201,139 @@ typically under 0.1% of the trade's P&L. A gap-aware Sunday-open fill converts a
 Friday close, so a weekend gap in USDJPY is the worst case. M3 does not close it: the rate at
 an intrabar fill is not knowable from one `MID` bar without looking ahead.
 
-## Planned (M4-M6)
+## Costs, margin and sizing (M4)
 
-- M4: `FxCommissionModel` (bps + minimum + modelled half-spread), percentage margin enforced by
-  a generalised margin gate, base-unit sizing, `config_snapshot.fx_pairs` filled.
-- M5: reporting, dashboard, `--units`, `MID` bar types from the CLI. M6: Riptide and Bollinger
-  Reversal on FX.
+Code: `src/core/fx_costs.py` (`FxCommissionModel`, `fx_terms`, `fx_snapshot`),
+`src/core/margin_gate.py` (`MarginGate`, `FxRequirement`), `src/core/pending_modifies.py`
+(`PendingModifies`), `src/core/backtest_venue.py` (`cost_snapshot`),
+`src/core/position_sizing.py` (`quote_to_account_rate`, `fx_units_for_notional`,
+`fx_units_for_risk`, `whole_units`), `src/core/fx_rates.py` (`usd_per_quote`, `fx_units`).
+Tests: `tests/component/core/test_fx_costs.py`, `tests/component/core/test_fx_strategy_sizing.py`,
+`tests/component/core/test_margin_gate_fx.py`, `tests/unit/test_position_sizing.py`,
+`tests/integration/core/test_fx_margin_engine.py` (forked).
+
+`pyproject.toml` pins `nautilus-trader<1.222`: 1.222 and later shrink USDJPY positions when FX
+commission is charged, which changes every USDJPY result here (the smoke below included).
+
+### What a fill costs (all UNVERIFIED defaults)
+
+Per fill, in USD, scaled by the run's cost multiplier:
+
+- **Commission**: `max(0.20 bp x USD trade value, USD 2.00)`, **once per order**. Nautilus calls
+  the fee model per fill and the bar fill model often splits a 100k order into two or three
+  fills, so the model keeps each order's running totals and a later fill pays only the top-up.
+  USD trade value: the quantity for a USD-base pair (USDJPY 100,000 = USD 100,000), `quantity x
+  price` for a USD quote, and `quantity x price x GBP/USD` for a cross (the cache rate the
+  account also uses; a cross fill without one is charged nothing and the run fails on the M3
+  guard).
+- **Spread** (D3, D7): the bars are treated as mid, so fills stay at the bar's prices and each
+  side pays `quantity x typical_spread_pips x pip_size / 2`, converted to USD at the same rate.
+  EURUSD 0.5 pip is USD 2.50 per side per 100k (USD 5.00 a round trip); GBPUSD 0.8 is 4.00;
+  USDJPY 0.5 pip is 250 JPY per side per 100k (about USD 1.70); EURGBP 1.0 is 5 GBP.
+- Both components are rounded to cents once per order (not per fill). The run's totals per pair
+  are in `config_snapshot.fx_pairs[<id>].costs_usd` (`commission`, `spread`); M5 reports them.
+  For small orders the minimum dominates: 10k EURUSD pays USD 2.00 + 0.25 a side, about 2 bp.
+- An order worth less than the IDEALPRO minimum (USD 25,000, UNVERIFIED) is still filled; the
+  first one per pair logs `fx_odd_lot` (live it would fill worse or be rejected).
+
+Worked round trips (pinned in the engine test): EURUSD 100,000 at 1.10000 to 1.10100 nets
+USD 100.00 - 4.40 - 5.00 = **90.60**; USDJPY 100,000 at 150.000 to 151.000 nets 662.25 - 4.00 -
+3.33 = **654.92**; EURGBP 100,000 at 0.85000 to 0.86000 (GBPUSD 1.25) nets 1,250.00 - 4.27 -
+12.50 = **1,233.23**.
+
+Trade rows: a USD-quote pair's `realized_pnl` is already net of its USD commission (Nautilus
+nets a same-currency commission). For a pair settling outside USD Nautilus does not net it,
+so the USD `profit_loss` M3 rebuilds also deducts each fill's USD commission. Either way the
+sum of the trade rows equals the USD balance change, and mark-to-market reconciles.
+
+### Margin (D8)
+
+- Initial and maintenance margin are `margin_pct` (3%, UNVERIFIED) of USD notional, through
+  Nautilus' default `LeveragedMarginModel` and the pair's `margin_init`/`margin_maint`. FX venues
+  are added with `default_leverage=1`: Nautilus' margin-account default of 10 would have turned
+  3% into 0.3%. The locked margin is in USD (converted with the feeder's rates for USDJPY and
+  crosses). Implied maximum leverage is 100 / 3 = 33x.
+- **Enforced** by the futures gate generalised to `MarginGate`: one per-instrument requirement
+  (`FuturesRequirement`: dollars per contract; `FxRequirement`: `units x price x USD per quote
+  unit x margin_pct`). An entry needing more than the free USD balance is denied
+  `MARGIN_EXCEEDS_FREE_BALANCE: 400000 EUR/USD.IDEALPRO unit(s) need 13200.00 USD initial
+  margin, free=10000.00 USD`; closes are credited and never denied; a quantity-increase modify
+  is rejected `FX_QTY_INCREASE_NOT_SUPPORTED` (and `FX_MODIFY_PENDING` while an earlier modify
+  of the same order is unanswered), and a new limit or trigger that raises an entry's margin by
+  more than is free is rejected `MARGIN_EXCEEDS_FREE_BALANCE` (futures margin ignores price, so
+  their reprices pass). A quantity-only decrease releases margin; a decrease that also changes
+  the limit or trigger is checked like any reprice, on the new quantity, and can be refused
+  `MARGIN_EXCEEDS_FREE_BALANCE` (100,000 EURUSD at 1.10 to 99,000 at 1.20 raises margin from
+  USD 3,300 to 3,564). The increase is computed on the order's full quantity, as Nautilus
+  margins it. The reference price is the order's limit or stop trigger, else the latest `MID`
+  price. Futures names, reasons and behaviour are unchanged (`src/core/futures_margin_gate.py`
+  keeps them).
+- **Pending modifies** (`src/core/pending_modifies.py`): Nautilus reserves an order's margin at
+  its current price until the venue applies a modify, so the gate records each modify it passes
+  on (requested quantity, price, trigger) per client order id. Free balance, for new entries and
+  for other reprices alike, is less each order's largest still-unapplied increase; the order's
+  own new reprice replaces its pending one rather than adding to it. A request settles when the
+  venue rejects it, when an `OrderUpdated` answers it, or when the order closes (filled,
+  cancelled, expired). On order kinds Nautilus also updates unsolicited (trailing stops,
+  market-to-limit, reduce-only, contingent, emulated and exec-algorithm orders) an
+  `OrderUpdated` answers only when it carries the requested values, so a trail mid-modify keeps
+  the increase held while an applied modify clears it. The gate's own rejection, and a risk
+  engine rejection of the modify being passed on, never settle an earlier request. Reduce-only
+  and contingent child orders hold nothing (they are not margined as entries).
+- An FX entry that can rest (any type but market and market-to-limit, including a trailing
+  stop submitted without a trigger) but cannot be priced in USD yet (no bar, or a cross before
+  its first GBPUSD bar) is denied `FX_MARGIN_UNPRICEABLE`: it could otherwise fill later,
+  unmargined. A market order in that state is still passed on: it fills at once and the M3
+  guard fails a fill without a rate, or, with no market yet, the venue rejects it. Same known
+  limits as futures: no unrealised P&L in buying power, no margin calls or liquidation.
+
+### Sizing (D13)
+
+Units are base-currency units (EURUSD 100,000 = EUR 100,000; lots are display-only, M5).
+`fx_units_for_notional(notional_usd, price, quote_rate) = notional_usd / (price x quote_rate)`,
+with `quote_rate` 1 for a USD quote, `1 / price` for a USD base and the cache rate for a cross,
+floored to `size_increment` (UNVERIFIED: 1) with no minimum of one (0 is no order).
+`sma_crossover` and `buy_and_hold` size FX this way: USD 100,000 of USDJPY is 100,000 units (M3
+sized ~690, the equity `notional / price`). CLI mode passes the starting balance as
+`portfolio_value` and 10% a trade, so a USD 1M account trades 100,000 units. `buy_and_hold`
+reads the account's USD cash (an FX account holds no JPY). `contracts` stays futures-only.
+Submodule strategies (Riptide, Bollinger Reversal) still use their own sizing: M6.
+
+### Smoke (task 4.8, 2026-11-22)
+
+`sma_crossover` USDJPY 1-HOUR-MID, 2024-01-02 to 2024-02-01 (end-of-day inclusive),
+`firstrate-fx`, USD 1M, persisted, M3 code against M4 code:
+
+| | M3 (before) | M4 (after) |
+|---|---|---|
+| Size per trade | 675-691 units | 100,000 units |
+| Trade rows (closed + open) | 12 (11 + 1) | 12 (11 + 1) |
+| USD P&L (sum of rows = balance change) | -9.69 | -1,532.09 |
+| Commission / spread | 0.00 / 0.00 | 46.00 / 39.13 (23 orders) |
+| `config_snapshot.fx_pairs` | absent | filled |
+
+Trade 1 by hand: short 100,000, filled 3,118 at 144.657 and 96,882 at 144.656 (avg
+144.65603118), covered 6,857 at 143.908 and 93,143 at 143.909 (avg 143.90893143): 74,709.975 JPY.
+Each covering fill converts at the cache rate 1/143.908: USD 519.15. Costs: commission 2.00 + 2.00
+(0.2 bp x USD 100,000 is exactly the minimum); spread 250 JPY / ~144.656 = 1.73 and 250 /
+~143.909 = 1.74; the fills were charged 2.05 + 1.68 and 2.12 + 1.62 = 7.47. Net **511.68**,
+stored 511.68.
+
+2024 H1 (2024-01-02 to 2024-06-28, same setup), each sum of trade rows equal to the balance
+change, `metrics_basis` `mark_to_market`:
+
+| Pair | Trade rows | USD P&L | Commission | Spread |
+|---|---|---|---|---|
+| EURUSD | 87 | -5,517.65 | 346.07 | 399.81 |
+| USDJPY | 77 | -2,234.33 | 306.00 | 250.93 |
+
+EURUSD trade 1 by hand: long 91,239 units (USD 100,000 / 1.09602, floored), filled 2,119 at
+1.09602 and 89,120 at 1.09603, sold 2,611 at 1.09167 and 88,628 at 1.09166: -43.69 pips, USD
+-398.66. Costs 8.56 (commission 2.00 a side: 0.2 bp of ~USD 100,000 and ~99,601 both round to
+the minimum; spread 91,239 x 0.000025 = 2.28 a side). Net **-407.22**, stored -407.22.
+
+## Planned (M5-M6)
+
+- M5: reporting (pips, lots, notional, leverage, the costs split from `fx_pairs.costs_usd`),
+  dashboard, `--units`, `--spread-pips`, `MID` bar types from the CLI. M6: Riptide and
+  Bollinger Reversal on FX.

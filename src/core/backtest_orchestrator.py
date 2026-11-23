@@ -24,11 +24,10 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.trading.strategy import Strategy
 
 from src.config import get_settings
-from src.core.backtest_venue import setup_backtest_venues
+from src.core.backtest_venue import cost_snapshot, setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
 from src.core.fill_models import bind_fill_model
-from src.core.futures_costs import futures_snapshot
 from src.core.fx_results import usd_realised_pnls
 from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
@@ -545,8 +544,8 @@ class BacktestOrchestrator:
             fields = _run_record_fields(request)
             equity_curve = self._extract_equity_curve(float(request.starting_balance))
             fields["config_snapshot"]["metrics_basis"] = metrics_basis(self._extractor)
-            if self.engine:  # futures runs only: the contract terms M4 reports against
-                fields["config_snapshot"].update(futures_snapshot(self.engine.cache.instruments()))
+            if self.engine:  # futures and FX runs only: the cost terms reporting reads
+                fields["config_snapshot"].update(cost_snapshot(self.engine.cache))
             if request.config_file_path:
                 fields["config_snapshot"]["config_file_path"] = request.config_file_path
 

@@ -27,7 +27,8 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 from pydantic import BaseModel, Field
 
-from src.core.position_sizing import instrument_multiplier, units_for_notional
+from src.core.fx_rates import fx_units
+from src.core.position_sizing import instrument_multiplier, is_fx_pair, units_for_notional
 
 
 class BuyAndHoldConfig(StrategyConfig, kw_only=True, frozen=True):  # type: ignore[misc]
@@ -90,8 +91,12 @@ class BuyAndHold(Strategy):
 
     def _entry_quantity(self, price: Decimal) -> Decimal:
         account = self.portfolio.account(self.instrument_id.venue)
-        cash = account.balance_total(self.instrument.quote_currency).as_decimal()
+        # An FX venue's account is single-currency USD (FX M3): its cash is never in JPY.
+        currency = account.base_currency or self.instrument.quote_currency
+        cash = account.balance_total(currency).as_decimal()
         budget = cash * self.config.allocation_pct / Decimal(100)
+        if is_fx_pair(self.instrument):  # base units worth the USD budget (FX M4)
+            return fx_units(budget, price, self.instrument, self.cache)
         # Exposure, not cash: a futures contract costs price x multiplier (ES 50), so
         # $1M buys 2 ES contracts, not 140. Shares have multiplier 1 (unchanged).
         units = units_for_notional(budget, price, instrument_multiplier(self.instrument))
