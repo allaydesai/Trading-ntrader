@@ -33,6 +33,7 @@ def _order(instrument, qty: int, price: str | None = None, leaves: int | None = 
         price=Price.from_str(price) if price else None,
         trigger_price=None,
         status=kw.get("status", OrderStatus.INITIALIZED),
+        events=list(kw.get("events", [])),
         is_reduce_only=False,
         parent_order_id=None,
         client_order_id=ClientOrderId(f"O-{next(_IDS)}"),
@@ -42,9 +43,10 @@ def _order(instrument, qty: int, price: str | None = None, leaves: int | None = 
 class _Cache:
     """No bars and no GBP rate yet: only limit orders can be priced (and only USD quotes)."""
 
-    def __init__(self, free: str, inflight=()) -> None:
+    def __init__(self, free: str, inflight=(), open_orders=()) -> None:
         self._free = Decimal(free)
         self._inflight = list(inflight)
+        self._open = list(open_orders)
 
     def instrument(self, instrument_id):
         return {EURUSD.id: EURUSD, EURGBP.id: EURGBP}[instrument_id]
@@ -64,13 +66,32 @@ class _Cache:
     def orders_inflight(self, venue=None):
         return self._inflight
 
+    def orders_open(self, venue=None):
+        return self._open
+
     def position(self, position_id):
         return None
 
 
-def _gate(free: str = "10000", inflight=()) -> MarginGate:
+def _gate(free: str = "10000", inflight=(), open_orders=()) -> MarginGate:
     terms = {i.id: FxRequirement(Decimal("0.03")) for i in (EURUSD, EURGBP)}
-    return MarginGate(risk_engine=None, cache=_Cache(free, inflight), msgbus=None, terms=terms)
+    cache = _Cache(free, inflight, open_orders)
+    return MarginGate(risk_engine=None, cache=cache, msgbus=None, terms=terms)
+
+
+def _event(kind: str):
+    """A real order event: "pending" (OrderPendingUpdate), "updated" or "rejected"."""
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.events import OrderModifyRejected, OrderPendingUpdate, OrderUpdated
+    from nautilus_trader.model.identifiers import StrategyId, TraderId
+
+    ids = (TraderId("T-001"), StrategyId("S-001"), EURUSD.id, ClientOrderId("A"))
+    if kind == "pending":
+        return OrderPendingUpdate(*ids, None, None, UUID4(), 0, 0)
+    if kind == "updated":
+        qty = Quantity.from_int(100_000)
+        return OrderUpdated(*ids, None, None, qty, Price.from_str("1.12000"), None, UUID4(), 0, 0)
+    return OrderModifyRejected(*ids, None, None, "rejected", UUID4(), 0, 0)
 
 
 def test_an_unpriceable_sibling_does_not_waive_a_priced_over_margin_entry():
@@ -118,3 +139,28 @@ class TestReprice:
         order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED)
         gate = _gate(free="0", inflight=[other])
         assert gate.modify_denial_reason(order, None, Price.from_str("1.05000")) is None
+
+
+class TestPendingReadFromEvents:
+    """Whether another order's modify is unresolved comes from its events, not its status.
+
+    Nautilus 1.220 puts an order back to its previous status when a later modify is rejected,
+    even while an earlier modify of it is still unapplied (CodeRabbit, PR #63).
+    """
+
+    def test_a_reset_status_after_a_rejected_later_modify_still_counts_as_pending(self):
+        # A: reprice to 1.12 queued (+60), reprice to 1.14 rejected -> status back to ACCEPTED,
+        # and no longer in flight. B's +60 must still wait: A's +60 is unreserved.
+        events = [_event("pending"), _event("pending"), _event("rejected")]
+        other = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED, events=events)
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED)
+        gate = _gate(free="100", open_orders=[other, order])
+        reason = gate.modify_denial_reason(order, None, Price.from_str("1.12000"))
+        assert reason is not None and reason.startswith("FX_MODIFY_PENDING")
+
+    def test_a_resolved_modify_on_another_order_does_not_block(self):
+        events = [_event("pending"), _event("updated")]
+        other = _order(EURUSD, 100_000, "1.12000", status=OrderStatus.ACCEPTED, events=events)
+        order = _order(EURUSD, 100_000, "1.10000", status=OrderStatus.ACCEPTED)
+        gate = _gate(free="100", open_orders=[other, order])
+        assert gate.modify_denial_reason(order, None, Price.from_str("1.12000")) is None

@@ -259,7 +259,9 @@ sum of the trade rows equals the USD balance change, and mark-to-market reconcil
   `MARGIN_EXCEEDS_FREE_BALANCE` (futures margin ignores price, so their reprices pass). The
   increase is computed on the order's full quantity, as Nautilus margins it, and a
   margin-raising reprice is refused `FX_MODIFY_PENDING` while another FX modify on the venue is
-  not yet applied (its increase is not reserved yet). The
+  not yet applied (its increase is not reserved yet). "Not yet applied" is read from each
+  order's events, not its status: Nautilus restores an order's status when a later modify is
+  rejected even while an earlier one is still queued. The
   reference price is the order's limit or stop trigger, else the latest `MID` price. Futures
   names, reasons and behaviour are unchanged (`src/core/futures_margin_gate.py` keeps them).
 - Limit: an order the gate cannot price (no bar yet, or a cross before its first GBPUSD bar) is

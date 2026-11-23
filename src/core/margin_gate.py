@@ -315,13 +315,20 @@ def _other_price_modify_pending(cache, terms, order: Order) -> bool:
 
     Its margin change is not reserved until the venue applies it, so a second margin-raising
     reprice could pass against the same free balance; it waits instead (as quantity modifies
-    wait for their own earlier modify).
+    wait for their own earlier modify). Read from each order's events, not its status:
+    Nautilus restores the previous status when a later modify is rejected even while an
+    earlier one is still unapplied, which also takes the order out of ``orders_inflight``, so
+    the venue's open orders are scanned too.
     """
-    for other in cache.orders_inflight(venue=order.instrument_id.venue):
+    venue = order.instrument_id.venue
+    seen = {order.client_order_id}
+    for other in [*cache.orders_open(venue=venue), *cache.orders_inflight(venue=venue)]:
         requirement = terms.get(other.instrument_id)
-        if other.client_order_id == order.client_order_id or requirement is None:
+        if other.client_order_id in seen or requirement is None:
             continue
-        if requirement.price_sensitive and other.status == OrderStatus.PENDING_UPDATE:
+        seen.add(other.client_order_id)
+        pending = other.status == OrderStatus.PENDING_UPDATE
+        if requirement.price_sensitive and (pending or _unresolved_modifies(other.events)):
             return True
     return False
 
@@ -379,6 +386,15 @@ def _earlier_modifies_outstanding(order: Order) -> int:
         events.pop()  # this modify's own pending event
     elif order.status == OrderStatus.PENDING_UPDATE:
         return 1  # pending, but not because of this command: an earlier modify is open
+    return _unresolved_modifies(events)
+
+
+def _unresolved_modifies(events) -> int:
+    """Modifies opened (``OrderPendingUpdate``) and not yet resolved, from order events.
+
+    Each ``OrderModifyRejected`` closes one, and an ``OrderUpdated`` closes one while any is
+    open (an unsolicited update with none open closes nothing).
+    """
     outstanding = 0
     for event in events:
         if isinstance(event, OrderPendingUpdate):
