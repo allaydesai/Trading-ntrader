@@ -22,9 +22,12 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         """A persisted run: window, provenance (commit, dirty, config hash), params, metrics.
 
         Metrics carry units: fraction (0.25 = 25 %), ratio, currency, count, percent.
-        asset_class is "equity" or "futures"; a futures run adds futures: its headline
+        asset_class is "equity", "futures" or "fx"; a futures run adds futures: its headline
         return_on_margin_pct (P&L / peak initial margin, percent), return_on_underlying_pct,
-        peak margin and contract terms. Its dollar P&L is ratio-adjusted.
+        peak margin and contract terms. Its dollar P&L is ratio-adjusted. An FX run keeps
+        total_return (USD equity) as the headline and adds fx: pips, units/lots, USD
+        notional, peak_leverage, commission_usd vs spread_usd, pair terms and a note that
+        financing is not modelled.
         """
         return await call(runs.get_run, run_id)
 
