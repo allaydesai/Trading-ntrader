@@ -1,0 +1,164 @@
+<!-- Trades Table Partial with HTMX Pagination and Sorting -->
+<div id="trades-table-content">
+
+<!-- Table Header Controls -->
+<div class="flex justify-between items-center mb-4">
+    <div class="text-sm text-slate-400">
+        Showing <span class="text-slate-200 font-medium">1</span>
+        to <span class="text-slate-200 font-medium">2</span>
+        of <span class="text-slate-200 font-medium">2</span> trades
+    </div>
+
+    <div class="flex items-center gap-2">
+        <label for="page-size" class="text-sm text-slate-400">Per page:</label>
+        <select id="page-size"
+                name="page_size"
+                class="bg-slate-800 border border-slate-600 rounded-md px-3 py-1 text-sm text-slate-200"
+                hx-get="/backtests/7/trades-table?page=1&sort_by=entry_timestamp&sort_order=asc"
+                hx-target="#trades-table-content"
+                hx-swap="outerHTML">
+            <option value="20" selected>20</option>
+            <option value="50" >50</option>
+            <option value="100" >100</option>
+        </select>
+    </div>
+</div>
+
+<!-- Trades Table -->
+<!-- FX trades (M5): base units and lots, pips at pair precision, USD notional and P&L -->
+<div class="overflow-x-auto" data-testid="fx-trades">
+    <table class="w-full text-sm">
+        <thead class="border-b border-slate-700">
+            <tr>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">#</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider"><button type="button"
+                        class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider"
+                        hx-get="/backtests/7/trades-table?sort_by=entry_timestamp&sort_order=desc&page=1&page_size=20"
+                        hx-target="#trades-table-content"
+                        hx-swap="outerHTML">
+                        Entry Date ↑
+                    </button></th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider"><button type="button"
+                        class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider"
+                        hx-get="/backtests/7/trades-table?sort_by=exit_timestamp&sort_order=asc&page=1&page_size=20"
+                        hx-target="#trades-table-content"
+                        hx-swap="outerHTML">
+                        Exit Date
+                    </button></th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Symbol</th>
+                <th scope="col" class="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase tracking-wider">Direction</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Units</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Lots</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Entry Price</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Exit Price</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Notional $</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Pips</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Underlying %</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider"><button type="button"
+                        class="flex items-center gap-1 hover:text-white transition-colors ml-auto uppercase tracking-wider"
+                        hx-get="/backtests/7/trades-table?sort_by=profit_loss&sort_order=asc&page=1&page_size=20"
+                        hx-target="#trades-table-content"
+                        hx-swap="outerHTML">
+                        P&amp;L $
+                    </button></th>
+                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">Hold Time</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+            
+            <tr class="hover:bg-slate-800/50 transition-colors">
+                <td class="px-4 py-3 text-slate-400">1</td>
+                <td class="px-4 py-3 text-slate-300 font-mono text-xs">2024-03-01 14:00:00</td>
+                <td class="px-4 py-3 text-slate-300 font-mono text-xs">2024-03-01 19:00:00</td>
+                <td class="px-4 py-3 text-slate-200 font-mono">EUR/USD.IDEALPRO</td>
+                <td class="px-4 py-3 text-center">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border border-slate-600 text-slate-300">BUY</span>
+                </td>
+                <td class="px-4 py-3 text-right text-slate-200 font-mono">100,000</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">1.00</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">1.08000</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">1.08500</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">$108,000.00</td>
+                <td class="px-4 py-3 text-right font-mono text-green-400">+50.0</td>
+                <td class="px-4 py-3 text-right font-mono text-green-400">+0.46%</td>
+                <td class="px-4 py-3 text-right font-mono font-medium text-green-400">$491.50</td>
+                <td class="px-4 py-3 text-right text-slate-400 text-xs">
+                    
+                        
+                        
+                        
+                        5h 0m
+                    
+                </td>
+            </tr>
+            
+            <tr class="hover:bg-slate-800/50 transition-colors">
+                <td class="px-4 py-3 text-slate-400">2</td>
+                <td class="px-4 py-3 text-slate-300 font-mono text-xs">2024-03-01 17:00:00</td>
+                <td class="px-4 py-3 text-slate-300 font-mono text-xs">2024-03-01 22:00:00</td>
+                <td class="px-4 py-3 text-slate-200 font-mono">USD/JPY.IDEALPRO</td>
+                <td class="px-4 py-3 text-center">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border border-slate-600 text-slate-300">SELL</span>
+                </td>
+                <td class="px-4 py-3 text-right text-slate-200 font-mono">200,000</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">2.00</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">150.000</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">150.500</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">$200,000.00</td>
+                <td class="px-4 py-3 text-right font-mono text-red-400">-50.0</td>
+                <td class="px-4 py-3 text-right font-mono text-red-400">-0.33%</td>
+                <td class="px-4 py-3 text-right font-mono font-medium text-red-400">-$672.40</td>
+                <td class="px-4 py-3 text-right text-slate-400 text-xs">
+                    
+                        
+                        
+                        
+                        5h 0m
+                    
+                </td>
+            </tr>
+            
+        </tbody>
+    </table>
+    <p class="text-xs text-slate-400 mt-3">P&amp;L is USD (converted at the exit rate, net of USD commission and modelled spread). Financing (overnight rollover/swap) is not modelled. Notional is the USD value at entry (not shown for a cross).</p>
+</div>
+
+
+<!-- Pagination Controls -->
+<div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700">
+    <div class="text-sm text-slate-400">
+        Page 1 of 1
+    </div>
+
+    <div class="flex gap-2">
+        <!-- First Page -->
+        <button class="px-3 py-1.5 rounded-md text-sm transition-colors
+                       bg-slate-900 border border-slate-800 text-slate-600 cursor-not-allowed"
+                disabled>
+            &#xAB; First
+        </button>
+
+        <!-- Previous Page -->
+        <button class="px-3 py-1.5 rounded-md text-sm transition-colors
+                       bg-slate-900 border border-slate-800 text-slate-600 cursor-not-allowed"
+                disabled>
+            &#x2039; Prev
+        </button>
+
+        <!-- Next Page -->
+        <button class="px-3 py-1.5 rounded-md text-sm transition-colors
+                       bg-slate-900 border border-slate-800 text-slate-600 cursor-not-allowed"
+                disabled>
+            Next &#x203A;
+        </button>
+
+        <!-- Last Page -->
+        <button class="px-3 py-1.5 rounded-md text-sm transition-colors
+                       bg-slate-900 border border-slate-800 text-slate-600 cursor-not-allowed"
+                disabled>
+            Last &#xBB;
+        </button>
+    </div>
+</div>
+
+</div>
