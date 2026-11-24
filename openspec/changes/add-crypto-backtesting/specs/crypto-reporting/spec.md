@@ -8,8 +8,9 @@ split with the fee tier, and the note "spot, unlevered, long-only". Equity, futu
 FX output SHALL be unchanged.
 
 #### Scenario: CLI show of a BTC run
-- **WHEN** `show` is run for a persisted BTC run with a 0.12820512 BTC trade
-- **THEN** the crypto block lists `BTC/USD (crypto, KRAKEN, fee tier 2)`, quantity `0.12820512`, its USD
+- **WHEN** `show` is run for a persisted BTC run, started without a fee tier (the default,
+  tier 2), with a 0.12820512 BTC trade
+- **THEN** the crypto block lists `BTC/USD (crypto, KRAKEN, fee tier 2)` (the run's tier), quantity `0.12820512`, its USD
   notional and the costs split
 
 #### Scenario: MCP payload is additive

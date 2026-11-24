@@ -1,9 +1,9 @@
 # Crypto backtesting: coins, instruments, account model
 
 Spot crypto on Kraken, planned in `openspec/changes/add-crypto-backtesting/` (milestones
-M1-M7; decisions C1-C23 in `design.md` section 13). **Status: M1 implemented** (coin specs,
-instruments, catalog dispatch, engine spike). Nothing yet imports crypto data (M2), charges
-Kraken fees or enforces spot rules (M3), sizes fractionally (M4) or reports crypto (M5), so
+M1-M7; decisions C1-C23 in `design.md` section 13). **Status: M1 and M2 implemented** (coin
+specs, instruments, catalog dispatch, engine spike; the FirstRate importer and the
+`firstrate-crypto` catalog, below). Nothing yet charges Kraken fees or enforces spot rules (M3), sizes fractionally (M4) or reports crypto (M5), so
 **crypto backtests are refused before M3 merges**: `add_backtest_venue` raises for any venue
 listing a spec-built crypto pair (the spike below shows why), and M3 replaces the refusal with
 the gate, fees and the unlevered USD account.
