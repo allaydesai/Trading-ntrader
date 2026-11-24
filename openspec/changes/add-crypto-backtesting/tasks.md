@@ -139,10 +139,10 @@ Below-minimum orders are dropped and counted. Equity, futures and FX sizing unch
 - [ ] 4.3 Component (failing first): `sma_crossover` and `buy_and_hold` on a crypto pair size
       fractionally and submit `instrument.make_qty`; equity/futures/FX unchanged.
 - [ ] 4.4 Route the core strategies.
-- [ ] 4.5 Unit/component (failing first): `backtest run --units 0.25` accepted for crypto, rejected
+- [x] 4.5 Unit/component (failing first): `backtest run --units 0.25` accepted for crypto, rejected
       (exit 2) when not a multiple of the increment or for a non-crypto symbol; FX int rule kept;
       MCP `submit_backtest`/`validate_config` follow the same rules.
-- [ ] 4.6 Implement the CLI/MCP validation (`sizing_overrides.py`).
+- [x] 4.6 Implement the CLI/MCP validation (`sizing_overrides.py`).
 
 ## M5. Reporting, dashboard, CLI and MCP
 

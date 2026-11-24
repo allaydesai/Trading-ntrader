@@ -4,6 +4,7 @@ import asyncio
 import sys
 import time
 from datetime import datetime
+from decimal import Decimal
 
 import click
 from rich.console import Console
@@ -17,6 +18,7 @@ from src.cli.commands._backtest_helpers import (
     load_many_backtest_data,
     resolve_backtest_request,
 )
+from src.cli.commands._fx_options import PositiveDecimal
 from src.cli.commands.compare import compare_backtests
 from src.cli.commands.reproduce import reproduce_backtest
 from src.cli.commands.show import show_backtest_details
@@ -141,11 +143,13 @@ def backtest():
 )
 @click.option(
     "--units",
-    type=click.IntRange(min=1),
+    type=PositiveDecimal(),
     default=None,
     help=(
-        "FX only: trade exactly N base-currency units per entry (100,000 = 1 lot) instead of "
-        "sizing by notional. Applies to any strategy whose config has a 'units' setting."
+        "FX or spot crypto: trade exactly N base units per entry instead of sizing by "
+        "notional. FX takes whole units (100,000 = 1 lot); crypto a decimal coin size on the "
+        "coin's increment (e.g. 0.25 BTC). Applies to any strategy whose config has a 'units' "
+        "setting."
     ),
 )
 @click.option(
@@ -198,7 +202,7 @@ def run_backtest(
     slow_period: int | None,
     trade_size: int | None,
     contracts: int | None,
-    units: int | None,
+    units: Decimal | None,
     spread_pips: float | None,
     fee_tier: int | None,
     timeframe: str | None,

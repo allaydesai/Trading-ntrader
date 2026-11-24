@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError
 
 from src.mcp_server.catalogs import timeframe_spec
 from src.mcp_server.errors import ToolFailure
@@ -24,6 +24,8 @@ from src.services.provenance import compute_config_hash
 from src.services.sizing_overrides import (
     CONTRACTS_KEY,
     UNITS_KEY,
+    coin_for_symbol,
+    coin_units,
     config_declares,
     is_futures_symbol,
     strategies_declaring,
@@ -49,8 +51,13 @@ class BacktestSpec(BaseModel):
     cost_multiplier: float = Field(
         default=1.0, ge=0, description="Commission scale (cost stress); 1 is the broker's schedule"
     )
-    units: StrictInt | None = Field(  # strict: True or 1.5 is refused, not coerced
-        default=None, gt=0, description="FX only: base units per entry (100000 = 1 lot)"
+    units: StrictInt | StrictFloat | None = Field(  # strict: True or "2" is refused, not coerced
+        default=None,
+        gt=0,
+        description=(
+            "FX: whole base units per entry (100000 = 1 lot); spot crypto: a decimal coin size "
+            "on the coin's increment (0.25 = 0.25 BTC)"
+        ),
     )
     contracts: StrictInt | None = Field(
         default=None, gt=0, description="Futures only: whole contracts per entry"
@@ -100,7 +107,7 @@ def _window(spec: BacktestSpec) -> tuple[datetime, datetime]:
     )
 
 
-def _override(ref: StrategyRef, key: str, value: int, applies: bool, why: str) -> dict:
+def _override(ref: StrategyRef, key: str, value: object, applies: bool, why: str) -> dict:
     """``{key: value}`` when the strategy's config takes ``key`` and the symbol suits it."""
     if not config_declares(ref.config_path, key):
         raise ToolFailure(
@@ -113,15 +120,33 @@ def _override(ref: StrategyRef, key: str, value: int, applies: bool, why: str) -
     return {key: value}
 
 
+def _units_value(units: int | float, is_fx: bool, coin: str | None) -> int | float | Decimal:
+    """FX units stay a whole ``int``; a crypto size becomes an exact increment-multiple Decimal."""
+    if is_fx and not isinstance(units, int):
+        raise ToolFailure(
+            "invalid_params",
+            f"units for FX is a whole number of base units, got {units!r}",
+            fix="Pass an integer, e.g. 100000.",
+        )
+    if coin is None:
+        return units
+    try:
+        return coin_units(units, coin)
+    except ValueError as exc:
+        raise ToolFailure("invalid_params", str(exc), fix="Pass a valid coin size.") from None
+
+
 def _sizing(ref: StrategyRef, spec: BacktestSpec, symbol: str, catalog: str, is_fx: bool):
     """``units``/``contracts`` as ``backtest run --units/--contracts`` apply them (QA fix c)."""
-    sizing: dict[str, int] = {}
+    sizing: dict[str, object] = {}
     if spec.units is not None:
         why = (
-            f"units is for FX only; '{symbol}' is not an FX pair in catalog '{catalog}' "
-            "(e.g. symbol EURUSD, catalog firstrate-fx)."
+            f"units is for FX only, or a spot crypto coin; '{symbol}' is neither in catalog "
+            f"'{catalog}' (e.g. symbol EURUSD, catalog firstrate-fx; or BTC, firstrate-crypto)."
         )
-        sizing |= _override(ref, UNITS_KEY, spec.units, is_fx, why)
+        coin = None if is_fx else coin_for_symbol(symbol)
+        units = _units_value(spec.units, is_fx, coin)
+        sizing |= _override(ref, UNITS_KEY, units, is_fx or coin is not None, why)
     if spec.contracts is not None:
         why = (
             f"contracts applies to futures only; '{symbol}' is not a futures root "
