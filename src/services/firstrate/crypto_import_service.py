@@ -137,7 +137,12 @@ class CryptoImportService(FuturesImportService):
     def _classify_ticker(
         self, ticker: str, file_path: Path, catalog_name: str, timeframe: str
     ) -> ClassifierDecision:
-        """Skip only when the UTC source end, the recorded end and the on-disk count agree."""
+        """Skip only when the UTC source end, the recorded end and the on-disk count agree.
+
+        A source with no readable bar for an already-imported series raises (the caller
+        reports the file as failed) instead of returning "new", whose rewrite would delete
+        the imported bars before finding nothing to write.
+        """
         timeframe = last_timeframe(timeframe)
         row = self._metadata_service.get_instrument_sync(catalog_name, ticker)
         if row is None:
@@ -147,8 +152,11 @@ class CryptoImportService(FuturesImportService):
         if end is None or recorded <= 0:
             return "new"
         source_last = compute_source_last_date(file_path, source_tz=timezone.utc)
-        if source_last is None:
-            return "new"
+        if source_last is None:  # refuse before write_series deletes the imported series
+            raise ValueError(
+                f"{file_path.name} has no readable bars; kept the {recorded} imported "
+                f"{timeframe} bars"
+            )
         if source_last != _as_utc(end):
             logger.info("crypto_source_changed", ticker=ticker, timeframe=timeframe)
             return "reimported"

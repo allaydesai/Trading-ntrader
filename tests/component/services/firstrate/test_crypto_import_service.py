@@ -234,6 +234,18 @@ class TestFailures:
         assert result.error == "No bars parsed from file"
         assert metadata.rows[(CATALOG, "BTC")].bar_count_hourly == 0
 
+    @pytest.mark.parametrize("damage", ["", "not,a,bar\n"])
+    def test_unreadable_source_keeps_the_imported_series(
+        self, source, catalog_dir, metadata, damage
+    ):
+        _run(_service(catalog_dir, metadata), source)
+        (source / "BTC_full_1hour.txt").write_text(damage)  # truncated or garbled later
+        [result] = _run(_service(catalog_dir, metadata), source)
+        assert result.status == "failed"
+        assert "no readable bars" in result.error
+        assert len(_read_all(catalog_dir)) == 20  # nothing deleted
+        assert metadata.rows[(CATALOG, "BTC")].bar_count_hourly == 20
+
     def test_invalid_rows_surface_as_ohlc_warnings(self, source, catalog_dir, metadata):
         rows = _hour_rows(5) + ["2024-03-10 06:00:00,100,99,101,100,1"]
         (source / "BTC_full_1hour.txt").write_text("\n".join(rows) + "\n")
