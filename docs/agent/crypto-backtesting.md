@@ -121,6 +121,48 @@ filled as maker (91.40 + 3.05 spread at tier 2; 60.93 at tier 4), the market clo
 (185.47 + 3.09; 108.19 at tier 4), a 5 BTC market buy was denied (USD 306,259.20 needed,
 69,533.10 free) and a naked 0.1 BTC sell was denied.
 
+## Fractional sizing (M4)
+
+- **Helpers** (`src/core/position_sizing.py`, framework-free, Decimal in and out):
+  `crypto_units_for_notional(notional, price, increment)` and
+  `crypto_units_for_risk(risk, stop_distance, increment)` floor to the size increment with no
+  minimum of one unit; with `min_base`/`min_usd` (the risk helper also needs `price` for the USD
+  minimum) a size under Kraken's minimum order is 0, no order. `crypto_units(notional, price,
+  pair)` reads the increment and `info["kraken"]` minimums of a spec-built pair. USD 10,000 of BTC
+  at 78,000 is 0.12820512 BTC.
+- **Strategies**: `sma_crossover` and `buy_and_hold` route a crypto pair (`is_crypto`) through
+  `crypto_units` and submit `instrument.make_qty` (8 dp, exact: the size is already on the
+  increment). Before M4, `sma_crossover` formatted a float to 8 dp (rounding up as often as
+  down) and `buy_and_hold` floored to whole coins. A budget under the minimum places no order:
+  `sma_crossover` warns once (`... is under the BTC/USD.KRAKEN minimum order`) and on stop
+  logs the run's count (`37 order(s) dropped under the minimum order`). Equity, futures and FX
+  sizing are unchanged.
+- **`--units X`** (`src/services/sizing_overrides.py`, shared by the CLI, the MCP
+  `submit_backtest`/`validate_config` and the run-time instrument check): for a coin with a spec,
+  a decimal that is a positive multiple of its increment and at or above `min_order_base`, kept
+  as an exact `Decimal` in the strategy config (and config hash; `0.25` and `0.250` hash alike).
+  Else exit 2 (`--units: units 0.000000001 is not a multiple of the BTC size increment
+  0.00000001`, `... under the Kraken BTC minimum order 0.00005`) or MCP `invalid_params`. FX still
+  takes whole units only (an `int`, so FX configs and hashes are unchanged; `--units 1.5` on
+  EURUSD exits 2). The MCP `units` argument takes a JSON integer or number (not a string).
+
+**Smoke (2026-11-24, real `firstrate-crypto` bars, 1-day 2023-01-01 to 2024-12-31, USD
+100,000, `sma_crossover` 10/20, tier 2, all fills taker).**
+
+| Run | Trades | Quantities | Commission + spread (USD) | Final balance |
+|-----|--------|------------|---------------------------|---------------|
+| BTC, 10% notional | 18 | 0.14020419 to 0.40237530 BTC | 2,222.95 + 37.05 | 108,230.08 |
+| ETH, 10% notional | 20 | 2.72974190 to 6.02195605 ETH | 2,419.77 + 60.52 | 100,813.30 |
+| BTC, `--units 0.25` | 18 | 0.25000000 BTC each | 2,394.54 + 39.91 | 110,521.28 |
+| ETH, `--units 0.25` | 20 | 0.25000000 ETH each | 144.59 + 3.63 | 100,048.56 |
+
+Persisted `trades.quantity` keeps all 8 decimals; each run's trade commissions sum to the
+snapshot's `costs_usd` and its P&L to the final balance less 100,000. One BTC `--units 0.25`
+round trip (24,852.42 in, 22,369.40 out) pays 70.83 taker + 1.18 spread = 72.01, as charged.
+Too small: `--units 0.00001` and `--units 0.000000001` exit 2 naming the minimum and the
+increment; a USD 5 balance (a USD 0.50 budget, 0.00002 BTC) places no order, warns once and
+reports 37 dropped orders on stop (final balance 5.00).
+
 ## Account model: the M1 spike (decision C8)
 
 `tests/integration/core/test_crypto_engine_acceptance.py` (run `--forked`) settled it:
