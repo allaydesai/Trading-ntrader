@@ -181,7 +181,38 @@ class TestSizingOverrides:
         assert "sma_crossover" in exc.value.fix
 
     @pytest.mark.parametrize("field", ["units", "contracts"])
-    @pytest.mark.parametrize("bad", [0, -1, True, 1.5, "2"])
+    @pytest.mark.parametrize("bad", [0, -1, True, "2"])
     def test_sizes_must_be_positive(self, field, bad):
         with pytest.raises(ValueError):
             _spec(**{field: bad})
+
+    def test_contracts_must_be_whole(self):
+        with pytest.raises(ValueError):
+            _spec(contracts=1.5)
+
+    def test_fx_units_must_be_whole(self):
+        """Crypto M4: ``units`` accepts a JSON decimal for crypto; FX still refuses one."""
+        for bad in (1.5, 1000.0):
+            with pytest.raises(ToolFailure) as exc:
+                resolve(self._fx(units=bad), default_catalog="")
+            assert exc.value.code == "invalid_params"
+            assert "whole number" in exc.value.message
+
+    def test_decimal_units_on_a_crypto_coin(self):
+        sized = resolve(self._btc(units=0.25), default_catalog="")
+        units = sized.request.strategy_config["units"]
+        assert units == Decimal("0.25") and isinstance(units, Decimal)
+        assert sized.summary()["params"]["units"] == 0.25
+        assert sized.config_hash != resolve(self._btc(), default_catalog="").config_hash
+
+    @pytest.mark.parametrize(
+        ("bad", "message"), [(1e-9, "size increment 0.00000001"), (0.00001, "minimum order")]
+    )
+    def test_crypto_units_off_the_increment_or_under_the_minimum(self, bad, message):
+        with pytest.raises(ToolFailure) as exc:
+            resolve(self._btc(units=bad), default_catalog="")
+        assert exc.value.code == "invalid_params"
+        assert message in exc.value.message
+
+    def _btc(self, **overrides):
+        return _spec(symbol="BTC", catalog="firstrate-crypto", params={}, **overrides)

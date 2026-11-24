@@ -203,6 +203,89 @@ def fx_units_for_risk_budget(
     return whole_units(fx_units_for_risk(risk, stop_distance, rate), step)
 
 
+def _above_minimum(units: Decimal, price: Decimal | None, min_base: Decimal, min_usd: Decimal):
+    """``units``, or 0 when they are under the venue's base or USD minimum order."""
+    if units < min_base:
+        return Decimal(0)
+    if min_usd > 0:
+        if price is None:
+            raise ValueError("price is needed to apply a USD minimum order")
+        if units * price < min_usd:
+            return Decimal(0)
+    return units
+
+
+def crypto_units_for_notional(
+    notional: Decimal,
+    price: Decimal,
+    size_increment: Decimal,
+    *,
+    min_base: Decimal = Decimal(0),
+    min_usd: Decimal = Decimal(0),
+) -> Decimal:
+    """Fractional coin units worth ``notional`` USD at ``price``, floored to the increment.
+
+    Spot crypto is USD-quoted, so no rate applies. There is no minimum of one unit (decision
+    C13): USD 10,000 of BTC at 78,000 is 0.12820512 BTC. A size under one increment, or under
+    the venue minimum (``min_base`` coins or ``min_usd`` of notional), is 0: no order.
+
+    Raises:
+        ValueError: ``price`` or ``size_increment`` is not positive.
+    """
+    if price <= 0:
+        raise ValueError("price must be positive to size a crypto order")
+    units = whole_units(notional / price, size_increment)
+    return _above_minimum(units, price, min_base, min_usd) if units else units
+
+
+def crypto_units_for_risk(
+    risk: Decimal,
+    stop_distance: Decimal,
+    size_increment: Decimal,
+    *,
+    price: Decimal | None = None,
+    min_base: Decimal = Decimal(0),
+    min_usd: Decimal = Decimal(0),
+) -> Decimal:
+    """Fractional coin units that lose ``risk`` USD over ``stop_distance``, floored.
+
+    0 for a zero stop distance, a size under one increment, or one under the venue minimum;
+    a USD minimum (``min_usd``) needs the entry ``price`` to convert.
+
+    Raises:
+        ValueError: A negative stop distance, a non-positive increment, or ``min_usd``
+            without ``price``.
+    """
+    if stop_distance < 0:
+        raise ValueError("stop_distance must not be negative")
+    if stop_distance == 0:
+        return Decimal(0)
+    units = whole_units(risk / stop_distance, size_increment)
+    return _above_minimum(units, price, min_base, min_usd) if units else units
+
+
+def crypto_minimum(instrument: object) -> tuple[Decimal, Decimal]:
+    """``(min_order_base, min_order_usd)`` from a spec-built pair's ``info["kraken"]``.
+
+    ``(0, 0)`` for a pair with no Kraken terms (no minimum applies).
+    """
+    info = getattr(instrument, "info", None) or {}
+    kraken = info.get("kraken") if isinstance(info, dict) else None
+    if not isinstance(kraken, dict):
+        return Decimal(0), Decimal(0)
+    return (
+        Decimal(str(kraken.get("min_order_base") or 0)),
+        Decimal(str(kraken.get("min_order_usd") or 0)),
+    )
+
+
+def crypto_units(notional: Decimal, price: Decimal, instrument: object) -> Decimal:
+    """:func:`crypto_units_for_notional` at ``instrument``'s increment and Kraken minimums."""
+    step = Decimal(str(getattr(instrument, "size_increment")))
+    min_base, min_usd = crypto_minimum(instrument)
+    return crypto_units_for_notional(notional, price, step, min_base=min_base, min_usd=min_usd)
+
+
 class SizingMethod(str, Enum):
     """Position sizing calculation methods."""
 

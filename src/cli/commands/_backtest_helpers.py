@@ -115,7 +115,7 @@ def resolve_backtest_request(
     timeframe: str | None = None,
     catalog_name: str | None = None,
     contracts: int | None = None,
-    units: int | None = None,
+    units: Decimal | int | None = None,
     spread_pips: float | None = None,
     fee_tier: int | None = None,
 ) -> tuple[BacktestRequest, str]:
@@ -139,7 +139,7 @@ def resolve_backtest_request(
         trade_size: Trade size in shares (CLI mode only)
         timeframe: Bar timeframe (CLI mode only)
         contracts: Futures only: whole contracts per entry (both modes; see apply_contracts)
-        units: FX only: base units per entry (both modes; see ``_fx_options``)
+        units: FX (whole) or spot crypto (decimal) base units per entry (see ``_fx_options``)
         spread_pips: FX only: the modelled spread override (both modes)
         fee_tier: Spot crypto only: the Kraken Pro fee tier (both modes; see ``_crypto_options``)
 

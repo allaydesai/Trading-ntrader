@@ -294,15 +294,22 @@ its full notional in free cash and a sell must close an open long, else the orde
 (`MARGIN_EXCEEDS_FREE_BALANCE`, `CRYPTO_SPOT_NO_SHORT`). Fills pay the Kraken Pro spot fee,
 maker for a resting limit and taker otherwise, plus a modelled half-spread, in USD;
 `--fee-tier N` picks the tier (1-17, default 2; part of the run's config hash). Sharpe, Sortino
-and volatility annualise on 365 days. See `docs/agent/crypto-backtesting.md`:
+and volatility annualise on 365 days. Positions are fractional coin units: `sma_crossover` and
+`buy_and_hold` floor their USD budget to the coin's 1e-8 increment (USD 10,000 of BTC at 78,000
+is 0.12820512 BTC) and place no order under Kraken's minimum. `--units X` trades exactly X coins
+per entry: a decimal on the increment and at or above the coin's minimum (BTC 0.00005); for
+example `--units 0.25`. Anything else exits 2. See
+`docs/agent/crypto-backtesting.md`:
 
 ```bash
 uv run python -m src.cli.main backtest run --symbol BTC --catalog firstrate-crypto \
   --timeframe 1-day --start 2023-01-01 --end 2024-12-31 --starting-balance 100000 --fee-tier 2
+uv run python -m src.cli.main backtest run --symbol ETH --catalog firstrate-crypto \
+  --timeframe 1-day --start 2023-01-01 --end 2024-12-31 --starting-balance 100000 --units 0.25
 ```
 
 The research MCP's `submit_backtest`/`validate_config` take the same sizes as optional `units`
-(FX) and `contracts` (futures). A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
+(FX whole units; crypto a decimal coin size) and `contracts` (futures). A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
 the same catalog for the whole window, or the run is refused before it starts. On daily bars a
 USDJPY stop/limit fill (and a gap-aware fill on USDJPY or a cross) converts at the previous
 day's rate (1.2% of one QA trade's P&L; see the FX doc).
@@ -342,7 +349,7 @@ fills never pay it. Details: `docs/agent/nautilus.md` (Fill and Fee Models).
 | `backtest run --strategy <type> --symbol <SYM> --catalog <name> ...` | Run against a named FirstRate catalog (resolves the ticker via the import DB; overrides the default `NAUTILUS_PATH`) |
 | `backtest run --symbol ES --catalog firstrate-futures --contracts N ...` | Futures: trade exactly N whole contracts per entry (instead of notional sizing) |
 | `backtest run --symbol EURUSD --catalog firstrate-fx [--units N] [--spread-pips X] ...` | Spot FX on `MID` bars: N base units per entry; override the modelled spread |
-| `backtest run --symbol BTC --catalog firstrate-crypto [--fee-tier N] ...` | Spot crypto on `LAST` bars: unlevered, long-only USD account; Kraken Pro fees at tier N (default 2) |
+| `backtest run --symbol BTC --catalog firstrate-crypto [--fee-tier N] [--units X] ...` | Spot crypto on `LAST` bars: unlevered, long-only USD account; Kraken Pro fees at tier N (default 2); fractional coin sizes, X coins per entry |
 | `backtest run <config.yaml>` | Run backtest with YAML config |
 | `backtest run-multi --symbols <A,B> --catalog <name> --start <date> --end <date>` | Run ONE backtest across several ETFs from a named catalog (not persisted yet) |
 | `backtest list` | List available strategies and data |

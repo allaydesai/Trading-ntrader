@@ -602,3 +602,119 @@ class TestIsCrypto:
         crypto = SimpleNamespace(info={"asset_class": "CRYPTO"})
         assert is_crypto(crypto)
         assert not is_fx_pair(crypto)
+
+
+def _coin(increment: str = "0.00000001", min_base: str = "0.00005", min_usd: str = "0.5"):
+    """A duck-typed spot crypto pair: what the crypto sizing helpers read."""
+    from types import SimpleNamespace
+
+    kraken = {"min_order_base": min_base, "min_order_usd": min_usd}
+    return SimpleNamespace(
+        size_increment=increment, info={"asset_class": "CRYPTO", "kraken": kraken}
+    )
+
+
+@pytest.mark.unit
+class TestCryptoSizingHelpers:
+    """Crypto M4 (task 4.1, design section 5, decision C13): fractional coin units."""
+
+    STEP = Decimal("0.00000001")
+
+    def test_usd_10k_at_78k_is_0_12820512_btc_not_1(self):
+        from src.core.position_sizing import crypto_units_for_notional
+
+        units = crypto_units_for_notional(Decimal("10000"), Decimal("78000"), self.STEP)
+        assert units == Decimal("0.12820512")
+        assert isinstance(units, Decimal) and units.as_tuple().exponent == -8
+
+    def test_floors_never_rounds_up(self):
+        from src.core.position_sizing import crypto_units_for_notional
+
+        # 1 / 3 = 0.333333333... -> 0.33333333, and 0.999999999 floors to 0.99999999
+        assert crypto_units_for_notional(Decimal(1), Decimal(3), self.STEP) == Decimal("0.33333333")
+        units = crypto_units_for_notional(Decimal("99999.9999"), Decimal("100000"), self.STEP)
+        assert units == Decimal("0.99999999")
+        assert units * Decimal("100000") <= Decimal("99999.9999")
+
+    def test_no_minimum_of_one_unit(self):
+        from src.core.position_sizing import crypto_units_for_notional
+
+        assert crypto_units_for_notional(Decimal("100"), Decimal("78000"), self.STEP) == Decimal(
+            "0.00128205"
+        )
+
+    def test_below_one_increment_is_zero(self):
+        from src.core.position_sizing import crypto_units_for_notional
+
+        assert crypto_units_for_notional(Decimal("0.0001"), Decimal("78000"), self.STEP) == 0
+
+    def test_below_the_base_minimum_is_zero(self):
+        from src.core.position_sizing import crypto_units_for_notional
+
+        # USD 3 at 78,000 is 0.00003846 BTC, under Kraken's 0.00005 BTC minimum
+        args = (Decimal("3"), Decimal("78000"), self.STEP)
+        assert crypto_units_for_notional(*args) == Decimal("0.00003846")
+        assert crypto_units_for_notional(*args, min_base=Decimal("0.00005")) == 0
+        assert crypto_units_for_notional(
+            Decimal("3.9"), Decimal("78000"), self.STEP, min_base=Decimal("0.00005")
+        ) == Decimal("0.00005")
+
+    def test_below_the_usd_minimum_is_zero(self):
+        from src.core.position_sizing import crypto_units_for_notional
+
+        args = (Decimal("0.49"), Decimal("1"), self.STEP)
+        assert crypto_units_for_notional(*args, min_usd=Decimal("0.5")) == 0
+        assert crypto_units_for_notional(
+            Decimal("0.5"), Decimal("1"), self.STEP, min_usd=Decimal("0.5")
+        ) == Decimal("0.5")
+
+    def test_non_positive_price_or_increment_raises(self):
+        from src.core.position_sizing import crypto_units_for_notional
+
+        with pytest.raises(ValueError, match="price"):
+            crypto_units_for_notional(Decimal(100), Decimal(0), self.STEP)
+        with pytest.raises(ValueError, match="size_increment"):
+            crypto_units_for_notional(Decimal(100), Decimal(1), Decimal(0))
+
+    def test_risk_units_floor_to_the_increment(self):
+        from src.core.position_sizing import crypto_units_for_risk
+
+        # USD 200 at risk over a 1,500 stop: 0.13333333 BTC
+        units = crypto_units_for_risk(Decimal("200"), Decimal("1500"), self.STEP)
+        assert units == Decimal("0.13333333")
+        assert units * Decimal("1500") <= Decimal("200")
+
+    def test_risk_zero_stop_is_no_order_and_negative_raises(self):
+        from src.core.position_sizing import crypto_units_for_risk
+
+        assert crypto_units_for_risk(Decimal("200"), Decimal(0), self.STEP) == 0
+        with pytest.raises(ValueError, match="stop_distance"):
+            crypto_units_for_risk(Decimal("200"), Decimal("-1"), self.STEP)
+
+    def test_risk_minimums(self):
+        from src.core.position_sizing import crypto_units_for_risk
+
+        args = (Decimal("0.03"), Decimal("1000"), self.STEP)  # 0.00003 BTC
+        assert crypto_units_for_risk(*args) == Decimal("0.00003")
+        assert crypto_units_for_risk(*args, min_base=Decimal("0.00005")) == 0
+        # a USD minimum needs the entry price to convert
+        assert crypto_units_for_risk(*args, price=Decimal("10"), min_usd=Decimal("0.5")) == 0
+        with pytest.raises(ValueError, match="price"):
+            crypto_units_for_risk(*args, min_usd=Decimal("0.5"))
+
+    def test_instrument_level_helper_reads_increment_and_kraken_minimums(self):
+        from src.core.position_sizing import crypto_units
+
+        coin = _coin()
+        assert crypto_units(Decimal("10000"), Decimal("78000"), coin) == Decimal("0.12820512")
+        assert crypto_units(Decimal("3"), Decimal("78000"), coin) == 0  # under 0.00005 BTC
+        # a coin with no Kraken terms still floors to its increment, with no minimum
+        bare = _coin()
+        bare.info = {"asset_class": "CRYPTO"}
+        assert crypto_units(Decimal("3"), Decimal("78000"), bare) == Decimal("0.00003846")
+
+    def test_crypto_minimum(self):
+        from src.core.position_sizing import crypto_minimum
+
+        assert crypto_minimum(_coin()) == (Decimal("0.00005"), Decimal("0.5"))
+        assert crypto_minimum(_coin(min_base="0", min_usd="0")) == (0, 0)

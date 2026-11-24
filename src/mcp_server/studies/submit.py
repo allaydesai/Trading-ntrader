@@ -152,7 +152,7 @@ def prepare_in_sample(
     params: dict[str, Any],
     starting_balance: Decimal | None,
     over_budget_reason: str | None,
-    units: int | None = None,
+    units: int | float | None = None,
     contracts: int | None = None,
 ) -> tuple[StudyJob, list[str]]:
     """A study's in-sample backtest, resolved and validated; the study fills the gaps."""

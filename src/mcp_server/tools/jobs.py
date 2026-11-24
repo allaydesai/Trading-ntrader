@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from mcp.server import MCPServer
-from pydantic import StrictInt
+from pydantic import StrictFloat, StrictInt
 
 from src.mcp_server.context import ServerContext
 from src.mcp_server.errors import ToolFailure
@@ -38,7 +38,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         starting_balance: Decimal | None = None,
         study: str | None = None,
         over_budget_reason: str | None = None,
-        units: StrictInt | None = None,
+        units: StrictInt | StrictFloat | None = None,
         contracts: StrictInt | None = None,
     ) -> dict[str, Any]:
         """Validate and queue one backtest; returns a job id at once. Poll get_job.
@@ -50,8 +50,9 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         strategy, symbol, start and end are required and the run is unattributed:
         never evidence on a scorecard. Runs are persisted with git commit, dirty
         state and config hash and appear in NTrader's history. One job at a time.
-        units (FX pairs) or contracts (futures roots) trade that fixed size per entry
-        instead of sizing by notional, like the CLI's --units/--contracts; only for
+        units (FX pairs: whole units; spot crypto: a decimal coin size such as 0.25) or
+        contracts (futures roots) trade that fixed size per entry instead of sizing by
+        notional, like the CLI's --units/--contracts; only for
         strategies whose config has that setting (describe_strategy).
         """
         fields = dict(

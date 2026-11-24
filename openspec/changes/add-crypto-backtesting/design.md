@@ -396,6 +396,15 @@ Framework-free helpers in `src/core/position_sizing.py` (USD quote only, so no r
 crypto accepts a decimal > 0 that is a multiple of the size increment (FX keeps int >= 1;
 futures `--contracts` unchanged); MCP `submit_backtest`/`validate_config` follow the same rules.
 
+**As built (M4, 2026-11-24).** `crypto_units(notional, price, pair)` applies the increment and
+both Kraken minimums of a spec-built pair. A fixed `--units` size must also be at or above the
+coin's `min_order_base` (a fixed size under it would drop every order, so it is refused up front,
+exit 2); the USD minimum is not checked there (no price yet), and is far below the base one for
+BTC/ETH/SOL. "Counted once per run" is a strategy log: `sma_crossover` warns on the first drop
+and logs the run's drop count on stop. NTrader has no persisted run-warnings channel yet, so
+showing the count in `show`/MCP/dashboard is left to M5 reporting. The MCP `units` argument
+takes a JSON integer or number; FX still requires an integer.
+
 ## 6. Ticks and fills
 
 The price increment is the data grid (10^-4). Kraken's `tick_size` (UNVERIFIED) are stored for live. `GapAwareFillModel` is unchanged; with 24/7 data,

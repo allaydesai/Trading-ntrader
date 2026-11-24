@@ -155,3 +155,27 @@ class TestWebRunTarget:
 
     def test_equity_form_keeps_last(self):
         assert symbols.run_target(self._form("AAPL", "equities")) == ("AAPL", "1-HOUR-LAST")
+
+
+class TestUnitsStayWholeForFx:
+    """Crypto M4: ``--units`` parses decimals, but FX still takes whole base units."""
+
+    def test_a_fractional_fx_size_is_a_usage_error(self):
+        with pytest.raises(click.UsageError, match="whole number of base units"):
+            _resolve(units=Decimal("1500.5"))
+
+    def test_a_whole_decimal_reaches_the_config_as_an_int(self):
+        units = _resolve(units=Decimal("50000")).strategy_config["units"]
+        assert units == 50_000 and type(units) is int
+
+    def test_the_command_exits_2_on_a_fractional_fx_size(self):
+        args = ["--symbol", "EURUSD", "--start", "2024-01-02", "--end", "2024-02-01"]
+        args += ["--catalog", "firstrate-fx", "--no-persist", "--units", "1.5"]
+        result = CliRunner().invoke(run_backtest, args)
+        assert result.exit_code == 2
+        assert "whole number" in result.output
+
+    def test_the_instrument_check_still_refuses_a_fractional_fx_size(self):
+        pair = build_fx_pair(get_pair_spec("EURUSD"), price_precision=5)
+        with pytest.raises(ValueError, match="positive whole number"):
+            check_units_instrument({"units": 1.5}, pair)
