@@ -32,7 +32,9 @@ class PositiveDecimal(click.ParamType):
 
     name = "decimal"
 
-    def convert(self, value, param, ctx):  # noqa: D102
+    def convert(  # noqa: D102
+        self, value: object, param: click.Parameter | None, ctx: click.Context | None
+    ) -> Decimal:
         if isinstance(value, Decimal):
             return value
         try:

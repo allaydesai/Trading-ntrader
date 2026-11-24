@@ -75,6 +75,12 @@ class TestSmaCrossover:
         assert quantity == Quantity.from_str("0.25000000") and quantity.precision == 8
         assert "~$19,500 notional" in sizing.log.info.call_args.args[0]
 
+    def test_fixed_units_under_the_usd_minimum_place_no_order(self):
+        # 0.00005 BTC meets the base minimum, but at USD 1,000 it is USD 0.05 < USD 0.50
+        sizing = _sma_self(BTC, 1000.0, units=Decimal("0.00005"))
+        assert SMACrossover._calculate_position_size(sizing) is None
+        assert "minimum" in sizing.log.warning.call_args.args[0]
+
     def test_fixed_units_from_a_config_file_float(self):
         sizing = _sma_self(BTC, 78000.0, units=0.1)
         assert SMACrossover._calculate_position_size(sizing) == Quantity.from_str("0.1")

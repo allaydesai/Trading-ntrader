@@ -14,6 +14,7 @@ from src.core.fx_rates import fx_units, usd_per_quote
 from src.core.position_sizing import (
     ONE,
     contract_notional,
+    crypto_minimum,
     crypto_units,
     instrument_multiplier,
     is_crypto,
@@ -96,7 +97,9 @@ def _sized_quantity(
     if (fixed_units := getattr(config, "units", None)) is not None:
         if is_crypto(instrument):
             units = _fixed_crypto_units(Decimal(str(fixed_units)), instrument)
-            return instrument.make_qty(units), units, ONE  # type: ignore[union-attr]
+            usd_min = crypto_minimum(instrument)[1]  # under Kraken's USD minimum at this price
+            qty = instrument.make_qty(units) if units * price >= usd_min else None  # type: ignore[union-attr]
+            return qty, units, ONE
         if not is_fx_pair(instrument):
             raise ValueError("units applies to FX pairs and spot crypto only")
         if (rate := usd_per_quote(instrument, price, cache)) is None:  # type: ignore[arg-type]

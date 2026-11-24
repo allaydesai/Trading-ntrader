@@ -297,7 +297,8 @@ maker for a resting limit and taker otherwise, plus a modelled half-spread, in U
 and volatility annualise on 365 days. Positions are fractional coin units: `sma_crossover` and
 `buy_and_hold` floor their USD budget to the coin's 1e-8 increment (USD 10,000 of BTC at 78,000
 is 0.12820512 BTC) and place no order under Kraken's minimum. `--units X` trades exactly X coins
-per entry: a decimal on the increment and at or above the minimum (`0.25`), else exit 2. See
+per entry: a decimal on the increment and at or above the coin's minimum (BTC 0.00005); for
+example `--units 0.25`. Anything else exits 2. See
 `docs/agent/crypto-backtesting.md`:
 
 ```bash
