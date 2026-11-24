@@ -33,6 +33,7 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Money
 
+from src.core.crypto_costs import crypto_snapshot
 from src.core.fill_models import GapAwareFillModel, check_bar_alignment, gap_aware_venue_options
 from src.core.futures_costs import futures_snapshot, venue_cost_models
 from src.core.fx_costs import fx_snapshot
@@ -139,10 +140,15 @@ def setup_backtest_venues(
 
 
 def cost_snapshot(cache) -> dict[str, Any]:
-    """The ``config_snapshot`` keys recording a run's cost terms: futures and FX; ``{}`` else.
+    """The ``config_snapshot`` keys recording a run's cost terms: futures, FX, crypto; or ``{}``.
 
-    Read from the run's ``cache``: its instruments, and the FX cost totals the fee model kept
-    there (see :func:`src.core.fx_costs.fx_snapshot`).
+    Read from the run's ``cache``: its instruments, and the FX and crypto cost totals the fee
+    models kept there (:func:`src.core.fx_costs.fx_snapshot`,
+    :func:`src.core.crypto_costs.crypto_snapshot`).
     """
     instruments = cache.instruments()
-    return {**futures_snapshot(instruments), **fx_snapshot(instruments, cache)}
+    return {
+        **futures_snapshot(instruments),
+        **fx_snapshot(instruments, cache),
+        **crypto_snapshot(instruments, cache),
+    }
