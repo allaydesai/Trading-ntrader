@@ -353,6 +353,28 @@ component of the same fee model, scaled by cost stress, overridable with `--spre
 SOL 5 bp, on Kraken's USD books. Both components are recorded separately in `config_snapshot.crypto_pairs[...].costs_usd`
 and in reports.
 
+### M3 result (2026-11-24)
+
+Implemented as above (`src/core/crypto_costs.py`, `src/core/margin_gate.py`,
+`src/core/backtest_venue.py`), with these details settled in code:
+
+- **Denial text**: the spot requirement is quantized to cents like FX:
+  `MARGIN_EXCEEDS_FREE_BALANCE: 2 BTC/USD.KRAKEN coin(s) need 156000.00 USD initial margin,
+  free=2152.42 USD` (the spike's prototype printed unrounded `156000.2468`). The no-short reason
+  is `CRYPTO_SPOT_NO_SHORT: SELL <qty> <id> would go short; a spot sell must close an open long
+  by position id (free to sell: <n>)`. A reduce-only `SELL` passes the gate: Nautilus' matching
+  engine rejects a reduce-only order with no position and trims one larger than the position.
+- **Rounding**: maker and taker are kept as separate per-order running totals (an order can
+  fill partly as taker on arrival and rest for the rest), each rounded to cents once; cost
+  stress multiplies before rounding.
+- **Tier**: carried on the pair as `info["fee_tier"]` (absent when the default applies), so
+  neither the orchestrator nor the venue signature grows; `--fee-tier` (task 3.10, moved from
+  M5) rebuilds the pair at the tier, as `--spread-pips` does for FX.
+- **Metrics**: 365 applies to the mark-to-market metrics (the headline). When mark-to-market is
+  unavailable the realised fallback stays Nautilus' 252-day statistic, as section 9 says.
+- **Smoke** on the real catalog: `docs/agent/crypto-backtesting.md` ("Account, costs and the
+  spot gate").
+
 ## 5. Position sizing (M4)
 
 Units are **base coin units**, fractional (BTC qty 0.128 = 0.128 BTC).

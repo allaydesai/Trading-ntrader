@@ -30,3 +30,7 @@ schedule.
 #### Scenario: invalid units
 - **WHEN** `--units 0.000000001` is given for BTC
 - **THEN** the command exits 2 naming the size increment
+
+#### Scenario: invalid fee tier
+- **WHEN** `--fee-tier 18` is given for BTC
+- **THEN** the command exits 2 naming the schedule's tiers 1..17

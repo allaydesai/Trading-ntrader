@@ -179,6 +179,13 @@ class TestCash:
             "free=10000 USD"
         )
 
+    def test_the_spec_scenario_0_2_btc_at_78000_on_10000_is_denied(self):
+        reason = _gate("10000").denial_reason([_order("0.2", price="78000.0000")], None)
+        assert reason == (
+            f"{DENIAL_REASON}: 0.2 BTC/USD.KRAKEN coin(s) need 15600.00 USD initial margin, "
+            "free=10000 USD"
+        )
+
     def test_a_resting_limit_over_the_cash_is_denied_too(self):
         reason = _gate("10000").denial_reason([_order("2", price="77000.0000")], None)
         assert reason is not None and reason.startswith(DENIAL_REASON)
