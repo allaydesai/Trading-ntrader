@@ -267,6 +267,20 @@ registered for `AssetClass.CRYPTO`, and `CryptoImportService`
 - **CLI**: `import --format firstrate --asset-class crypto --catalog firstrate-crypto <dir>`,
   all five timeframes by default, `--dry-run` showing per-coin ranges. The 6.1M-row BTC
   1-minute file streams in chunks (peak RSS measured in the manual task; target < 1.5 GB).
+- **Re-run classifier**: the inherited classifier probes every FirstRate file as New York
+  time, which would never match a UTC series' recorded end, so the crypto service probes the
+  source as UTC (`compute_source_last_date(..., source_tz=timezone.utc)`) and skips only when the
+  end, the recorded count and the Parquet footers agree.
+
+### Import result (M2, 2026-11-24)
+
+All 15 series imported into `/srv/market-data/catalogs/firstrate-crypto` (17,419,616 bars,
+924 MB, 3 min 12 s, peak RSS 787 MB including BTC 1-minute). Each bar count equals its source
+line count; first and last bars equal the source; each coin's 2026-05-01 daily bar opens at
+00:00 UTC and equals its 24 UTC hourly bars aggregated; the 2024-03-10 BTC hourly series has 24
+bars. A re-run skips all 15 in 22 s. Warnings as expected: whole-coin volume from 2026-03-21
+00:00 UTC in every series, 5-decimal 1-minute rows rounded (BTC 7,534, ETH 5,397), zero-volume
+1-minute bars (BTC 1,176, ETH 100, SOL 5) and gaps of more than 10 bars, mostly 2013-2016.
 
 ## 3. Account, leverage and shorting (M3)
 

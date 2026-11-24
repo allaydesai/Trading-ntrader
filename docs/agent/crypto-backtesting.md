@@ -34,6 +34,25 @@ Kraken fetch path (M7) name the same instrument (decision C2).
   `info.asset_class == "CRYPTO"`) is the predicate later milestones key on. `is_fx`,
   `is_fx_pair` and `needs_conversion` stay false for crypto.
 
+## Data: the `firstrate-crypto` catalog (M2)
+
+`import --format firstrate --asset-class crypto --catalog firstrate-crypto
+/srv/market-data/raw/crypto` imported 3 coins x 5 timeframes on 2026-11-24 (details in
+`docs/agent/data-pipeline.md`). Bars are `{COIN}/USD.KRAKEN-{tf}-LAST-EXTERNAL` (directory
+`BTCUSD.KRAKEN-...`), UTC bar opens, prices at 4 decimals, volume at 8.
+
+| Coin | First bar (UTC) | Last bar (UTC) | 1min / 5min / 30min / 1h / 1d |
+|---|---|---|---|
+| BTC | 2013-04-01 | 2026-05-02 23:58 | 6,129,198 / 1,334,755 / 228,603 / 114,579 / 4,780 |
+| ETH | 2016-03-11 | 2026-05-02 23:59 | 4,996,580 / 1,029,089 / 176,326 / 88,542 / 3,698 |
+| SOL | 2021-03-01 | 2026-05-02 23:58 | 2,635,929 / 539,644 / 90,668 / 45,336 / 1,889 |
+
+Warnings worth knowing before a backtest: every series has whole-coin volume from
+2026-03-21 00:00 UTC (FirstRate's rounding; C15); 1-minute rows rounded to 4 decimals: BTC
+7,534, ETH 5,397, SOL 0; zero-volume 1-minute bars: BTC 1,176, ETH 100, SOL 5; gaps of more
+than 10 bars are mostly in 2013-2016 (BTC 1-minute 8,604, longest 429 minutes; ETH 1-minute
+7,537, longest 11,303 minutes; ETH hourly 6, longest 376 hours, early 2016).
+
 ## UNVERIFIED values (to confirm before M3 merges)
 
 | Value | Where | Default |

@@ -132,3 +132,30 @@ Market data stored as Parquet files under Nautilus catalog structure.
   and the dry-run read compact FX dates; the probe returns the parser's stamp so re-runs skip.
 - Catalog: `firstrate-fx` (`/srv/market-data/catalogs/firstrate-fx`, imported 2026-11-22: 3
   pairs x 5 timeframes, 767 MB).
+
+## Crypto import (crypto M2)
+
+- `import --format firstrate --catalog firstrate-crypto --asset-class crypto <dir>` ->
+  `src/cli/commands/import_crypto.py` (maps each timeframe to `LAST`)
+  -> `CryptoImportService` (`src/services/firstrate/crypto_import_service.py`, a subclass of
+  `FuturesImportService`) -> `FirstRateCryptoParser`
+  (`src/services/firstrate/parsers/firstrate_crypto_parser.py`, a futures-parser subclass
+  registered for `CRYPTO`).
+- Rows: the equity layout (`YYYY-MM-DD HH:MM:SS,O,H,L,C,V`, daily `YYYY-MM-DD,O,H,L,C,V`), but
+  **UTC**: stamps are parsed with the futures `naive_stamps()` and localised to UTC, never to
+  New York (no DST rules). A daily row dated `D` opens at `D 00:00 UTC`. Files are
+  `{COIN}_full_{tf}.txt`, flat or one directory down.
+- Prices: the coin spec's `price_precision` (4), half-even via the FX `quantize_ties()`;
+  rows changed by more than 1e-9 are counted (1-minute only in the real data). Volume is coin
+  units at the spec's `size_precision` (8): the M1 spike showed a bar volume precision other
+  than the instrument's size precision stops the run, so whole-coin volumes are stored at 8 too.
+- Warnings (`CryptoAnomalies`, nothing filled or dropped): zero-volume bars, gaps of more than
+  10 missing bars (count and longest), and `volume is whole-coin from <ts> UTC`, the first bar of
+  the trailing run of whole-number volumes when fractional volumes preceded it.
+- Re-runs: the inherited classifier probes sources as New York time and would never skip a UTC
+  series, so `CryptoImportService._classify_ticker` calls
+  `compute_source_last_date(path, source_tz=timezone.utc)` and also requires the Parquet
+  footers to hold the recorded count (and no `.import-incomplete` marker).
+- Catalog: `firstrate-crypto` (`/srv/market-data/catalogs/firstrate-crypto`, imported
+  2026-11-24: 3 coins x 5 timeframes, 17,419,616 bars, 924 MB, 3 min 12 s, peak RSS 787 MB;
+  a re-run skips all 15 series in 22 s). Every series' bar count equals its source line count.
