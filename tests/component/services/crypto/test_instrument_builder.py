@@ -52,6 +52,7 @@ def test_id_is_the_kraken_mapper_id(coin):
     expected = KrakenPairMapper.to_nautilus_id(spec.kraken.pair)
     assert str(crypto_instrument_id(spec)) == expected
     assert str(build_crypto_pair(spec).id) == expected
+    assert spec.kraken.rest == KrakenPairMapper.to_kraken_rest(spec.kraken.pair)
 
 
 def test_predicates_see_crypto_not_fx():

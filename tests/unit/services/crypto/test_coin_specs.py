@@ -94,13 +94,6 @@ class TestShippedSpecFile:
         assert kraken.discounted_pair is False  # decision C23: assume not discounted
 
     @pytest.mark.parametrize("coin", sorted(EXPECTED))
-    def test_rest_symbol_matches_the_kraken_mapper(self, coin):
-        from src.services.kraken_client import KrakenPairMapper
-
-        kraken = get_coin_spec(coin).kraken
-        assert kraken.rest == KrakenPairMapper.to_kraken_rest(kraken.pair)
-
-    @pytest.mark.parametrize("coin", sorted(EXPECTED))
     def test_every_value_has_a_dated_source(self, coin):
         spec = get_coin_spec(coin)
         assert set(spec.sources) == set(SOURCED_FIELDS)
