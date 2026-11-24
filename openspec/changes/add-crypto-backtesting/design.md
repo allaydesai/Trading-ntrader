@@ -140,7 +140,17 @@ fee_schedule:                   # Kraken Pro spot ("Spot & Futures" tiers), CA p
 ```
 
 The tier rates are as published (not UNVERIFIED). Only the futures-volume and assets
-thresholds are omitted above; the file carries all three columns for reference. The spot
+thresholds are omitted above; the file carries all three columns for reference (re-read from
+the same page on 2026-11-24; tiers 1-2 have no assets threshold).
+
+As shipped in M1 the coins sit under a `coins:` map (like `pairs:` in `pair_specs.yaml`) and
+every per-coin value carries a `sources` entry (`status`, `source`, `as_of`):
+`price_precision` and `size_increment` are VERIFIED; `typical_spread_bps` and the Kraken
+`rest`, `altname`, minimums, tick and `discounted_pair` are UNVERIFIED. The fee schedule's
+rates carry the page as their source (VERIFIED); its defaults carry their own entries:
+`default_tier` (C21) and `fee_currency` UNVERIFIED, `discounted_pair_bps_off` and
+`min_fee_usd: 0` VERIFIED from the page. `rest` is `KrakenPairMapper.to_kraken_rest`'s output
+(SOL gives `SOLZUSD`; Kraken's own name may be `SOLUSD`; M7 checks it against `AssetPairs`). The spot
 thresholds are informational: a run uses one fixed tier (decision C21), it does not re-tier as
 simulated volume accumulates.
 
@@ -196,6 +206,44 @@ A forked integration test proves, before M2-M7 are built on it:
 3. A partial fill against a 1-minute bar with tiny or zero volume (the 2026 rounded volumes)
    is measured and pinned, so M2/M6 know whether bar volume caps fill size (decision C15).
 
+### Spike result (M1, 2026-11-24): account model A
+
+`tests/integration/core/test_crypto_engine_acceptance.py` (forked, Nautilus 1.220) pins:
+
+1. **Acceptance.** A `KRAKEN` `MARGIN` venue with `base_currency=USD` takes `BTC/USD.KRAKEN`
+   with 4-decimal `LAST` bars. A 0.128 BTC market order fills at `0.12800000`, and the round
+   trip realises USD P&L (`0.128 x (79000.5 - 78000.1234) = 128.05 USD`) straight into the
+   single USD balance.
+2. **A passes (with the gate), so A is the decision of record (C8).** `MARGIN` +
+   `default_leverage=1` + `margin_init=1` + a prototype gate (the shared `MarginGate` with a
+   `qty x price` requirement and a no-short rule): the bracket entry fills, the take-profit
+   fills at 80,000 and OCO-cancels the stop, P&L 199.99 USD; the over-cash 2 BTC buy is denied
+   `MARGIN_EXCEEDS_FREE_BALANCE: 2 BTC/USD.KRAKEN coin(s) need 156000.2468 USD initial margin,
+   free=2199.99 USD`, and a naked `SELL` is denied `CRYPTO_SPOT_NO_SHORT`. **Without the gate**
+   the same venue fills the USD 156k buy on USD 10k (free balance clamps to 0) and opens the
+   short: Nautilus skips risk checks for margin accounts, so the M3 gate is mandatory for
+   every crypto venue, not an add-on.
+3. **B is rejected.** A single-currency (USD) `CASH` venue refuses a `CurrencyPair` at
+   `add_instrument` ("single-currency CASH account"). A multi-currency `CASH` venue checks only
+   priced orders: in a bar-only run the cache has no quote or trade tick, so market orders are
+   never checked; the USD 156k market buy fills and Nautilus stops the whole backtest
+   (`AccountBalanceNegative`), leaving 2 BTC credited and the USD debit unapplied. It also
+   fills a `SELL` of a coin it never held (a short). Only the resting limit buy is denied
+   (`NOTIONAL_EXCEEDS_FREE_BALANCE`).
+4. **Fill size vs bar volume (C15).** Bar volume never caps fill size: every market order
+   fills in full. Volume only sets how much fills at the bar price, and the rest fills one
+   price increment (0.0001) worse. Volume 2 fills 0.128 at the bar price and 5 BTC as 0.5 + 4.5;
+   volume 0 fills 1e-8 at the price and the remainder one tick worse. At 4-decimal prices the
+   slip is immaterial, so no volume handling is needed in M2/M6.
+5. **Bar volume precision must equal the size precision (8).** An integer-precision volume
+   stops the run (`bar.volume.precision=0 did not match ... size_precision=8`). M2 stores
+   volume at 8 decimals for every row, including the post-2026-03-21 whole-coin volumes.
+
+Consequences for M3: under `HEDGING` a `SELL` without a position id opens a new short whatever
+else is held, so the no-short rule is: a parentless `SELL` passes only when it targets an open
+long and does not oversell it (net of other working sells on that position); bracket legs
+(with a parent) pass. The prototype `_PrototypeSpotGate` in the spike is the reference.
+
 ## 2. Importer (M2)
 
 `FirstRateCryptoParser` (`src/services/firstrate/parsers/firstrate_crypto_parser.py`),
@@ -232,8 +280,10 @@ registered for `AssetClass.CRYPTO`, and `CryptoImportService`
   `MARGIN_EXCEEDS_FREE_BALANCE` (existing prefix). Commission headroom is not reserved (a fill
   can take the balance a few dollars below zero; reported, not denied; same as FX).
 - **No shorting**: an order is denied `CRYPTO_SPOT_NO_SHORT` when the net position after it
-  (counting other working orders on the same side) would be negative. Reduce-only exits and
-  bracket legs that only close are allowed. Futures and FX reasons are unchanged.
+  (counting other working orders on the same side) would be negative. Under `HEDGING` that
+  means a parentless `SELL` must target an open long by position id and not oversell it (the
+  M1 spike, section 1). Reduce-only exits and bracket legs that only close are allowed.
+  Futures and FX reasons are unchanged.
 - **Results**: `results_extractor`, `backtest_persistence` and `mark_to_market` already accept a
   USD-quoted linear `CurrencyPair`; M3 adds tests that pin fractional quantities through the
   ledger, the `trades` rows and `_check_against_accounts`. `config_snapshot` gains
@@ -309,7 +359,8 @@ futures `--contracts` unchanged); MCP `submit_backtest`/`validate_config` follow
 
 The price increment is the data grid (10^-4). Kraken's `tick_size` (UNVERIFIED) are stored for live. `GapAwareFillModel` is unchanged; with 24/7 data,
 gaps are rare (exchange outages, sparse early years). Fill size against bar volume is pinned by
-the spike (section 1, item 3) and documented; the importer does not inflate volume.
+the spike (section 1, spike result item 4): orders always fill in full, the part beyond the
+bar's volume one increment worse; the importer does not inflate volume.
 
 ## 7. Sessions and the trading day
 
@@ -422,32 +473,35 @@ long-only; Kraken Pro fee tier N; spread modelled".
 
 ## 13. Decisions needed from Allay
 
-Each row is a recommendation, pending Allay's approval, except C2 and C3, which Allay decided
-on 2026-11-24 (Kraken). UNVERIFIED values are proposed working defaults; M3 does not merge until
-the fee-related ones are confirmed or accepted as defaults.
+C2 and C3 were decided by Allay on 2026-11-24 (Kraken). On the same day Allay accepted the
+recommendations for C1, C5-C8, C13, C14, C17 and C20; C8 was then settled by the M1 spike
+(section 1: account model A). C21-C23 are **provisional defaults** recorded at M1, pending
+Allay's confirmation. The other rows remain recommendations. UNVERIFIED values are proposed
+working defaults; M3 does not merge until the fee-related ones are confirmed or accepted as
+defaults.
 
 | # | Decision | Recommendation | Status |
 |---|---|---|---|
-| C1 | Spot only, or also perps/futures | **Spot only** (`CurrencyPair`); perps (`CryptoPerpetual` + funding) as a separate later change; CME MBT/MET via the futures path if wanted | pending |
+| C1 | Spot only, or also perps/futures | **Spot only** (`CurrencyPair`); perps (`CryptoPerpetual` + funding) as a separate later change; CME MBT/MET via the futures path if wanted | **accepted by Allay, 2026-11-24** |
 | C2 | Venue / instrument id | **Kraken**: `BTC/USD.KRAKEN` (the id the existing Kraken path uses); catalog `ticker = BTC` | **decided by Allay, 2026-11-24** |
 | C3 | Fee model | **Kraken Pro spot schedule** (CA page, 17 tiers, tier 1 0.40% maker / 0.80% taker, no minimum), maker/taker by fill liquidity side | **decided by Allay, 2026-11-24** |
 | C4 | Spread | modelled half-spread per side: BTC 2 / ETH 3 / SOL 5 bp full spread (UNVERIFIED), `--spread-bps` override | pending |
-| C5 | Data source, symbols, bar sizes | **FirstRate BTC, ETH, SOL, all five timeframes** into `firstrate-crypto`; smoke and strategy configs on 1-day and 1-hour; source venue UNVERIFIED (ask FirstRate if it matters) | pending |
-| C6 | Quote currency | **USD only** (the FirstRate data is USD; Kraken lists BTC/USD, ETH/USD, SOL/USD); CAD, USDT/USDC and coin-quoted pairs out of scope | pending (see C22) |
-| C7 | P&L / reporting currency | **USD** account; no conversion needed for USD quotes; non-USD quotes refused at spec load | pending |
-| C8 | Leverage / margin for spot | **Unlevered, long-only**: `MARGIN` + `base_currency=USD` + `margin_init=1` + gate (`CRYPTO_SPOT_NO_SHORT`); fall back to a Nautilus `CASH` account only if the M1 spike rejects this | pending |
+| C5 | Data source, symbols, bar sizes | **FirstRate BTC, ETH, SOL, all five timeframes** into `firstrate-crypto`; smoke and strategy configs on 1-day and 1-hour; source venue UNVERIFIED (ask FirstRate if it matters) | **accepted by Allay, 2026-11-24** |
+| C6 | Quote currency | **USD only** (the FirstRate data is USD; Kraken lists BTC/USD, ETH/USD, SOL/USD); CAD, USDT/USDC and coin-quoted pairs out of scope | **accepted by Allay, 2026-11-24** (see C22) |
+| C7 | P&L / reporting currency | **USD** account; no conversion needed for USD quotes; non-USD quotes refused at spec load | **accepted by Allay, 2026-11-24** |
+| C8 | Leverage / margin for spot | **Unlevered, long-only**: `MARGIN` + `base_currency=USD` + `margin_init=1` + gate (`CRYPTO_SPOT_NO_SHORT`); fall back to a Nautilus `CASH` account only if the M1 spike rejects this | **accepted by Allay, 2026-11-24; M1 spike result: A passes (with the gate), B rejected** (section 1) |
 | C9 | Funding rates | not applicable to spot; the perps change must source Kraken/other funding history first | pending |
 | C10 | Day / daily bar timestamp | UTC: daily bar at `D 00:00 UTC` (bar open), trade date = UTC date, equity cut at UTC midnight | pending |
 | C11 | Schema | **no migration**: fractional quantities fit `Numeric(20, 8)`; terms in `config_snapshot.crypto_pairs` | pending |
 | C12 | Dashboard | pre-approve a FROZEN_VIEWS regeneration for exactly the section 10 files (FX ruling set plus `crypto_panel.html`) | pending |
-| C13 | Sizing unit | fractional coin units floored to `size_increment`, no minimum of 1, below-minimum orders dropped and counted; decimal `--units` | pending |
-| C14 | Price precision | fixed 4 decimals per coin (the 1h/1d data maximum); 1-minute 5-decimal rows rounded half-even and counted | pending |
+| C13 | Sizing unit | fractional coin units floored to `size_increment`, no minimum of 1, below-minimum orders dropped and counted; decimal `--units` | **accepted by Allay, 2026-11-24** |
+| C14 | Price precision | fixed 4 decimals per coin (the 1h/1d data maximum); 1-minute 5-decimal rows rounded half-even and counted | **accepted by Allay, 2026-11-24** |
 | C15 | Volume | store as-is (coin units, 8 dp); warn on the 2026-03-21 whole-coin rounding; no volume inflation; spike pins fill behaviour | pending |
 | C16 | Kraken path | fix to spot series or refuse old ranges (M7); never perp prices in a spot instrument | pending |
-| C17 | Coin universe | BTC, ETH, SOL (the data on the VPS) | pending |
+| C17 | Coin universe | BTC, ETH, SOL (the data on the VPS) | **accepted by Allay, 2026-11-24** |
 | C18 | OpenSpec layout | one umbrella change, tasks by milestone, one PR per milestone, archive after M7 | pending |
 | C19 | Headline metric | account return on USD equity; underlying return and costs split alongside | pending |
-| C20 | Annualisation | 365 periods/year for crypto runs, recorded in the snapshot; 252 elsewhere unchanged | pending |
-| C21 | Fee tier | one fixed tier per run, **default tier 1** (most conservative) until Allay gives their current Kraken Pro tier; `--fee-tier N` overrides; no re-tiering inside a run | pending |
-| C22 | Trading currency on Kraken | **USD pairs**, to match the data. If Allay will trade BTC/CAD etc., the account and reports need CAD (FX conversion via the FX rate machinery), which is a scope change | pending: which currency will you trade in? |
-| C23 | Discounted pairs | assume BTC/ETH/SOL are **not** on the 0.02%-off list (conservative) until confirmed | pending |
+| C20 | Annualisation | 365 periods/year for crypto runs, recorded in the snapshot; 252 elsewhere unchanged | **accepted by Allay, 2026-11-24** |
+| C21 | Fee tier | one fixed tier per run, **default tier 1** (most conservative) until Allay gives their current Kraken Pro tier; `--fee-tier N` overrides; no re-tiering inside a run | provisional default (tier 1, `coin_specs.yaml`), pending Allay's confirmation |
+| C22 | Trading currency on Kraken | **USD pairs**, to match the data. If Allay will trade BTC/CAD etc., the account and reports need CAD (FX conversion via the FX rate machinery), which is a scope change | provisional default (USD pairs), pending Allay's confirmation: which currency will you trade in? |
+| C23 | Discounted pairs | assume BTC/ETH/SOL are **not** on the 0.02%-off list (conservative) until confirmed | provisional default (`discounted_pair: false` per coin), pending Allay's confirmation |
