@@ -13,34 +13,36 @@ Acceptance: `build_instrument("CRYPTO", "BTC/USD.KRAKEN", "BTC", bars)` returns 
 `CurrencyPair` with size precision 8. Equity, futures and FX dispatch is byte-identical. A forked
 engine test settles the account model (decision C8) and proves fractional fills and USD P&L.
 
-- [ ] 1.1 Unit (failing first): `tests/unit/services/crypto/test_coin_specs.py`: the shipped file
+- [x] 1.1 Unit (failing first): `tests/unit/services/crypto/test_coin_specs.py`: the shipped file
       loads BTC, ETH, SOL; per-coin base/quote/precision/increment and Kraken block; the 17-tier
       Kraken Pro spot schedule (tier 1 0.40/0.80%, tier 17 0.00/0.05%) and `default_tier`;
       unknown key, non-USD quote, key != base, increment decimals over precision, tiers not
       1..N, maker > taker, default tier outside the schedule, unknown schema version all raise
       `CryptoSpecError` naming the dotted field.
-- [ ] 1.2 `src/services/crypto/coin_specs.yaml` (`source`/`as_of` per value, UNVERIFIED flagged)
+- [x] 1.2 `src/services/crypto/coin_specs.yaml` (`source`/`as_of` per value, UNVERIFIED flagged)
       and `coin_specs.py`.
-- [ ] 1.3 Unit (failing first): `is_crypto` in `tests/unit/core/test_position_sizing.py`: true
+- [x] 1.3 Unit (failing first): `is_crypto` in `tests/unit/test_position_sizing.py`: true
       only for `info.asset_class == "CRYPTO"`; `is_fx_pair`/`is_fx` stay false for it.
-- [ ] 1.4 Implement `is_crypto` (core, duck-typed).
-- [ ] 1.5 Component (failing first): `tests/component/services/crypto/test_instrument_builder.py`:
+- [x] 1.4 Implement `is_crypto` (core, duck-typed).
+- [x] 1.5 Component (failing first): `tests/component/services/crypto/test_instrument_builder.py`:
       id `BTC/USD.KRAKEN` (equal to `KrakenPairMapper.to_nautilus_id("BTC/USD")`),
       `raw_symbol XBTUSD`, currencies, price precision follows bars, size precision 8 /
       increment 1e-8, margins 1, fees 0, `info` terms (Kraken symbols, minimums, fee schedule
       `as_of`).
-- [ ] 1.6 `build_crypto_pair()`.
-- [ ] 1.7 Component (failing first): `test_build_instrument.py`: `CRYPTO` gives a crypto
+- [x] 1.6 `build_crypto_pair()`.
+- [x] 1.7 Component (failing first): `test_build_instrument.py`: `CRYPTO` gives a crypto
       `CurrencyPair`; STOCK/ETF/None/FUTURES/FX unchanged; `load_from_catalog` with a crypto row.
-- [ ] 1.8 Route `CRYPTO` in `build_instrument`.
-- [ ] 1.9 Integration, forked (failing first):
+- [x] 1.8 Route `CRYPTO` in `build_instrument`.
+- [x] 1.9 Integration, forked (failing first):
       `tests/integration/core/test_crypto_engine_acceptance.py`: a USD-base venue accepts the
       pair and 4-decimal `LAST` bars; a 0.128 BTC market order fills at 0.128; account models A
       (`MARGIN`, leverage 1, margin 1, prototype gate) and B (`CASH`) run the bracket scenario of
       design section 1; the result is pinned; fill size against a 1-minute bar with volume 2 and 0
       is pinned. **Gate**: record which account model passes; if A fails, re-plan M3 before M2
       merges.
-- [ ] 1.10 Docs: `docs/agent/crypto-backtesting.md` (skeleton: ids, specs, UNVERIFIED list,
+      Result: A passes with the gate (and enforces nothing without it); B rejected. Recorded
+      in `design.md` section 1 ("Spike result") and decision C8.
+- [x] 1.10 Docs: `docs/agent/crypto-backtesting.md` (skeleton: ids, specs, UNVERIFIED list,
       spike result), index in `architecture.md`.
 
 ## M2. FirstRate crypto importer and the `firstrate-crypto` catalog
@@ -99,7 +101,8 @@ snapshots.
 - [ ] 3.5 Integration, forked (failing first): `tests/integration/core/test_crypto_venue_engine.py`:
       crypto venues get the M1-chosen account; the equity venue `add_venue` call is unchanged; a
       mixed crypto/FX venue is refused; balances exact.
-- [ ] 3.6 Wire into `backtest_venue.add_backtest_venue`; no orchestrator growth.
+- [ ] 3.6 Wire into `backtest_venue.add_backtest_venue`; no orchestrator growth. Remove M1's
+      refusal of crypto venues (`CRYPTO_NOT_ENABLED`, `test_crypto_venue_guard.py`).
 - [ ] 3.7 Unit (failing first): persistence and `mark_to_market` with fractional quantities;
       `_check_against_accounts` holds; `StrategyConfigSnapshot` declares `crypto_pairs`,
       `account_currency` and `periods_per_year`, omitted when unset.

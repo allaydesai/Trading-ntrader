@@ -21,6 +21,8 @@ from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from src.core.fx_rates import conversion_pairs_for, fx_ticker
 from src.models.data_load_result import DataLoadResult
+from src.services.crypto.coin_specs import get_coin_spec
+from src.services.crypto.instrument_builder import build_crypto_pair
 from src.services.exceptions import DataNotFoundError, UnknownCatalogError
 from src.services.firstrate.catalog_manager import CatalogManager
 from src.services.firstrate.metadata_service import MetadataService
@@ -99,6 +101,7 @@ def build_equity(nautilus_id: str, ticker: str, bars=None):
 
 FUTURES_ASSET_CLASS = "FUTURES"
 FX_ASSET_CLASS = "FX"
+CRYPTO_ASSET_CLASS = "CRYPTO"
 
 
 def build_instrument(asset_class, nautilus_id: str, ticker: str, bars=None):
@@ -107,13 +110,18 @@ def build_instrument(asset_class, nautilus_id: str, ticker: str, bars=None):
     ``FUTURES`` builds a continuous-series ``FuturesContract`` from the hand-curated
     contract spec for ``ticker`` (the futures root, e.g. ``ES``), with precision taken from
     the bars when given. ``FX`` builds a spot ``CurrencyPair`` from the pair spec for
-    ``ticker`` (``EURUSD``), likewise. Every other asset class, including ``None``, goes
-    through :func:`build_equity` unchanged.
+    ``ticker`` (``EURUSD``), likewise, and ``CRYPTO`` a fractional Kraken spot
+    ``CurrencyPair`` from the coin spec (``BTC``). Every other asset class, including
+    ``None``, goes through :func:`build_equity` unchanged.
     """
     kind = str(asset_class or "").upper()
-    if kind not in (FUTURES_ASSET_CLASS, FX_ASSET_CLASS):
+    if kind not in (FUTURES_ASSET_CLASS, FX_ASSET_CLASS, CRYPTO_ASSET_CLASS):
         return build_equity(nautilus_id=nautilus_id, ticker=ticker, bars=bars)
     precision = _infer_price_precision(bars) if bars else None
+    if kind == CRYPTO_ASSET_CLASS:
+        return build_crypto_pair(
+            get_coin_spec(ticker), nautilus_id=nautilus_id, price_precision=precision
+        )
     if kind == FX_ASSET_CLASS:
         return build_fx_pair(
             get_pair_spec(ticker), nautilus_id=nautilus_id, price_precision=precision

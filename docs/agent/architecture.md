@@ -113,6 +113,7 @@ Read the topic doc for your area of work:
 | Futures margin, commission, sizing, returns | `docs/agent/futures-backtesting.md` |
 | Spot FX pairs, instruments, USD conversion | `docs/agent/fx-backtesting.md` |
 | FX end-to-end QA (2026-11-23): results, hand checks, open questions | `docs/agent/fx-qa-2026-11-23.md` |
+| Spot crypto (Kraken): coin specs, instruments, account model | `docs/agent/crypto-backtesting.md` |
 | Web UI, HTMX, templates, charts | `docs/agent/web-ui.md` |
 | Database, repositories, persistence | `docs/agent/persistence.md` |
 | Tests, fixtures, TDD | `docs/agent/testing.md` |
