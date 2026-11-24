@@ -28,7 +28,7 @@ from src.services.backtest_persistence import BacktestPersistenceService
 from src.services.crypto.coin_specs import get_coin_spec
 from src.services.crypto.instrument_builder import build_crypto_pair
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.component
 
 BTC = build_crypto_pair(get_coin_spec("BTC"))
 DAY_NS = 86_400 * 1_000_000_000
