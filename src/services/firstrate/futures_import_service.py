@@ -5,8 +5,9 @@ classifier, and replaces the per-ticker step so a file is never held whole:
 
 1. upsert the ``catalog_instruments`` row from the contract spec (no company profiles);
 2. classify skip / reimport / new (plus an on-disk row-count check, below);
-3. delete the bar type's existing Parquet parts, then parse the file chunk by chunk and
-   write one part per chunk;
+3. read the file up to its first valid bar (refusing, with the existing series untouched,
+   when it is missing, unreadable or holds no bar), then delete the bar type's existing
+   Parquet parts and write one part per chunk;
 4. verify the row count from Parquet footers and a handful of sampled bars read back by
    timestamp (no full read-back);
 5. record coverage (counts, per-timeframe start/end) on the row.
@@ -20,7 +21,9 @@ exactly the recorded bar count; otherwise the series is re-imported.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -42,6 +45,7 @@ from src.services.firstrate.import_verification import collect_ohlc_warnings
 from src.services.firstrate.parsers.firstrate_futures_parser import (
     DEFAULT_CHUNK_ROWS,
     FirstRateFuturesParser,
+    FuturesChunk,
 )
 from src.services.futures.contract_specs import FuturesContractSpec, get_contract_spec
 from src.services.futures.instrument_builder import continuous_instrument_id
@@ -170,6 +174,20 @@ def series_complete(directory: Path, recorded: int) -> bool:
         return False
 
 
+def read_until_first_bar(chunks: Iterator[FuturesChunk]) -> list[FuturesChunk]:
+    """Chunks consumed up to and including the first that holds a bar.
+
+    Never empty: a source with no bar yields one empty stand-in chunk, so the caller's
+    ``head[-1].bars`` is falsy exactly when the whole source parsed to nothing.
+    """
+    head: list[FuturesChunk] = []
+    for chunk in chunks:
+        head.append(chunk)
+        if chunk.bars:
+            return head
+    return head or [FuturesChunk(bars=[], row_count=0)]
+
+
 def write_series(
     catalog: ParquetDataCatalog,
     parser: FirstRateFuturesParser,
@@ -179,14 +197,23 @@ def write_series(
 ) -> _SeriesTally:
     """Replace ``bar_type``'s parts with the file's bars, one Parquet part per chunk.
 
-    Leaves :data:`INCOMPLETE_MARKER` in place; the caller removes it once verified.
+    The source is read up to its first valid bar before anything on disk changes: a missing
+    or unreadable file raises, and one with no valid bar returns an empty tally, both with
+    the existing parts (and no marker) left in place. Otherwise leaves
+    :data:`INCOMPLETE_MARKER` in place; the caller removes it once verified.
     """
+    chunks = parser.iter_chunks(file_path, bar_type, precision)
+    head = read_until_first_bar(chunks)
+    tally = _SeriesTally()
+    if not head[-1].bars:  # nothing to write: refuse before the delete below
+        for chunk in head:
+            tally.add(chunk.bars, chunk.out_of_order)
+        return tally
     directory = bar_directory(catalog, bar_type)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / INCOMPLETE_MARKER).touch()
     catalog.delete_data_range(data_cls=Bar, identifier=str(bar_type))
-    tally = _SeriesTally()
-    for chunk in parser.iter_chunks(file_path, bar_type, precision):
+    for chunk in chain(head, chunks):
         if chunk.bars:
             catalog.write_data(chunk.bars)
         tally.add(chunk.bars, chunk.out_of_order)
