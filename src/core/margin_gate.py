@@ -1,4 +1,4 @@
-"""Pre-trade margin check for backtests: futures (M3) and spot FX (FX M4).
+"""Pre-trade margin check for backtests: futures (M3), spot FX (FX M4) and spot crypto (crypto M3).
 
 Nautilus 1.220 computes margin on a margin account but never refuses an order over it: the
 risk engine returns early for margin accounts (``risk/engine.pyx``: "TODO: Determine risk
@@ -23,11 +23,17 @@ risk engine's own ``_deny_order``/``_reject_modify_order`` (so the strategy rece
 - an FX modify whose new limit or trigger raises an entry's margin by more than is free
   (``MARGIN_EXCEEDS_FREE_BALANCE``);
 - an FX entry that would rest (it has a limit or trigger) but cannot be margined yet because
-  its quote has no USD rate (``FX_MARGIN_UNPRICEABLE``).
+  its quote has no USD rate (``FX_MARGIN_UNPRICEABLE``);
+- a spot crypto ``SELL`` without a parent that does not close an open long by position id, or
+  sells more of it than is free to sell (``CRYPTO_SPOT_NO_SHORT``). Under ``HEDGING`` a ``SELL``
+  with no position id opens a new short whatever else is held, so spot (long-only) needs the
+  rule; reduce-only exits and bracket legs (they have a parent) only ever close and pass.
 
 What one unit needs is per instrument (a :class:`MarginRequirement`):
 
 - **futures**: dollars per contract from the spec, at any price (``FuturesRequirement``);
+- **spot crypto**: the full USD notional, ``coins x price`` (``CryptoSpotRequirement``;
+  unlevered, decision C8), at the limit or trigger, else the latest ``LAST`` price;
 - **FX**: ``units x price x USD per quote unit x margin_pct`` (``FxRequirement``). The price is
   the order's limit (or stop trigger), else the instrument's latest ``MID`` price in the cache;
   a cross converts at the cache rate. A market order the gate cannot price (no bar or no cross
@@ -40,7 +46,9 @@ engine unchanged. The gate's only state is :class:`~src.core.pending_modifies.Pe
 the modifies it passed on that the venue has not answered yet, per client order id. It backs
 the one-quantity-modify-at-a-time rule and the unreserved margin below; each request settles
 when the venue applies or rejects it or the order closes. The gate is installed only when a
-run has a futures contract or an FX pair, so equity runs never see it.
+run has a futures contract, an FX pair or a spot crypto pair, so equity runs never see it. For
+spot crypto it is mandatory: the M1 spike showed a margin venue without it fills a USD 156k buy
+on USD 10k and opens shorts (``openspec/changes/add-crypto-backtesting/design.md`` section 1).
 
 "Free" is Nautilus' free balance in the account's currency (USD for an FX venue's single
 currency account, the quote currency otherwise): realised cash minus the margin it has locked
@@ -70,11 +78,14 @@ from src.core.futures_costs import FuturesTerms, terms_by_instrument
 from src.core.fx_costs import fx_terms_by_instrument
 from src.core.fx_rates import usd_per_quote
 from src.core.pending_modifies import PendingModifies
+from src.core.position_sizing import is_crypto
 
 RISK_ENDPOINT = "RiskEngine.execute"
 DENIAL_REASON = "MARGIN_EXCEEDS_FREE_BALANCE"
+NO_SHORT_REASON = "CRYPTO_SPOT_NO_SHORT"
 UNPRICEABLE = "MARGIN_UNPRICEABLE"
 ZERO = Decimal(0)
+CENT = Decimal("0.01")
 
 
 class MarginRequirement(Protocol):
@@ -139,6 +150,23 @@ class FxRequirement:
         return required.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
 
 
+@dataclass(frozen=True)
+class CryptoSpotRequirement:
+    """Spot crypto: the full USD notional (unlevered), at the order's reference price."""
+
+    prefix: str = "CRYPTO"
+    unit: str = "coin(s)"
+    price_sensitive: bool = True
+
+    def initial_usd(  # noqa: D102
+        self, quantity: Decimal, order: Order, cache, price: Decimal | None = None
+    ) -> Decimal | None:
+        price = price if price is not None else _reference_price(order, cache, PriceType.LAST)
+        if price is None:
+            return None
+        return (quantity * price).quantize(CENT, rounding=ROUND_HALF_EVEN)
+
+
 def _new_reference(order: Order, new_price, new_trigger) -> Decimal | None:
     """The reference price a modify would leave (limit first, as ``_reference_price``)."""
     if new_price is None and new_trigger is None:
@@ -150,13 +178,13 @@ def _new_reference(order: Order, new_price, new_trigger) -> Decimal | None:
     return None
 
 
-def _reference_price(order: Order, cache) -> Decimal | None:
-    """The limit price, else the stop trigger, else the latest ``MID`` price in the cache."""
+def _reference_price(order: Order, cache, latest_type=PriceType.MID) -> Decimal | None:
+    """The limit price, else the stop trigger, else the latest ``latest_type`` cache price."""
     for name in ("price", "trigger_price"):
         price = getattr(order, name, None)
         if price is not None:
             return price.as_decimal()
-    latest = cache.price(order.instrument_id, PriceType.MID)
+    latest = cache.price(order.instrument_id, latest_type)
     return latest.as_decimal() if latest is not None else None
 
 
@@ -218,13 +246,15 @@ class MarginGate:
         position is credited once across the whole list, net of what other working orders on
         that position already claim to close. An entry the gate cannot price is refused when
         it would rest (it has a limit or trigger: its fill could come once a rate exists).
+        A spot crypto sell that would go short is refused first (``CRYPTO_SPOT_NO_SHORT``).
         """
         entries = [
             o for o in orders if o.parent_order_id is None and o.instrument_id in self._terms
         ]
-        if not entries:
-            return None
         position = self._cache.position(position_id) if position_id is not None else None
+        short = _short_sale_reason(self._cache, self._terms, orders, position)
+        if short is not None or not entries:
+            return short
         credit = _closing_credit(self._cache, position, {o.client_order_id for o in orders})
         required = ZERO
         units = ZERO
@@ -431,6 +461,36 @@ def _closing_credit(cache, position, submitting: set) -> Decimal:
     return max(credit, ZERO)
 
 
+def _short_sale_reason(cache, terms, orders: list[Order], position) -> str | None:
+    """Why a spot crypto ``SELL`` in ``orders`` would go short, or ``None``.
+
+    A parentless, non-reduce-only ``SELL`` must close ``position``, an open long of the same
+    pair, and the sells together may not exceed what of it is free to sell: its size less
+    what other working sells on it already claim (``_closing_credit``).
+    """
+    sells = [
+        o
+        for o in orders
+        if o.side == OrderSide.SELL
+        and o.parent_order_id is None
+        and not o.is_reduce_only
+        and isinstance(terms.get(o.instrument_id), CryptoSpotRequirement)
+    ]
+    if not sells:
+        return None
+    credit = _closing_credit(cache, position, {o.client_order_id for o in orders})
+    for order in sells:
+        quantity = order.quantity.as_decimal()
+        held = position is not None and position.is_long
+        if not held or position.instrument_id != order.instrument_id or quantity > credit:
+            return (
+                f"{NO_SHORT_REASON}: SELL {order.quantity} {order.instrument_id} would go short; "
+                f"a spot sell must close an open long by position id (free to sell: {credit})"
+            )
+        credit -= quantity
+    return None
+
+
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:
     """``(new units, remaining credit)``: the order less what it closes of ``position``."""
     if order.is_reduce_only:
@@ -445,17 +505,20 @@ def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Dec
 
 
 def margin_requirements(instruments: list[Instrument]) -> dict[InstrumentId, MarginRequirement]:
-    """Per instrument, what it needs in margin: futures contracts and spot FX pairs only."""
+    """Per instrument, what it needs in margin: futures, spot FX and spot crypto pairs only."""
     requirements: dict[InstrumentId, MarginRequirement] = {
         iid: FuturesRequirement(t) for iid, t in terms_by_instrument(instruments).items()
     }
     for iid, fx in fx_terms_by_instrument(instruments).items():
         requirements[iid] = FxRequirement(fx.margin_fraction)
+    for instrument in instruments:
+        if is_crypto(instrument):
+            requirements[instrument.id] = CryptoSpotRequirement()
     return requirements
 
 
 def install_margin_gate(engine: BacktestEngine, instruments: list[Instrument]) -> MarginGate | None:
-    """Install the gate when ``instruments`` include a future or an FX pair; else do nothing."""
+    """Install the gate when ``instruments`` include a future, FX or crypto pair; else nothing."""
     requirements = margin_requirements(instruments)
     if not requirements:
         return None
