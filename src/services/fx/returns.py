@@ -164,10 +164,13 @@ def trade_figures(trade: Any, terms: PairTerms) -> TradeFigures:
     )
 
 
-def _peaks(
-    rows: list[tuple[Any, TradeFigures]], capital: Decimal | None
+def peaks(
+    rows: list[tuple[Any, Any]], capital: Decimal | None
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
     """Peak concurrent notional and margin (USD), and peak notional / equity.
+
+    ``rows`` pair each trade with its figures: anything with ``notional_usd``,
+    ``margin_used_usd`` and ``pnl_usd`` (FX :class:`TradeFigures`; crypto M5 reuses it).
 
     Equity is the starting capital plus the P&L of trades closed so far. At one timestamp,
     exits come before entries (a close-and-reverse is not counted twice), every exit there is
@@ -234,7 +237,7 @@ def summarise_run(
         (r for r in rows if r[1].pips is not None), key=lambda r: _get(r[0], "exit_timestamp")
     )
     net = sum((f.pnl_usd or Decimal(0) for _, f in closed), Decimal(0))
-    peak_notional, peak_margin, leverage = _peaks(rows, _dec(capital))
+    peak_notional, peak_margin, leverage = peaks(rows, _dec(capital))
     return RunSummary(
         asset_class=FX,
         pairs=terms,
