@@ -262,9 +262,11 @@ class TestNoShort:
         take = _order(
             "0.1", OrderSide.SELL, "80000.0000", parent=parent, status=OrderStatus.ACCEPTED
         )
-        gate = _gate(position=_long("0.2"), working=[stop, take])
+        # no free USD: a sell that closes needs no margin
+        gate = _gate("0", position=_long("0.2"), working=[stop, take])
         assert gate.denial_reason([_order("0.1", OrderSide.SELL)], LONG) is None
-        assert gate.denial_reason([_order("0.11", OrderSide.SELL)], LONG) is not None
+        reason = gate.denial_reason([_order("0.11", OrderSide.SELL)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
 
     def test_a_buy_is_never_a_short(self):
         assert _gate(position=_long("0.1")).denial_reason([_order("0.01")], LONG) is None

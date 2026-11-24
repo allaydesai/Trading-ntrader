@@ -251,9 +251,7 @@ class MarginGate:
         it would rest (it has a limit or trigger: its fill could come once a rate exists).
         A spot crypto sell that would go short is refused first (``CRYPTO_SPOT_NO_SHORT``).
         """
-        entries = [
-            o for o in orders if o.parent_order_id is None and o.instrument_id in self._terms
-        ]
+        entries = [o for o in orders if o.parent_order_id is None and _margined(self._terms, o)]
         position = self._cache.position(position_id) if position_id is not None else None
         short = _short_sale_reason(self._cache, self._terms, orders, position)
         if short is not None or not entries:
@@ -495,6 +493,12 @@ def _short_sale_reason(cache, terms, orders: list[Order], position) -> str | Non
 def _spot_sell(requirement, order: Order) -> bool:
     """A spot crypto ``SELL``: it only ever closes a long (shorts are denied at submission)."""
     return isinstance(requirement, CryptoSpotRequirement) and order.side == OrderSide.SELL
+
+
+def _margined(terms, order: Order) -> bool:
+    """An order the gate margins as an entry: gated, and not a spot crypto sell (it closes)."""
+    requirement = terms.get(order.instrument_id)
+    return requirement is not None and not _spot_sell(requirement, order)
 
 
 def _spot_free_to_sell(cache, position, submitting: set) -> Decimal:
