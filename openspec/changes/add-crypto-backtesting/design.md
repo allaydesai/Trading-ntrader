@@ -117,7 +117,7 @@ BTC:
 fee_schedule:                   # Kraken Pro spot ("Spot & Futures" tiers), CA page
   source: https://www.kraken.com/ca/pro/fees
   as_of: 2026-11-24
-  default_tier: 1               # decision C21; --fee-tier overrides per run
+  default_tier: 2               # decision C21 (Allay's tier); --fee-tier overrides per run
   discounted_pair_bps_off: "2"  # 0.02% off maker and taker on selected pairs
   tiers:                        # maker_pct, taker_pct; thresholds in USD (spot 30d | futures 30d | assets)
     1:  {maker: "0.40", taker: "0.80", spot_30d: "0"}
@@ -148,8 +148,9 @@ every per-coin value carries a `sources` entry (`status`, `source`, `as_of`):
 `price_precision` and `size_increment` are VERIFIED; `typical_spread_bps` and the Kraken
 `rest`, `altname`, minimums, tick and `discounted_pair` are UNVERIFIED. The fee schedule's
 rates carry the page as their source (VERIFIED); its defaults carry their own entries:
-`default_tier` (C21) and `fee_currency` UNVERIFIED, `discounted_pair_bps_off` and
-`min_fee_usd: 0` VERIFIED from the page. `rest` is `KrakenPairMapper.to_kraken_rest`'s output
+`fee_currency` UNVERIFIED, `discounted_pair_bps_off` and `min_fee_usd: 0` VERIFIED from the
+page, and `default_tier` (C21) VERIFIED as tier 2 from Allay's Kraken fee screen
+(2026-11-24; it was a provisional tier 1 at M1). `rest` is `KrakenPairMapper.to_kraken_rest`'s output
 (SOL gives `SOLZUSD`; Kraken's own name may be `SOLUSD`; M7 checks it against `AssetPairs`). The spot
 thresholds are informational: a run uses one fixed tier (decision C21), it does not re-tier as
 simulated volume accumulates.
@@ -266,6 +267,20 @@ registered for `AssetClass.CRYPTO`, and `CryptoImportService`
 - **CLI**: `import --format firstrate --asset-class crypto --catalog firstrate-crypto <dir>`,
   all five timeframes by default, `--dry-run` showing per-coin ranges. The 6.1M-row BTC
   1-minute file streams in chunks (peak RSS measured in the manual task; target < 1.5 GB).
+- **Re-run classifier**: the inherited classifier probes every FirstRate file as New York
+  time, which would never match a UTC series' recorded end, so the crypto service probes the
+  source as UTC (`compute_source_last_date(..., source_tz=timezone.utc)`) and skips only when the
+  end, the recorded count and the Parquet footers agree.
+
+### Import result (M2, 2026-11-24)
+
+All 15 series imported into `/srv/market-data/catalogs/firstrate-crypto` (17,419,616 bars,
+924 MB, 3 min 12 s, peak RSS 787 MB including BTC 1-minute). Each bar count equals its source
+line count; first and last bars equal the source; each coin's 2026-05-01 daily bar opens at
+00:00 UTC and equals its 24 UTC hourly bars aggregated; the 2024-03-10 BTC hourly series has 24
+bars. A re-run skips all 15 in 22 s. Warnings as expected: whole-coin volume from 2026-03-21
+00:00 UTC in every series, 5-decimal 1-minute rows rounded (BTC 7,534, ETH 5,397), zero-volume
+1-minute bars (BTC 1,176, ETH 100, SOL 5) and gaps of more than 10 bars, mostly 2013-2016.
 
 ## 3. Account, leverage and shorting (M3)
 
@@ -308,17 +323,18 @@ commission  = rate x trade_value x cost_multiplier        # no minimum
   and for limits that were marketable on arrival. That is how Kraken charges. A limit order
   that fills in the bar it was submitted on is a taker fill, which is conservative. Riptide and
   Bollinger's limit entries and take-profits mostly pay maker; stops and market exits pay taker.
-- **Tier (decision C21)**: one tier per run, default `default_tier` (tier 1 until Allay gives
-  their current tier), `--fee-tier N` to override, recorded in `config_snapshot.fee_tier`.
+- **Tier (decision C21)**: one tier per run, default `default_tier` (**tier 2**, Allay's
+  Kraken Pro tier: 0.30% maker / 0.60% taker), `--fee-tier N` to override, recorded in
+  `config_snapshot.fee_tier`.
   Volume-driven re-tiering inside a run is not modelled.
 - **No minimum fee**: the page shows none. Charges are rounded to cents once per order from
   running totals (the FX model's mechanism, shared), so split bar fills do not add rounding.
 - **Fee currency**: the page does not say which currency Kraken charges fees in. The model
   charges USD (the quote), which gives the same USD P&L whichever currency Kraken uses.
-- **Examples (tier 1)**: USD 9,984 of BTC (0.128 at 78,000) costs USD 79.87 taker or
-  USD 39.94 maker; at tier 4, USD 34.94 taker. A taker round trip at tier 1 costs 1.6% of
-  notional before spread, which is enough to sink many intraday strategies. Reports show it
-  (section 10).
+- **Examples**: USD 9,984 of BTC (0.128 at 78,000) costs, at the default tier 2, USD 59.90
+  taker or USD 29.95 maker; at tier 1, USD 79.87 taker or USD 39.94 maker; at tier 4, USD 34.94
+  taker. A taker round trip at tier 2 costs 1.2% of notional before spread (1.6% at tier 1),
+  which is enough to sink many intraday strategies. Reports show it (section 10).
 - `KRAKEN_DEFAULT_MAKER_FEE`/`TAKER_FEE` (0.16%/0.26%) are outdated against this schedule.
   M7 makes the spec the source and keeps the settings only as an explicit override.
 
@@ -414,7 +430,7 @@ NTrader's headline metrics come from `mark_to_market` (the M3 tests pin which is
 Return on the underlying and costs alongside. Every crypto report states "spot, unlevered,
 long-only; Kraken Pro fee tier N; spread modelled".
 
-- CLI `show`/`report`/`history`: a crypto block (`BTC/USD (crypto, KRAKEN, fee tier 1)`), fractional
+- CLI `show`/`report`/`history`: a crypto block (`BTC/USD (crypto, KRAKEN, fee tier 2)`), fractional
   quantities. Equity, futures and FX output byte-identical.
 - MCP `get_run`/`compare_runs`/`export_results`: `asset_class: "crypto"`, a `crypto` object,
   crypto trade columns only when a crypto run is exported.
@@ -475,8 +491,8 @@ long-only; Kraken Pro fee tier N; spread modelled".
 
 C2 and C3 were decided by Allay on 2026-11-24 (Kraken). On the same day Allay accepted the
 recommendations for C1, C5-C8, C13, C14, C17 and C20; C8 was then settled by the M1 spike
-(section 1: account model A). C21-C23 are **provisional defaults** recorded at M1, pending
-Allay's confirmation. The other rows remain recommendations. UNVERIFIED values are proposed
+(section 1: account model A). C21-C23 were **provisional defaults** recorded at M1; Allay
+confirmed C21 (tier 2) on 2026-11-24, and C22-C23 remain pending his confirmation. The other rows remain recommendations. UNVERIFIED values are proposed
 working defaults; M3 does not merge until the fee-related ones are confirmed or accepted as
 defaults.
 
@@ -502,6 +518,6 @@ defaults.
 | C18 | OpenSpec layout | one umbrella change, tasks by milestone, one PR per milestone, archive after M7 | pending |
 | C19 | Headline metric | account return on USD equity; underlying return and costs split alongside | pending |
 | C20 | Annualisation | 365 periods/year for crypto runs, recorded in the snapshot; 252 elsewhere unchanged | **accepted by Allay, 2026-11-24** |
-| C21 | Fee tier | one fixed tier per run, **default tier 1** (most conservative) until Allay gives their current Kraken Pro tier; `--fee-tier N` overrides; no re-tiering inside a run | provisional default (tier 1, `coin_specs.yaml`), pending Allay's confirmation |
+| C21 | Fee tier | one fixed tier per run, **default tier 2** (Allay's Kraken Pro spot tier: 0.30% maker / 0.60% taker); `--fee-tier N` overrides; no re-tiering inside a run | **confirmed by Allay, 2026-11-24** (source: Allay's Kraken fee screen; `coin_specs.yaml` `default_tier: 2`, VERIFIED) |
 | C22 | Trading currency on Kraken | **USD pairs**, to match the data. If Allay will trade BTC/CAD etc., the account and reports need CAD (FX conversion via the FX rate machinery), which is a scope change | provisional default (USD pairs), pending Allay's confirmation: which currency will you trade in? |
 | C23 | Discounted pairs | assume BTC/ETH/SOL are **not** on the 0.02%-off list (conservative) until confirmed | provisional default (`discounted_pair: false` per coin), pending Allay's confirmation |

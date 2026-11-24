@@ -117,8 +117,9 @@ def _infer_timeframe(filename: str, *, exact_stem: bool = False) -> str:
 
     Case-insensitive: ``AAPL_full_1Day_adjsplitdiv.txt`` is treated as a
     ``1-DAY-LAST`` file. Unknown suffixes bucket into :data:`_UNKNOWN_TIMEFRAME`.
-    With ``exact_stem`` (FX, whose files end at the token: ``EURUSD_full_1hour.txt``) a
-    token right before the extension also counts; the equity/futures default is unchanged.
+    With ``exact_stem`` (FX and crypto, whose files end at the token:
+    ``EURUSD_full_1hour.txt``, ``BTC_full_1hour.txt``) a token right before the extension also
+    counts; the equity/futures default is unchanged.
     """
     lower = filename.lower()
     if exact_stem:
@@ -176,7 +177,7 @@ def _walk(source_path: Path, exact_stem: bool = False) -> _ScanState:
 
     Discovery is case-insensitive for the ``.txt`` extension so files with
     ``.TXT`` / ``.Txt`` on case-sensitive filesystems are not silently missed.
-    ``exact_stem`` is passed to :func:`_infer_timeframe` (FX filenames).
+    ``exact_stem`` is passed to :func:`_infer_timeframe` (FX and crypto filenames).
     """
     state = _ScanState()
 
@@ -532,7 +533,7 @@ def build_dry_run_report(
       FMP-aware, offline cached-vs-needs-resolution estimate. When ``None`` the
       estimate is omitted. The reader keeps this module DB-free / Nautilus-free.
     """
-    state = _walk(source_path, exact_stem=asset_class == AssetClass.FX)
+    state = _walk(source_path, exact_stem=asset_class in (AssetClass.FX, AssetClass.CRYPTO))
     report = _state_to_report(state, source_path, asset_class)
 
     schema_mismatches: list[SchemaMismatch] = list(state.name_mismatches)

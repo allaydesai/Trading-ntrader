@@ -52,30 +52,33 @@ Acceptance: `import --format firstrate --asset-class crypto --catalog firstrate-
 counts. Prices read back at 4 decimals, volumes at 8. Daily bars sit at 00:00 UTC. A re-run
 skips. Peak RSS on BTC 1-minute stays under 1.5 GB.
 
-- [ ] 2.1 Component (failing first):
+- [x] 2.1 Component (failing first):
       `tests/component/services/firstrate/test_firstrate_crypto_parser.py`: registration for
       `CRYPTO`; intraday and daily rows; **UTC** (a US DST Sunday has exactly 24 hourly bars, no
       shift); daily row `D` at `D 00:00 UTC`; 5-decimal prices rounded half-even to 4 and counted;
       fractional and zero volume; gaps and the integer-volume regime counted as warnings;
       chunking, duplicates, cross-chunk order, invalid rows, empty file.
-- [ ] 2.2 Implement `FirstRateCryptoParser` and register it.
-- [ ] 2.3 Component (failing first):
+- [x] 2.2 Implement `FirstRateCryptoParser` and register it.
+- [x] 2.3 Component (failing first):
       `tests/component/services/firstrate/test_crypto_import_service.py` against a tmp catalog:
       spec-filled rows (`ticker BTC`, `nautilus_id BTC/USD.KRAKEN`, `asset_class CRYPTO`,
       `currency USD`); bar directory `BTCUSD.KRAKEN-1-HOUR-LAST-EXTERNAL`; read-back precision;
       skip/overwrite; incomplete-marker reimport; unknown coin fails that file only.
-- [ ] 2.4 Implement `CryptoImportService` (share helpers with the FX/futures services; no growth
+- [x] 2.4 Implement `CryptoImportService` (share helpers with the FX/futures services; no growth
       of `ImportService`/`_run_import` baselines).
-- [ ] 2.5 Unit/component (failing first): CLI `--asset-class crypto` defaults to five timeframes
+- [x] 2.5 Unit/component (failing first): CLI `--asset-class crypto` defaults to five timeframes
       and dispatches to `run_crypto_import`; dry-run and the source probe accept the crypto rows;
       no DB gives exit 2.
-- [ ] 2.6 Implement `src/cli/commands/import_crypto.py` and the dispatch.
-- [ ] 2.7 Integration, forked: trimmed real BTC 1-hour (a DST week, a weekend, a gap) and SOL daily
+- [x] 2.6 Implement `src/cli/commands/import_crypto.py` and the dispatch.
+- [x] 2.7 Integration, forked: trimmed real BTC 1-hour (a DST week, a weekend, a gap) and SOL daily
       import; full read-back equals source; the engine accepts the bars.
-- [ ] 2.8 Manual: import all three coins into `/srv/market-data/catalogs/firstrate-crypto` (new
+- [x] 2.8 Manual: import all three coins into `/srv/market-data/catalogs/firstrate-crypto` (new
       directory; existing catalogs untouched); counts vs `wc -l`; RSS on BTC 1-minute; update the
       project README and `data-pipeline.md`. The raw `README.md` ("crypto: yes") is left for
       Allay (the raw tree is read-only to agents).
+      Result (2026-11-24): 15/15 series, 17,419,616 bars, every count equal to `wc -l`, 924 MB,
+      peak RSS 787 MB over the whole run (BTC 1-minute included), 3 min 12 s; a re-run skips
+      all 15. Daily bars sit at 00:00 UTC and equal the UTC hourly aggregate (2026-05-01).
 
 ## M3. Account, costs and the spot gate
 
@@ -85,7 +88,8 @@ denied with the pinned reasons. Equity, futures and FX runs produce byte-identic
 snapshots.
 
 - [ ] 3.1 Component (failing first): `tests/component/core/test_crypto_costs.py`: USD 9,984 of
-      BTC costs 79.87 taker / 39.94 maker at tier 1 and 34.94 taker at tier 4; maker only for a
+      BTC costs 79.87 taker / 39.94 maker at tier 1, 59.90 taker / 29.95 maker at the
+      default tier 2 and 34.94 taker at tier 4; maker only for a
       fill whose `liquidity_side` is `MAKER` (a resting limit), taker for market, stop and
       marketable-limit fills; no minimum (USD 10 at tier 1 taker costs 0.08); split fills
       sum to the single-fill charge within a cent; half-spread component; cost-stress
@@ -108,7 +112,8 @@ snapshots.
       `account_currency` and `periods_per_year`, omitted when unset.
 - [ ] 3.8 Unit (failing first): `risk_metrics` annualises on 365 for a crypto run and 252
       otherwise (decision C20); implement.
-- [ ] 3.9 Manual: Allay confirms the default tier (their current Kraken Pro tier), whether
+- [ ] 3.9 Manual: the default tier is confirmed (tier 2, Allay's Kraken fee screen,
+      2026-11-24, recorded in `coin_specs.yaml` and design C21); Allay confirms whether
       BTC/ETH/SOL are on the 0.02% discounted-pair list, and the spread defaults; record the
       answers and date in `coin_specs.yaml` and the design.
 

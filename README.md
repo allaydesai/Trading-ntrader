@@ -182,13 +182,14 @@ and any supplementary dividend/split files it discovers alongside the bars.
 | `import ... --dividends-dir <dir> --splits-dir <dir>` | Override auto-discovery of supplementary data |
 | `import --format firstrate --catalog firstrate-futures --asset-class futures <dir>` | Import FirstRate continuous futures (ES, NQ, CL, GC, ZN); see below |
 | `import --format firstrate --catalog firstrate-fx --asset-class fx <dir>` | Import FirstRate spot FX (EURUSD, GBPUSD, USDJPY) as `MID` bars; see below |
+| `import --format firstrate --catalog firstrate-crypto --asset-class crypto <dir>` | Import FirstRate spot crypto (BTC, ETH, SOL) as UTC `LAST` bars; see below |
 
 Key options:
 
 - `--format firstrate` (required) — only FirstRate is supported today
 - `--catalog <name>` (required) — target catalog under `CATALOG_BASE_PATH`
 - `--asset-class` — `etf` (import default) · `stock` · `futures` · `fx` · `crypto` · `index` (`--dry-run` defaults to `stock`)
-- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min`, `30min` (default: all five for `etf`, `futures` and `fx`, `daily` otherwise)
+- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min`, `30min` (default: all five for `etf`, `futures`, `fx` and `crypto`, `daily` otherwise)
 - `--dividends-dir` / `--splits-dir` — explicit supplementary sources (auto-discovered from the source tree when omitted)
 - `--dry-run` — scan and report only; writes nothing to the catalog or DB
 
@@ -231,6 +232,25 @@ uv run python -m src.cli.main import --format firstrate --catalog firstrate-fx \
   --asset-class fx --dry-run /srv/market-data/raw/fx
 uv run python -m src.cli.main import --format firstrate --catalog firstrate-fx \
   --asset-class fx /srv/market-data/raw/fx
+```
+
+**Spot crypto** (`--asset-class crypto`) also needs no profiles: identity comes from
+`src/services/crypto/coin_specs.yaml`, and the `catalog_instruments` row is `ticker` `BTC`,
+`nautilus_id` `BTC/USD.KRAKEN`, `asset_class` `CRYPTO`, `exchange` `KRAKEN`, `currency` `USD`,
+`tick_size` 0.0001. The source is a flat directory of `{COIN}_full_{1min|5min|30min|1hour|1day}.txt`
+files in the equity row layout but in **UTC** (FirstRate's crypto files are the one UTC series;
+no DST shift is applied, and a daily row dated `D` opens at `D 00:00 UTC`). Bars are trade
+prices, `LAST` (`BTC/USD.KRAKEN-1-HOUR-LAST-EXTERNAL`), streamed like futures, with prices at 4
+decimals (1-minute rows with a 5th decimal are rounded half-even and counted) and volume in coins
+at 8 decimals. Nothing is filled or dropped for an anomaly: zero-volume bars, gaps longer than
+10 bars and the switch to whole-coin volumes (FirstRate rounds volume to whole coins from
+2026-03-21) are reported as warnings. See `docs/agent/crypto-backtesting.md`.
+
+```bash
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-crypto \
+  --asset-class crypto --dry-run /srv/market-data/raw/crypto
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-crypto \
+  --asset-class crypto /srv/market-data/raw/crypto
 ```
 
 **Backtesting futures**: run `backtest run` with `--catalog firstrate-futures` (symbol `ES`,

@@ -130,12 +130,17 @@ class TestShippedSpecFile:
 
     def test_fee_schedule_defaults(self):
         schedule = get_fee_schedule()
-        assert schedule.default_tier == 1  # decision C21, provisional
+        assert schedule.default_tier == 2  # decision C21: Allay's Kraken Pro tier
+        assert (schedule.tiers[2].maker_pct, schedule.tiers[2].taker_pct) == (
+            Decimal("0.30"),
+            Decimal("0.60"),
+        )
         assert schedule.discounted_pair_bps_off == Decimal("2")
         assert schedule.min_fee_usd == Decimal("0")
         assert schedule.fee_currency == "USD"
         assert set(schedule.sources) == set(FEE_SOURCED_FIELDS)
-        assert {"default_tier", "fee_currency"} <= set(schedule.unverified_fields())
+        assert "fee_currency" in schedule.unverified_fields()
+        assert "default_tier" not in schedule.unverified_fields()  # confirmed 2026-11-24
 
     def test_tier_lookup(self):
         schedule = get_fee_schedule()

@@ -253,11 +253,16 @@ def parse_timeframes(timeframe_str: str) -> list[str]:
     return specs
 
 
+#: Asset classes imported from a spec (no company profiles); their dry-run shows date ranges.
+_SPEC_DRIVEN = (AssetClass.FUTURES, AssetClass.FX, AssetClass.CRYPTO)
+
+
 def resolve_timeframes(timeframe: str | None, asset_class: AssetClass) -> list[str]:
     """Resolve which timeframe specs an import should cover.
 
     An explicit ``--timeframe`` always wins (Story 2.4 AC3). With no restriction,
-    the ETF, futures and FX paths import all five native timeframes (AC2; futures/FX M2);
+    the ETF, futures, FX and crypto paths import all five native timeframes (AC2; futures,
+    FX and crypto M2);
     every other asset class keeps the historical ``daily`` default.
 
     Args:
@@ -269,7 +274,12 @@ def resolve_timeframes(timeframe: str | None, asset_class: AssetClass) -> list[s
     """
     if timeframe:
         return parse_timeframes(timeframe)
-    all_native = asset_class in (AssetClass.ETF, AssetClass.FUTURES, AssetClass.FX)
+    all_native = asset_class in (
+        AssetClass.ETF,
+        AssetClass.FUTURES,
+        AssetClass.FX,
+        AssetClass.CRYPTO,
+    )
     default = ETF_DEFAULT_TIMEFRAMES if all_native else "daily"
     return parse_timeframes(default)
 
@@ -628,7 +638,7 @@ def _run_dry_run(
                 ac,
                 catalog=catalog,
                 cache_reader=cache_reader,
-                include_date_ranges=is_etf or ac in (AssetClass.FUTURES, AssetClass.FX),
+                include_date_ranges=is_etf or ac in _SPEC_DRIVEN,
             )
         except (OperationalError, DatabaseConnectionError) as e:
             # DB went away while computing the estimate — degrade gracefully:
@@ -642,7 +652,7 @@ def _run_dry_run(
                 ac,
                 catalog=catalog,
                 cache_reader=None,
-                include_date_ranges=is_etf or ac in (AssetClass.FUTURES, AssetClass.FX),
+                include_date_ranges=is_etf or ac in _SPEC_DRIVEN,
             )
     except (PermissionError, OSError) as e:
         console.print(f"❌ Fatal filesystem error: {e}", style="red")
@@ -682,7 +692,7 @@ def _run_dry_run(
     default=None,
     help=(
         "Comma-separated timeframes: daily,hourly,minute,1min,5min,30min "
-        "(default: all five for etf/futures/fx, daily otherwise)."
+        "(default: all five for etf/futures/fx/crypto, daily otherwise)."
     ),
 )
 @click.option(
@@ -732,6 +742,12 @@ def import_firstrate(
 
         exit_code = run_fx_import(
             catalog, source_path, resolve_timeframes(timeframe, AssetClass.FX)
+        )
+    elif (asset_class or "").lower() == "crypto":
+        from src.cli.commands.import_crypto import run_crypto_import
+
+        exit_code = run_crypto_import(
+            catalog, source_path, resolve_timeframes(timeframe, AssetClass.CRYPTO)
         )
     else:
         exit_code = _run_import(

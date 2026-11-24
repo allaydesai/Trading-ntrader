@@ -33,6 +33,11 @@ No minimum fee SHALL apply. Equity, futures and FX venues SHALL keep their model
 - **WHEN** the same quantity fills from a resting limit order at tier 1, with no spread
 - **THEN** the commission is USD 39.94
 
+#### Scenario: default tier
+- **WHEN** the run is started without a fee tier and the market order above fills
+- **THEN** the commission is USD 59.90 (tier 2 taker, the spec's default) and the snapshot
+  records tier 2
+
 #### Scenario: selected tier
 - **WHEN** the run is started with fee tier 4 and the market order above fills
 - **THEN** the commission is USD 34.94 and the snapshot records tier 4
