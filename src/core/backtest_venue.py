@@ -12,6 +12,11 @@ charged IB's spot commission plus a modelled half-spread (FX M4, ``src/core/fx_c
 the margin gate (``src/core/margin_gate.py``) enforces percentage margin. Given the run's bars,
 ``setup_backtest_venues`` also adds the instruments and bars itself, rate sources first, and
 registers the ``FxRateFeeder`` (``src/core/fx_rates.py``) before the caller adds strategies.
+
+A venue listing a spec-built spot crypto pair (``is_crypto``) is refused until crypto M3: the
+M1 spike showed a ``MARGIN`` venue enforces neither cash nor no-short for spot without the gate
+(``openspec/changes/add-crypto-backtesting/design.md`` section 1). M3 replaces the refusal
+with the spot gate, the Kraken fee model and the unlevered USD account.
 """
 
 from __future__ import annotations
@@ -33,6 +38,12 @@ from src.core.futures_costs import futures_snapshot, venue_cost_models
 from src.core.fx_costs import fx_snapshot
 from src.core.fx_rates import BarsAndInstrument, add_fx_data, is_fx, needs_conversion
 from src.core.margin_gate import MarginGate, install_margin_gate
+from src.core.position_sizing import is_crypto
+
+CRYPTO_NOT_ENABLED = (
+    "Spot crypto backtests are not enabled before crypto M3 (spot gate, Kraken fees, "
+    "unlevered USD account); refusing venue {venue}"
+)
 
 
 def _fx_venue(instruments: list[Instrument]) -> bool:
@@ -53,8 +64,14 @@ def add_backtest_venue(
     equity_fee_model: FeeModel,
     cost_multiplier: Decimal | float = Decimal("1"),
 ) -> None:
-    """Add a USD margin, hedging venue for ``instruments`` with the right cost models."""
+    """Add a USD margin, hedging venue for ``instruments`` with the right cost models.
+
+    Raises:
+        ValueError: The venue lists a spot crypto pair (refused until crypto M3).
+    """
     instruments = list(instruments)
+    if any(is_crypto(i) for i in instruments):
+        raise ValueError(CRYPTO_NOT_ENABLED.format(venue=venue))
     scale = Decimal(str(cost_multiplier))
     fee_model, margin_model = venue_cost_models(instruments, equity_fee_model, scale, engine.cache)
     extra: dict = {"margin_model": margin_model} if margin_model is not None else {}

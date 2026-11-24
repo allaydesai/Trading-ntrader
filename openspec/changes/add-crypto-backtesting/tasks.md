@@ -101,7 +101,8 @@ snapshots.
 - [ ] 3.5 Integration, forked (failing first): `tests/integration/core/test_crypto_venue_engine.py`:
       crypto venues get the M1-chosen account; the equity venue `add_venue` call is unchanged; a
       mixed crypto/FX venue is refused; balances exact.
-- [ ] 3.6 Wire into `backtest_venue.add_backtest_venue`; no orchestrator growth.
+- [ ] 3.6 Wire into `backtest_venue.add_backtest_venue`; no orchestrator growth. Remove M1's
+      refusal of crypto venues (`CRYPTO_NOT_ENABLED`, `test_crypto_venue_guard.py`).
 - [ ] 3.7 Unit (failing first): persistence and `mark_to_market` with fractional quantities;
       `_check_against_accounts` holds; `StrategyConfigSnapshot` declares `crypto_pairs`,
       `account_currency` and `periods_per_year`, omitted when unset.
