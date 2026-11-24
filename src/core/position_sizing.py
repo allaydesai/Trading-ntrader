@@ -60,6 +60,16 @@ def is_fx_pair(instrument: object | None) -> bool:
     return isinstance(info, dict) and info.get("asset_class") == "FX"
 
 
+def is_crypto(instrument: object | None) -> bool:
+    """A spot crypto pair built from ``coin_specs.yaml`` (``info.asset_class == "CRYPTO"``).
+
+    Duck-typed like :func:`is_fx_pair`. The Kraken fetch path's fallback ``CurrencyPair``
+    carries no such ``info`` until crypto M7, so it keeps the equity path meanwhile.
+    """
+    info = getattr(instrument, "info", None) or {}
+    return isinstance(info, dict) and info.get("asset_class") == "CRYPTO"
+
+
 def _code(currency: object) -> str:
     return str(getattr(currency, "code", currency))
 

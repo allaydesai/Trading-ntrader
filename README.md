@@ -182,13 +182,14 @@ and any supplementary dividend/split files it discovers alongside the bars.
 | `import ... --dividends-dir <dir> --splits-dir <dir>` | Override auto-discovery of supplementary data |
 | `import --format firstrate --catalog firstrate-futures --asset-class futures <dir>` | Import FirstRate continuous futures (ES, NQ, CL, GC, ZN); see below |
 | `import --format firstrate --catalog firstrate-fx --asset-class fx <dir>` | Import FirstRate spot FX (EURUSD, GBPUSD, USDJPY) as `MID` bars; see below |
+| `import --format firstrate --catalog firstrate-crypto --asset-class crypto <dir>` | Import FirstRate spot crypto (BTC, ETH, SOL) as UTC `LAST` bars; see below |
 
 Key options:
 
 - `--format firstrate` (required) — only FirstRate is supported today
 - `--catalog <name>` (required) — target catalog under `CATALOG_BASE_PATH`
 - `--asset-class` — `etf` (import default) · `stock` · `futures` · `fx` · `crypto` · `index` (`--dry-run` defaults to `stock`)
-- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min`, `30min` (default: all five for `etf`, `futures` and `fx`, `daily` otherwise)
+- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min`, `30min` (default: all five for `etf`, `futures`, `fx` and `crypto`, `daily` otherwise)
 - `--dividends-dir` / `--splits-dir` — explicit supplementary sources (auto-discovered from the source tree when omitted)
 - `--dry-run` — scan and report only; writes nothing to the catalog or DB
 
@@ -233,6 +234,25 @@ uv run python -m src.cli.main import --format firstrate --catalog firstrate-fx \
   --asset-class fx /srv/market-data/raw/fx
 ```
 
+**Spot crypto** (`--asset-class crypto`) also needs no profiles: identity comes from
+`src/services/crypto/coin_specs.yaml`, and the `catalog_instruments` row is `ticker` `BTC`,
+`nautilus_id` `BTC/USD.KRAKEN`, `asset_class` `CRYPTO`, `exchange` `KRAKEN`, `currency` `USD`,
+`tick_size` 0.0001. The source is a flat directory of `{COIN}_full_{1min|5min|30min|1hour|1day}.txt`
+files in the equity row layout but in **UTC** (FirstRate's crypto files are the one UTC series;
+no DST shift is applied, and a daily row dated `D` opens at `D 00:00 UTC`). Bars are trade
+prices, `LAST` (`BTC/USD.KRAKEN-1-HOUR-LAST-EXTERNAL`), streamed like futures, with prices at 4
+decimals (1-minute rows with a 5th decimal are rounded half-even and counted) and volume in coins
+at 8 decimals. Nothing is filled or dropped for an anomaly: zero-volume bars, gaps longer than
+10 bars and the switch to whole-coin volumes (FirstRate rounds volume to whole coins from
+2026-03-21) are reported as warnings. See `docs/agent/crypto-backtesting.md`.
+
+```bash
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-crypto \
+  --asset-class crypto --dry-run /srv/market-data/raw/crypto
+uv run python -m src.cli.main import --format firstrate --catalog firstrate-crypto \
+  --asset-class crypto /srv/market-data/raw/crypto
+```
+
 **Backtesting futures**: run `backtest run` with `--catalog firstrate-futures` (symbol `ES`,
 `NQ`, `CL`, `GC` or `ZN`). Commission is the spec's per-contract rate per side, margin is the
 spec's dollars per contract and an order over free margin is denied, and `sma_crossover` and
@@ -266,6 +286,19 @@ strategies with a `units` setting), `--spread-pips X` overrides the pair's model
 ```bash
 uv run python -m src.cli.main backtest run --symbol EUR/USD --catalog firstrate-fx \
   --timeframe 1-HOUR --start 2024-01-02 --end 2024-02-01 --starting-balance 1000000 --units 50000
+```
+
+**Backtesting spot crypto**: run `backtest run` with `--catalog firstrate-crypto` and
+`--symbol BTC` (also `ETH`, `SOL`). The account is USD, unlevered and long-only: a buy needs
+its full notional in free cash and a sell must close an open long, else the order is denied
+(`MARGIN_EXCEEDS_FREE_BALANCE`, `CRYPTO_SPOT_NO_SHORT`). Fills pay the Kraken Pro spot fee,
+maker for a resting limit and taker otherwise, plus a modelled half-spread, in USD;
+`--fee-tier N` picks the tier (1-17, default 2; part of the run's config hash). Sharpe, Sortino
+and volatility annualise on 365 days. See `docs/agent/crypto-backtesting.md`:
+
+```bash
+uv run python -m src.cli.main backtest run --symbol BTC --catalog firstrate-crypto \
+  --timeframe 1-day --start 2023-01-01 --end 2024-12-31 --starting-balance 100000 --fee-tier 2
 ```
 
 The research MCP's `submit_backtest`/`validate_config` take the same sizes as optional `units`
@@ -309,6 +342,7 @@ fills never pay it. Details: `docs/agent/nautilus.md` (Fill and Fee Models).
 | `backtest run --strategy <type> --symbol <SYM> --catalog <name> ...` | Run against a named FirstRate catalog (resolves the ticker via the import DB; overrides the default `NAUTILUS_PATH`) |
 | `backtest run --symbol ES --catalog firstrate-futures --contracts N ...` | Futures: trade exactly N whole contracts per entry (instead of notional sizing) |
 | `backtest run --symbol EURUSD --catalog firstrate-fx [--units N] [--spread-pips X] ...` | Spot FX on `MID` bars: N base units per entry; override the modelled spread |
+| `backtest run --symbol BTC --catalog firstrate-crypto [--fee-tier N] ...` | Spot crypto on `LAST` bars: unlevered, long-only USD account; Kraken Pro fees at tier N (default 2) |
 | `backtest run <config.yaml>` | Run backtest with YAML config |
 | `backtest run-multi --symbols <A,B> --catalog <name> --start <date> --end <date>` | Run ONE backtest across several ETFs from a named catalog (not persisted yet) |
 | `backtest list` | List available strategies and data |

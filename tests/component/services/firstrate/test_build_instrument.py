@@ -8,6 +8,10 @@ from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.instruments import CurrencyPair, Equity, FuturesContract
 from nautilus_trader.model.objects import Price, Quantity
 
+from src.core.fx_rates import is_fx
+from src.core.position_sizing import is_crypto
+from src.services.crypto.coin_specs import CryptoSpecError, get_coin_spec
+from src.services.crypto.instrument_builder import build_crypto_pair
 from src.services.firstrate.backtest_loader import (
     build_equity,
     build_instrument,
@@ -15,7 +19,8 @@ from src.services.firstrate.backtest_loader import (
 )
 from src.services.futures.contract_specs import FuturesSpecError, get_contract_spec
 from src.services.futures.instrument_builder import build_futures_contract
-from src.services.fx.pair_specs import FxSpecError
+from src.services.fx.instrument_builder import build_fx_pair
+from src.services.fx.pair_specs import FxSpecError, get_pair_spec
 
 pytestmark = pytest.mark.component
 
@@ -147,3 +152,94 @@ async def test_load_from_catalog_builds_currency_pair_for_fx_row():
     assert isinstance(result.instrument, CurrencyPair)
     assert result.instrument.id == bars[0].bar_type.instrument_id
     assert result.instrument.price_precision == 5
+
+
+def test_fx_is_exactly_build_fx_pair():
+    bars = _bars("EUR/USD.IDEALPRO", "1.08431", price_type="MID")
+    got = build_instrument(
+        asset_class="FX", nautilus_id="EUR/USD.IDEALPRO", ticker="EURUSD", bars=bars
+    )
+    want = build_fx_pair(get_pair_spec("EURUSD"), nautilus_id="EUR/USD.IDEALPRO", price_precision=5)
+    assert got.to_dict(got) == want.to_dict(want)
+
+
+@pytest.mark.parametrize("asset_class", ["CRYPTO", "crypto"])
+def test_crypto_builds_currency_pair(asset_class):
+    bars = _bars("BTC/USD.KRAKEN", "78123.4567")
+    got = build_instrument(
+        asset_class=asset_class, nautilus_id="BTC/USD.KRAKEN", ticker="BTC", bars=bars
+    )
+    assert isinstance(got, CurrencyPair)
+    assert str(got.id) == "BTC/USD.KRAKEN"
+    assert (got.base_currency.code, got.quote_currency.code) == ("BTC", "USD")
+    assert got.price_precision == 4
+    assert got.size_precision == 8
+    assert got.id == bars[0].bar_type.instrument_id
+    assert is_crypto(got)
+    assert not is_fx(got)
+
+
+def test_crypto_is_exactly_build_crypto_pair():
+    bars = _bars("BTC/USD.KRAKEN", "78123.4567")
+    got = build_instrument(
+        asset_class="CRYPTO", nautilus_id="BTC/USD.KRAKEN", ticker="BTC", bars=bars
+    )
+    want = build_crypto_pair(get_coin_spec("BTC"), nautilus_id="BTC/USD.KRAKEN", price_precision=4)
+    assert got.to_dict(got) == want.to_dict(want)
+
+
+@pytest.mark.parametrize(("price", "precision"), [("2034.12", 2), ("178.12345", 5)])
+def test_crypto_precision_follows_bars(price, precision):
+    bars = _bars("ETH/USD.KRAKEN", price)
+    got = build_instrument(
+        asset_class="CRYPTO", nautilus_id="ETH/USD.KRAKEN", ticker="ETH", bars=bars
+    )
+    assert got.price_precision == precision
+
+
+def test_crypto_without_bars_uses_spec_precision():
+    got = build_instrument(asset_class="CRYPTO", nautilus_id="SOL/USD.KRAKEN", ticker="SOL")
+    assert isinstance(got, CurrencyPair)
+    assert got.price_precision == 4
+
+
+def test_crypto_unknown_coin_raises():
+    with pytest.raises(CryptoSpecError, match="Unknown crypto coin"):
+        build_instrument(asset_class="CRYPTO", nautilus_id="DOGE/USD.KRAKEN", ticker="DOGE")
+
+
+def test_crypto_id_mismatch_raises():
+    with pytest.raises(ValueError, match="does not match"):
+        build_instrument(asset_class="CRYPTO", nautilus_id="BTC/USD.PAXOS", ticker="BTC")
+
+
+@pytest.mark.asyncio
+async def test_load_from_catalog_builds_currency_pair_for_crypto_row():
+    bars = _bars("BTC/USD.KRAKEN", "78123.4567")
+    row = MagicMock()
+    row.ticker = "BTC"
+    row.nautilus_id = "BTC/USD.KRAKEN"
+    row.asset_class = "CRYPTO"
+    catalog = MagicMock()
+    catalog.bars.return_value = bars
+    catalog_manager = MagicMock()
+    catalog_manager.resolve_catalog.return_value = catalog
+    metadata_service = MagicMock()
+    metadata_service.get_instrument_sync.return_value = row
+
+    result = await load_from_catalog(
+        catalog_name="firstrate-crypto",
+        ticker="BTC",
+        bar_type_spec="1-HOUR-LAST",
+        start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        end=datetime(2024, 1, 3, tzinfo=timezone.utc),
+        catalog_manager=catalog_manager,
+        metadata_service=metadata_service,
+    )
+
+    assert catalog.bars.call_args.kwargs["bar_types"] == ["BTC/USD.KRAKEN-1-HOUR-LAST-EXTERNAL"]
+    assert isinstance(result.instrument, CurrencyPair)
+    assert result.instrument.id == bars[0].bar_type.instrument_id
+    assert result.instrument.size_precision == 8
+    assert is_crypto(result.instrument)
+    assert result.rate_sources == []

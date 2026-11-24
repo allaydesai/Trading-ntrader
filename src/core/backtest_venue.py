@@ -12,6 +12,14 @@ charged IB's spot commission plus a modelled half-spread (FX M4, ``src/core/fx_c
 the margin gate (``src/core/margin_gate.py``) enforces percentage margin. Given the run's bars,
 ``setup_backtest_venues`` also adds the instruments and bars itself, rate sources first, and
 registers the ``FxRateFeeder`` (``src/core/fx_rates.py``) before the caller adds strategies.
+
+A venue listing spec-built spot crypto pairs (``is_crypto``, crypto M3) gets the account the M1
+spike chose (decision C8, ``openspec/changes/add-crypto-backtesting/design.md`` section 1): a
+single-currency USD ``MARGIN`` account at leverage 1 (the pairs' ``margin_init`` is 1, so a
+position locks its full notional), the Kraken Pro spot fee model at the run's tier
+(``src/core/crypto_costs.py``) and the margin gate's spot rules (cash, no short). The gate is
+what enforces cash: Nautilus runs no risk checks for margin accounts. Crypto and FX venues list
+only their own kind; a mix is refused.
 """
 
 from __future__ import annotations
@@ -28,19 +36,24 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Money
 
+from src.core.crypto_costs import crypto_snapshot
 from src.core.fill_models import GapAwareFillModel, check_bar_alignment, gap_aware_venue_options
 from src.core.futures_costs import futures_snapshot, venue_cost_models
 from src.core.fx_costs import fx_snapshot
 from src.core.fx_rates import BarsAndInstrument, add_fx_data, is_fx, needs_conversion
 from src.core.margin_gate import MarginGate, install_margin_gate
+from src.core.position_sizing import is_crypto
 
 
-def _fx_venue(instruments: list[Instrument]) -> bool:
-    """True for a venue of spot FX pairs only; a mix with other instruments is refused."""
-    fx = [i for i in instruments if is_fx(i)]
-    if fx and len(fx) != len(instruments):
-        raise ValueError("A venue cannot list spot FX pairs together with other instruments")
-    return bool(fx)
+def _single_currency_venue(instruments: list[Instrument]) -> bool:
+    """True for a venue of spot FX or spot crypto pairs only; a mix with others is refused."""
+    for kind, member in (("spot FX", is_fx), ("spot crypto", is_crypto)):
+        matching = [i for i in instruments if member(i)]
+        if matching and len(matching) != len(instruments):
+            raise ValueError(f"A venue cannot list {kind} pairs together with other instruments")
+        if matching:
+            return True
+    return False
 
 
 def add_backtest_venue(
@@ -53,15 +66,19 @@ def add_backtest_venue(
     equity_fee_model: FeeModel,
     cost_multiplier: Decimal | float = Decimal("1"),
 ) -> None:
-    """Add a USD margin, hedging venue for ``instruments`` with the right cost models."""
+    """Add a USD margin, hedging venue for ``instruments`` with the right cost models.
+
+    Raises:
+        ValueError: The venue mixes spot FX or spot crypto pairs with other instruments.
+    """
     instruments = list(instruments)
     scale = Decimal(str(cost_multiplier))
     fee_model, margin_model = venue_cost_models(instruments, equity_fee_model, scale, engine.cache)
     extra: dict = {"margin_model": margin_model} if margin_model is not None else {}
-    if _fx_venue(instruments):  # every balance change (P&L, commission, margin) in USD
+    if _single_currency_venue(instruments):  # every balance change (P&L, fees, margin) in USD
         extra["base_currency"] = USD
-        # margin_init is the spec's % of notional; Nautilus' margin account default leverage
-        # (10) would divide it by ten (3% -> 0.3%)
+        # margin_init is the spec's % of notional (FX 3%, spot crypto 100%); Nautilus' margin
+        # account default leverage (10) would divide it by ten (3% -> 0.3%, 100% -> 10%)
         extra["default_leverage"] = Decimal(1)
     extra.update(gap_aware_venue_options(fill_model))  # next-bar execution, gap-aware only
     engine.add_venue(
@@ -86,7 +103,7 @@ def setup_backtest_venues(
     data: Sequence[BarsAndInstrument] | None = None,
     rate_sources: Sequence[BarsAndInstrument] = (),
 ) -> MarginGate | None:
-    """Add every venue, the margin gate once if any instrument is a future or FX, and the data.
+    """Add every venue, the margin gate once for futures, FX or crypto, and the data.
 
     With ``data`` (each traded instrument and its bars) the instruments and bars are added here
     through :func:`src.core.fx_rates.add_fx_data`: conversion-only ``rate_sources`` (GBPUSD for
@@ -122,10 +139,15 @@ def setup_backtest_venues(
 
 
 def cost_snapshot(cache) -> dict[str, Any]:
-    """The ``config_snapshot`` keys recording a run's cost terms: futures and FX; ``{}`` else.
+    """The ``config_snapshot`` keys recording a run's cost terms: futures, FX, crypto; or ``{}``.
 
-    Read from the run's ``cache``: its instruments, and the FX cost totals the fee model kept
-    there (see :func:`src.core.fx_costs.fx_snapshot`).
+    Read from the run's ``cache``: its instruments, and the FX and crypto cost totals the fee
+    models kept there (:func:`src.core.fx_costs.fx_snapshot`,
+    :func:`src.core.crypto_costs.crypto_snapshot`).
     """
     instruments = cache.instruments()
-    return {**futures_snapshot(instruments), **fx_snapshot(instruments, cache)}
+    return {
+        **futures_snapshot(instruments),
+        **fx_snapshot(instruments, cache),
+        **crypto_snapshot(instruments, cache),
+    }

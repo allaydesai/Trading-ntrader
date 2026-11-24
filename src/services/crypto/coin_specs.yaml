@@ -1,0 +1,172 @@
+# Hand-curated spot crypto coin specs (crypto M1).
+#
+# schema_version: the shape of this file; bump it (and the loader) when fields change.
+# specs_as_of:    when the values below were last reviewed.
+#
+# Keys are the FirstRate ticker (BTC), which is also the base currency. Instruments are built as
+# Nautilus CurrencyPairs with id {BASE}/USD.KRAKEN (decision C2), the id
+# KrakenPairMapper.to_nautilus_id already produces for the Kraken data path.
+#
+# price_precision: decimals of the data (FirstRate 1h/1d maximum, measured 2026-11-23: 4 for
+#                  all three coins). The backtest price increment is 10^-this (the data grid);
+#                  1-minute 5-decimal rows are rounded on import (decision C14).
+# size_precision / size_increment: fractional coin units (1e-8, decision C13).
+# typical_spread_bps: modelled full bid/ask spread on Kraken's USD book, charged as half per
+#                  side (decision C4, M3).
+# kraken:          the Kraken symbols, minimums and tick, kept for sizing (M4) and live orders.
+#                  `rest` is what KrakenPairMapper.to_kraken_rest returns today; `altname` is
+#                  the instrument's raw_symbol.
+# data:            "firstrate" when bars exist on the VPS, "none" for a spec-only coin.
+#
+# PROVENANCE. Every value in SOURCED_FIELDS has a `sources` entry: status VERIFIED (checked) or
+# UNVERIFIED (a best-known public figure). The fee tier rates are VERIFIED against the Kraken Pro
+# CA fee page (2026-11-24). The Kraken pair terms (altname, minimums, tick, discounted-pair
+# membership) and the spread are UNVERIFIED: Allay confirms them (tasks.md 3.9) before M3, which
+# first charges them, merges. Data precision is measured from the FirstRate files.
+#
+# Decimal values are quoted so YAML never turns them into floats.
+schema_version: 1
+specs_as_of: "2026-11-24"
+
+fee_schedule:
+  venue: KRAKEN
+  product: Kraken Pro spot ("Spot & Futures" tier table, spot maker/taker columns)
+  source: https://www.kraken.com/ca/pro/fees
+  as_of: "2026-11-24"
+  status: VERIFIED          # the tier rates and thresholds, as published
+  default_tier: 2           # decision C21: Allay's Kraken Pro tier (0.30% maker / 0.60% taker)
+  discounted_pair_bps_off: "2"   # "-0.02% off the selected spot pairs", all tiers
+  min_fee_usd: "0"          # the page shows no minimum fee
+  fee_currency: USD         # the model charges the quote; the page does not say
+  # Tiers qualify on 30-day spot volume OR 30-day futures volume OR assets on platform (USD).
+  # Thresholds are informational: a run uses one fixed tier, it never re-tiers (C21).
+  # assets_usd is null where the page shows no assets threshold (tiers 1-2).
+  tiers:
+    1:  {maker: "0.40", taker: "0.80", spot_30d_usd: "0", futures_30d_usd: "0", assets_usd: null}
+    2:  {maker: "0.30", taker: "0.60", spot_30d_usd: "2500", futures_30d_usd: "5000000", assets_usd: null}
+    3:  {maker: "0.22", taker: "0.38", spot_30d_usd: "10000", futures_30d_usd: "10000000", assets_usd: "20000"}
+    4:  {maker: "0.20", taker: "0.35", spot_30d_usd: "25000", futures_30d_usd: "15000000", assets_usd: "50000"}
+    5:  {maker: "0.15", taker: "0.30", spot_30d_usd: "50000", futures_30d_usd: "25000000", assets_usd: "100000"}
+    6:  {maker: "0.12", taker: "0.25", spot_30d_usd: "100000", futures_30d_usd: "40000000", assets_usd: "200000"}
+    7:  {maker: "0.10", taker: "0.22", spot_30d_usd: "250000", futures_30d_usd: "50000000", assets_usd: "400000"}
+    8:  {maker: "0.08", taker: "0.20", spot_30d_usd: "500000", futures_30d_usd: "75000000", assets_usd: "600000"}
+    9:  {maker: "0.06", taker: "0.18", spot_30d_usd: "1000000", futures_30d_usd: "100000000", assets_usd: "1000000"}
+    10: {maker: "0.04", taker: "0.15", spot_30d_usd: "2500000", futures_30d_usd: "150000000", assets_usd: "2500000"}
+    11: {maker: "0.02", taker: "0.12", spot_30d_usd: "5000000", futures_30d_usd: "250000000", assets_usd: "5000000"}
+    12: {maker: "0.00", taker: "0.10", spot_30d_usd: "10000000", futures_30d_usd: "300000000", assets_usd: "10000000"}
+    13: {maker: "0.00", taker: "0.09", spot_30d_usd: "50000000", futures_30d_usd: "400000000", assets_usd: "20000000"}
+    14: {maker: "0.00", taker: "0.08", spot_30d_usd: "100000000", futures_30d_usd: "500000000", assets_usd: "25000000"}
+    15: {maker: "0.00", taker: "0.07", spot_30d_usd: "250000000", futures_30d_usd: "1000000000", assets_usd: "50000000"}
+    16: {maker: "0.00", taker: "0.06", spot_30d_usd: "400000000", futures_30d_usd: "2000000000", assets_usd: "80000000"}
+    17: {maker: "0.00", taker: "0.05", spot_30d_usd: "500000000", futures_30d_usd: "5000000000", assets_usd: "100000000"}
+  sources:
+    default_tier:
+      status: VERIFIED
+      source: >-
+        Decision C21 confirmed by Allay from his Kraken account's fee screen: Kraken Pro spot
+        tier 2 (0.30% maker / 0.60% taker).
+      as_of: "2026-11-24"
+    discounted_pair_bps_off:
+      status: VERIFIED
+      source: >-
+        Kraken Pro CA fee page: "-0.02% off the selected spot pairs below. Applies across all
+        Kraken Pro fee tiers." (634 pairs; the list is not readable without a browser.)
+      as_of: "2026-11-24"
+    min_fee_usd:
+      status: VERIFIED
+      source: Kraken Pro CA fee page shows no minimum fee for spot.
+      as_of: "2026-11-24"
+    fee_currency:
+      status: UNVERIFIED
+      source: >-
+        The fee page does not say which currency spot fees are charged in. The model charges
+        USD (the quote), which gives the same USD P&L either way (design section 4).
+      as_of: "2026-11-24"
+
+coins:
+  BTC:
+    base: BTC
+    quote: USD
+    data: firstrate
+    price_precision: 4
+    size_precision: 8
+    size_increment: "0.00000001"
+    typical_spread_bps: "2"
+    kraken:
+      pair: BTC/USD
+      rest: XXBTZUSD
+      altname: XBTUSD
+      min_order_base: "0.00005"
+      min_order_usd: "0.5"
+      tick_size: "0.1"
+      discounted_pair: false
+    sources: &coin_sources
+      price_precision:
+        status: VERIFIED
+        source: >-
+          FirstRate crypto files under /srv/market-data/raw/crypto, widest significant
+          precision at 1h/1d (design.md section 0).
+        as_of: "2026-11-23"
+      size_increment:
+        status: VERIFIED
+        source: Design decision C13 (fractional coin units at 1e-8, Kraken lot_decimals 8).
+        as_of: "2026-11-24"
+      typical_spread_bps:
+        status: UNVERIFIED
+        source: Modelled full spread on Kraken's USD book (decision C4); not measured.
+        as_of: "2026-11-24"
+      kraken_rest:
+        status: UNVERIFIED
+        source: >-
+          KrakenPairMapper.to_kraken_rest output today (SOL maps to SOLZUSD; Kraken's own name
+          may be SOLUSD). Checked against the AssetPairs API in M7.
+        as_of: "2026-11-24"
+      kraken_altname: &kraken_public
+        status: UNVERIFIED
+        source: >-
+          Best-known public Kraken AssetPairs figure; not checked against the live
+          AssetPairs endpoint.
+        as_of: "2026-11-24"
+      kraken_min_order_base: *kraken_public
+      kraken_min_order_usd: *kraken_public
+      kraken_tick_size: *kraken_public
+      kraken_discounted_pair:
+        status: UNVERIFIED
+        source: >-
+          Decision C23 (provisional): assumed not on the 0.02%-off "selected spot pairs" list
+          until confirmed (the 634-pair list is not readable without a browser).
+        as_of: "2026-11-24"
+  ETH:
+    base: ETH
+    quote: USD
+    data: firstrate
+    price_precision: 4
+    size_precision: 8
+    size_increment: "0.00000001"
+    typical_spread_bps: "3"
+    kraken:
+      pair: ETH/USD
+      rest: XETHZUSD
+      altname: ETHUSD
+      min_order_base: "0.002"
+      min_order_usd: "0.5"
+      tick_size: "0.01"
+      discounted_pair: false
+    sources: *coin_sources
+  SOL:
+    base: SOL
+    quote: USD
+    data: firstrate
+    price_precision: 4
+    size_precision: 8
+    size_increment: "0.00000001"
+    typical_spread_bps: "5"
+    kraken:
+      pair: SOL/USD
+      rest: SOLZUSD
+      altname: SOLUSD
+      min_order_base: "0.02"
+      min_order_usd: "0.5"
+      tick_size: "0.01"
+      discounted_pair: false
+    sources: *coin_sources

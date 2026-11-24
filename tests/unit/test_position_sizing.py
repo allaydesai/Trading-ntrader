@@ -574,3 +574,31 @@ class TestFxSizingHelpers:
         assert not is_fx_pair(SimpleNamespace(info={"asset_class": "CRYPTO"}))
         assert not is_fx_pair(SimpleNamespace(size_precision=0))
         assert not is_fx_pair(None)
+
+
+@pytest.mark.unit
+class TestIsCrypto:
+    """Crypto M1 (task 1.3): the one predicate later milestones key crypto behaviour on."""
+
+    def test_true_only_for_the_crypto_asset_class(self):
+        from types import SimpleNamespace
+
+        from src.core.position_sizing import is_crypto
+
+        assert is_crypto(SimpleNamespace(info={"asset_class": "CRYPTO"}))
+        assert not is_crypto(_fx("EUR", "USD"))
+        assert not is_crypto(SimpleNamespace(info={"asset_class": "crypto"}))
+        assert not is_crypto(SimpleNamespace(info={}))
+        assert not is_crypto(SimpleNamespace(info=None))
+        assert not is_crypto(SimpleNamespace(info="CRYPTO"))
+        assert not is_crypto(SimpleNamespace(size_precision=8))
+        assert not is_crypto(None)
+
+    def test_fx_predicate_stays_false_for_crypto(self):
+        from types import SimpleNamespace
+
+        from src.core.position_sizing import is_crypto, is_fx_pair
+
+        crypto = SimpleNamespace(info={"asset_class": "CRYPTO"})
+        assert is_crypto(crypto)
+        assert not is_fx_pair(crypto)

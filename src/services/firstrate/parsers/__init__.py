@@ -2,7 +2,8 @@
 
 Importing this package auto-registers all bundled parsers so that
 ``get_parser(AssetClass.ETF)``, ``get_parser(AssetClass.STOCK)``,
-``get_parser(AssetClass.FUTURES)`` and ``get_parser(AssetClass.FX)`` work immediately.
+``get_parser(AssetClass.FUTURES)``, ``get_parser(AssetClass.FX)`` and
+``get_parser(AssetClass.CRYPTO)`` work immediately.
 """
 
 from src.services.firstrate.parsers.base import (
@@ -13,12 +14,14 @@ from src.services.firstrate.parsers.base import (
 )
 
 # Import parser modules to trigger their @register_parser decorators
+from src.services.firstrate.parsers.firstrate_crypto_parser import FirstRateCryptoParser
 from src.services.firstrate.parsers.firstrate_csv_parser import FirstRateCsvParser
 from src.services.firstrate.parsers.firstrate_futures_parser import FirstRateFuturesParser
 from src.services.firstrate.parsers.firstrate_fx_parser import FirstRateFxParser
 
 __all__ = [
     "BaseParser",
+    "FirstRateCryptoParser",
     "FirstRateCsvParser",
     "FirstRateFuturesParser",
     "FirstRateFxParser",
