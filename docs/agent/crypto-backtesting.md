@@ -1,12 +1,14 @@
 # Crypto backtesting: coins, instruments, account model
 
 Spot crypto on Kraken, planned in `openspec/changes/add-crypto-backtesting/` (milestones
-M1-M7; decisions C1-C23 in `design.md` section 13). **Status: M1 and M2 implemented** (coin
+M1-M7; decisions C1-C23 in `design.md` section 13). **Status: M1-M3 implemented** (coin
 specs, instruments, catalog dispatch, engine spike; the FirstRate importer and the
-`firstrate-crypto` catalog, below). Nothing yet charges Kraken fees or enforces spot rules (M3), sizes fractionally (M4) or reports crypto (M5), so
-**crypto backtests are refused before M3 merges**: `add_backtest_venue` raises for any venue
-listing a spec-built crypto pair (the spike below shows why), and M3 replaces the refusal with
-the gate, fees and the unlevered USD account.
+`firstrate-crypto` catalog; the account, Kraken fees and the spot gate, below). Crypto
+backtests run (`backtest run --symbol BTC --catalog firstrate-crypto`), charged at the Kraken
+Pro tier and held to spot rules. Not yet: floor-to-increment sizing (M4; `sma_crossover`
+already sizes BTC fractionally through its `size_precision` branch, which rounds instead of
+flooring), crypto reporting (M5), the `BTC/USD` symbol forms and `--spread-bps` (M5), strategy
+ports (M6) and the Kraken data path (M7).
 
 ## Ids and instruments
 
@@ -71,6 +73,54 @@ discounted-pair rebate and the absence of a minimum fee are VERIFIED against
 <https://www.kraken.com/ca/pro/fees> (read 2026-11-24). The default tier (C21) is **tier 2**
 (0.30% maker / 0.60% taker), confirmed by Allay from his Kraken fee screen on 2026-11-24.
 
+## Account, costs and the spot gate (M3)
+
+- **Account** (`src/core/backtest_venue.py`): a venue listing crypto pairs is `MARGIN`,
+  `HEDGING`, `base_currency=USD`, `default_leverage=1`; the pairs' `margin_init` is 1, so an
+  open position locks its full notional. A venue mixing crypto with FX or equities is refused.
+- **Fees** (`src/core/crypto_costs.py`, `CryptoCommissionModel`): per fill,
+  `rate x qty x price`, the tier's **maker** rate when Nautilus marks the fill `MAKER` (an order
+  that rested on the book) and **taker** otherwise (market, stop, marketable limit); a
+  discounted pair pays 2 bp less (floored at 0); no minimum. Plus a modelled half-spread,
+  `qty x price x typical_spread_bps / 2 / 10,000`. Both are scaled by cost stress, then rounded
+  to cents once per order and liquidity side (the FX model's `OrderCharges`), so split fills
+  add no rounding. USD 9,984 of BTC: tier 2 (default) 59.90 taker / 29.95 maker, tier 1
+  79.87 / 39.94, tier 4 34.94 taker, plus 1.00 spread.
+- **Tier** (C21): one per run, the schedule's `default_tier` (2) unless
+  `backtest run --fee-tier N` (1-17, else exit 2; refused for a symbol with no coin spec). The
+  tier rides on the pair as `info["fee_tier"]` and is part of the run's config hash only when
+  set.
+- **Gate** (`src/core/margin_gate.py`, `CryptoSpotRequirement`): an entry needs its full USD
+  notional free (limit or trigger price, else the last price), else
+  `MARGIN_EXCEEDS_FREE_BALANCE: 2 BTC/USD.KRAKEN coin(s) need 156000.00 USD initial margin,
+  free=2152.42 USD`. A parentless `SELL`, reduce-only included, must close an open long by
+  position id and not oversell it: its size less every working sell on it, a bracket's stop
+  and take-profit counted once. Else `CRYPTO_SPOT_NO_SHORT: SELL 0.10000000 BTC/USD.KRAKEN
+  would go short; ...`. So a strategy must cancel a resting sell before closing the long at
+  market (otherwise the resting sell would fill later as a short). Bracket legs pass at
+  submission; crypto sells hold no margin and their reprices are never margined;
+  quantity-raising modifies are refused `CRYPTO_QTY_INCREASE_NOT_SUPPORTED`.
+- **Metrics** (C20): mark-to-market Sharpe, Sortino and volatility annualise on 365 for a run
+  with a crypto pair (252 otherwise). If mark-to-market is unavailable, the realised fallback
+  is Nautilus' own 252-day statistic, unchanged.
+- **Snapshot**: `account_currency` `USD`, `fee_tier`, `periods_per_year` 365 and
+  `crypto_pairs[id]`: tier rates, spread, precisions, discounted flag, fee-schedule source and
+  as-of, UNVERIFIED fields and `costs_usd` (`commission`, `commission_maker`,
+  `commission_taker`, `spread`).
+
+Pinned in `tests/component/core/test_crypto_costs.py`, `test_margin_gate_crypto.py` and
+`tests/integration/core/test_crypto_venue_engine.py` (forked).
+
+**Smoke (2026-11-24, real `firstrate-crypto` bars).** `backtest run --symbol BTC --catalog
+firstrate-crypto --timeframe 1-day --start 2023-01-01 --end 2024-12-31 --starting-balance
+100000` (`sma_crossover`): 18 trades, all taker at tier 2; commission USD 2,222.95 plus 37.05
+spread, equal to the trade rows' 2,260.00; final balance 108,230.08; mark-to-market Sharpe 0.93
+on 365 days; the strategy's first cross-down `SELL` (0.46220418 BTC, no position) was denied
+`CRYPTO_SPOT_NO_SHORT`. On 1-hour bars (2024-03-01 to 03-07) a resting limit buy of 0.5 BTC
+filled as maker (91.40 + 3.05 spread at tier 2; 60.93 at tier 4), the market close as taker
+(185.47 + 3.09; 108.19 at tier 4), a 5 BTC market buy was denied (USD 306,259.20 needed,
+69,533.10 free) and a naked 0.1 BTC sell was denied.
+
 ## Account model: the M1 spike (decision C8)
 
 `tests/integration/core/test_crypto_engine_acceptance.py` (run `--forked`) settled it:
@@ -86,7 +136,7 @@ discounted-pair rebate and the absence of a minimum fee are VERIFIED against
   orders unchecked in a bar-only run, allows shorts, stops the run on a negative balance and
   leaves the books inconsistent.
 - Under `HEDGING` a `SELL` without a position id is a new short, so M3's rule allows a
-  parentless `SELL` only against an open long it does not oversell.
+  parentless `SELL` only against an open long it does not oversell (shipped in M3, above).
 - Bar volume never caps fill size; the part beyond the bar volume fills one increment
   (0.0001) worse. Bar volume must carry precision 8 (the size precision) or the run stops.
 

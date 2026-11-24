@@ -7,8 +7,9 @@ and Kraken-fetched runs name the same instrument. ``raw_symbol`` is the Kraken a
 which stays in ``info`` for live orders. Sizes are fractional coin units (1e-8).
 
 Spot is unlevered: margin fractions are 1 (100% of notional, decision C8). Instrument fees are
-zero because commission comes from the venue fee model (M3), charged at a run's fee tier; the
-tier is a run parameter, so ``info`` records only the schedule's source and date.
+zero because commission comes from the venue fee model (M3, ``src/core/crypto_costs.py``),
+charged at a run's fee tier. The tier is a run parameter: ``info`` records the schedule's source,
+date and default tier, plus ``fee_tier`` only when a run overrides the default (``--fee-tier``).
 See ``openspec/changes/add-crypto-backtesting/design.md`` section 1.
 """
 
@@ -76,6 +77,7 @@ def build_crypto_pair(
     nautilus_id: str | None = None,
     price_precision: int | None = None,
     fee_schedule: FeeSchedule | None = None,
+    fee_tier: int | None = None,
 ) -> CurrencyPair:
     """Build the spot ``CurrencyPair`` for ``spec``.
 
@@ -85,11 +87,20 @@ def build_crypto_pair(
         price_precision: Override (e.g. inferred from bars; Nautilus rejects a bar whose
             precision differs from the instrument's); defaults to the spec's.
         fee_schedule: Schedule recorded in ``info``; defaults to the shipped one.
+        fee_tier: The run's Kraken fee tier (``info["fee_tier"]``); ``None`` keeps the
+            schedule's default and records no override.
+
+    Raises:
+        CryptoSpecError: ``fee_tier`` is not a tier of the schedule.
     """
     precision = spec.price_precision if price_precision is None else price_precision
     if precision < 0:
         raise ValueError(f"price_precision must be >= 0, got {precision}")
     schedule = fee_schedule if fee_schedule is not None else get_fee_schedule()
+    info = _info(spec, schedule)
+    if fee_tier is not None:
+        schedule.tier(fee_tier)  # raises on a tier the schedule does not have
+        info["fee_tier"] = fee_tier
     return CurrencyPair(
         instrument_id=_resolve_id(spec, nautilus_id),
         raw_symbol=Symbol(spec.kraken.altname),
@@ -112,5 +123,5 @@ def build_crypto_pair(
         taker_fee=Decimal(0),
         ts_event=0,
         ts_init=0,
-        info=_info(spec, schedule),
+        info=info,
     )

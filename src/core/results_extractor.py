@@ -49,10 +49,19 @@ from nautilus_trader.model.identifiers import InstrumentId, Venue
 from nautilus_trader.model.objects import Currency, Money
 
 from src.config import get_settings
+from src.core.crypto_costs import CRYPTO_PERIODS_PER_YEAR
 from src.core.fx_rates import is_fx, needs_conversion
 from src.core.fx_results import require_fx_rates, settle_fx_results, usd_pnl, usd_realised_pnls
-from src.core.mark_to_market import Fill, RiskMetrics, daily_equity, fx_daily_equity, risk_metrics
+from src.core.mark_to_market import (
+    TRADING_DAYS,
+    Fill,
+    RiskMetrics,
+    daily_equity,
+    fx_daily_equity,
+    risk_metrics,
+)
 from src.core.metrics import net_profit_factor
+from src.core.position_sizing import is_crypto
 from src.models.backtest_result import BacktestResult
 from src.models.position_reconciliation import SYNTHETIC_STRATEGY_IDS
 
@@ -606,10 +615,17 @@ def mark_to_market(
         if equity.empty:
             return None
         _check_against_accounts(engine, fills, venues, equity, capital)
-        return MarkToMarket(equity, risk_metrics(equity, capital))
+        periods = _periods_per_year(engine, bars_by_instrument)
+        return MarkToMarket(equity, risk_metrics(equity, capital, periods))
     except Exception as e:
         logger.warning("Mark-to-market equity unavailable; using realised returns", reason=str(e))
         return None
+
+
+def _periods_per_year(engine: BacktestEngine, instrument_ids: Iterable[InstrumentId]) -> int:
+    """365 when the run trades spot crypto (every calendar day, decision C20), else 252."""
+    crypto = any(is_crypto(engine.cache.instrument(i)) for i in instrument_ids)
+    return CRYPTO_PERIODS_PER_YEAR if crypto else TRADING_DAYS
 
 
 def _equity(

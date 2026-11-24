@@ -552,6 +552,7 @@ class TestBacktestCommands:
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
         mock_request.catalog_name = None
+        mock_request.crypto_fee_tier = None  # a real request defaults to no --fee-tier
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -712,6 +713,7 @@ class TestPersistFlag:
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
         mock_request.catalog_name = None
+        mock_request.crypto_fee_tier = None  # a real request defaults to no --fee-tier
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -781,6 +783,7 @@ class TestPersistFlag:
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
         mock_request.catalog_name = None
+        mock_request.crypto_fee_tier = None  # a real request defaults to no --fee-tier
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -849,6 +852,7 @@ class TestPersistFlag:
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
         mock_request.catalog_name = None
+        mock_request.crypto_fee_tier = None  # a real request defaults to no --fee-tier
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)

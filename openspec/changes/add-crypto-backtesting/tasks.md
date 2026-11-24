@@ -87,35 +87,46 @@ commission equal to a hand calculation at tier 1 (taker and maker) and at a chos
 denied with the pinned reasons. Equity, futures and FX runs produce byte-identical results and
 snapshots.
 
-- [ ] 3.1 Component (failing first): `tests/component/core/test_crypto_costs.py`: USD 9,984 of
+- [x] 3.1 Component (failing first): `tests/component/core/test_crypto_costs.py`: USD 9,984 of
       BTC costs 79.87 taker / 39.94 maker at tier 1, 59.90 taker / 29.95 maker at the
       default tier 2 and 34.94 taker at tier 4; maker only for a
       fill whose `liquidity_side` is `MAKER` (a resting limit), taker for market, stop and
       marketable-limit fills; no minimum (USD 10 at tier 1 taker costs 0.08); split fills
       sum to the single-fill charge within a cent; half-spread component; cost-stress
       scaling; totals per instrument and per liquidity side.
-- [ ] 3.2 Implement `src/core/crypto_costs.py` (`CryptoCommissionModel`; per-order cent rounding
+      Result: cost stress scales before cent rounding (the FX rule), so 2x at tier 2 is
+      119.81 + 2.00, not 119.80.
+- [x] 3.2 Implement `src/core/crypto_costs.py` (`CryptoCommissionModel`; per-order cent rounding
       shared with the FX model) and route crypto venues in `venue_cost_models`.
-- [ ] 3.3 Component (failing first): `tests/component/core/test_margin_gate_crypto.py`:
+- [x] 3.3 Component (failing first): `tests/component/core/test_margin_gate_crypto.py`:
       `CryptoSpotRequirement` = qty x price; over-allocation denied
       `MARGIN_EXCEEDS_FREE_BALANCE`; a SELL with no position, or a SELL larger than the long, denied
       `CRYPTO_SPOT_NO_SHORT`; bracket exits allowed; all futures/FX gate tests unchanged.
-- [ ] 3.4 Implement the requirement and the short rule in `margin_gate.py` (no growth past the
+- [x] 3.4 Implement the requirement and the short rule in `margin_gate.py` (no growth past the
       size caps; split first if needed).
-- [ ] 3.5 Integration, forked (failing first): `tests/integration/core/test_crypto_venue_engine.py`:
+- [x] 3.5 Integration, forked (failing first): `tests/integration/core/test_crypto_venue_engine.py`:
       crypto venues get the M1-chosen account; the equity venue `add_venue` call is unchanged; a
       mixed crypto/FX venue is refused; balances exact.
-- [ ] 3.6 Wire into `backtest_venue.add_backtest_venue`; no orchestrator growth. Remove M1's
+- [x] 3.6 Wire into `backtest_venue.add_backtest_venue`; no orchestrator growth. Remove M1's
       refusal of crypto venues (`CRYPTO_NOT_ENABLED`, `test_crypto_venue_guard.py`).
-- [ ] 3.7 Unit (failing first): persistence and `mark_to_market` with fractional quantities;
+- [x] 3.7 Unit (failing first): persistence and `mark_to_market` with fractional quantities;
       `_check_against_accounts` holds; `StrategyConfigSnapshot` declares `crypto_pairs`,
       `account_currency` and `periods_per_year`, omitted when unset.
-- [ ] 3.8 Unit (failing first): `risk_metrics` annualises on 365 for a crypto run and 252
+- [x] 3.8 Unit (failing first): `risk_metrics` annualises on 365 for a crypto run and 252
       otherwise (decision C20); implement.
 - [ ] 3.9 Manual: the default tier is confirmed (tier 2, Allay's Kraken fee screen,
       2026-11-24, recorded in `coin_specs.yaml` and design C21); Allay confirms whether
       BTC/ETH/SOL are on the 0.02% discounted-pair list, and the spread defaults; record the
       answers and date in `coin_specs.yaml` and the design.
+      Open (2026-11-24): the tier is confirmed; discounted-pair membership (C23) and the
+      spread defaults (C4) still wait on Allay, so they ship as the conservative defaults
+      (`discounted_pair: false`, 2/3/5 bp), UNVERIFIED in the spec file and the snapshot.
+- [x] 3.10 Component (failing first, moved from 5.3 at Allay's request):
+      `tests/component/cli/test_backtest_crypto_options.py`: `backtest run --fee-tier N`
+      reaches `BacktestRequest.crypto_fee_tier` (config hash only when set) and the pair's
+      `info["fee_tier"]`; a tier outside 1..17 or a symbol with no coin spec exits 2.
+      Implemented in `src/cli/commands/_crypto_options.py`; `run_backtest` and
+      `BacktestRequest` grow one line each (baseline entries bumped with the reason).
 
 ## M4. Fractional sizing
 
@@ -142,7 +153,7 @@ byte-identical (goldens captured before the change).
 - [ ] 5.1 Unit (failing first): `src/services/crypto/returns.py` figures (design section 10).
 - [ ] 5.2 Implement `returns.py` and `display.py`.
 - [ ] 5.3 Unit/component (failing first): CLI blocks and `--symbol BTC|BTCUSD|BTC/USD`
-      resolution, `--timeframe` to `-LAST`, `--fee-tier N` (1-17, else exit 2), `--spread-bps`.
+      resolution, `--timeframe` to `-LAST`, `--spread-bps` (`--fee-tier N` landed in M3, 3.10).
 - [ ] 5.4 Implement the CLI changes and `price_type_for(CRYPTO)`.
 - [ ] 5.5 Component (failing first): MCP `get_run`/`compare_runs`/`export_results` crypto object
       (additive; existing payloads unchanged).

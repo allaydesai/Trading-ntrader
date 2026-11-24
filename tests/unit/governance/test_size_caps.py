@@ -100,7 +100,8 @@ SIZE_BASELINE: dict[str, int] = {
     "src/api/ui/explorer.py::chart_panel_fragment": 89,
     "src/cli/commands/_backtest_helpers.py::_load_catalog_data": 74,
     "src/cli/commands/_backtest_helpers.py::_resolve_cli_mode": 59,
-    "src/cli/commands/backtest.py::run_backtest": 173,
+    # Crypto M3, 173 -> 174: `--fee-tier` is passed on to resolve_backtest_request.
+    "src/cli/commands/backtest.py::run_backtest": 174,
     "src/cli/commands/backtest.py::run_multi_backtest": 93,
     "src/cli/commands/catalog.py::restamp_venues": 63,
     "src/cli/commands/compare.py::_compare_backtests_sync": 60,
@@ -192,7 +193,8 @@ SIZE_BASELINE: dict[str, int] = {
     # Phase 2 pre-work, 176 -> 177: `fill_seed` makes the fill model's draws part of the request.
     # MCP phase 4, 177 -> 178: `cost_multiplier` (cost stress) is part of the request.
     # Riptide, 178 -> 180: `fill_model` (gap-aware opt-in) is a field read from YAML.
-    "src/models/backtest_request.py::BacktestRequest": 179,
+    # Crypto M3, 179 -> 180: `crypto_fee_tier` (--fee-tier) is part of the request.
+    "src/models/backtest_request.py::BacktestRequest": 180,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
     # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
     "src/services/backtest_persistence.py::BacktestPersistenceService": 260,

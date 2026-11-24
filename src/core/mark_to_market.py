@@ -184,11 +184,15 @@ def _finite(value: float) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
-def risk_metrics(equity: pd.Series, starting_balance: float) -> RiskMetrics:
+def risk_metrics(
+    equity: pd.Series, starting_balance: float, periods_per_year: int = TRADING_DAYS
+) -> RiskMetrics:
     """Max drawdown, Sharpe, Sortino and volatility of a daily equity series.
 
     Returns are day-over-day, the first measured from ``starting_balance``, and
-    annualised on 252 days with the same formulas as Nautilus' statistics.
+    annualised on ``periods_per_year`` days (252 trading days; 365 for spot crypto, which
+    has a point every calendar day, decision C20) with the same formulas as Nautilus'
+    statistics.
     """
     if equity.empty or starting_balance <= 0:
         return RiskMetrics()
@@ -201,7 +205,7 @@ def risk_metrics(equity: pd.Series, starting_balance: float) -> RiskMetrics:
     if not math.isfinite(deviation) or deviation == 0.0:
         return RiskMetrics(max_drawdown=max_drawdown)
     mean = float(returns.mean())
-    annual = math.sqrt(TRADING_DAYS)
+    annual = math.sqrt(periods_per_year)
     downside = math.sqrt(float((returns[returns < 0] ** 2).sum()) / len(returns))
     return RiskMetrics(
         max_drawdown=max_drawdown,

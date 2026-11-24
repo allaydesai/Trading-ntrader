@@ -54,6 +54,7 @@ def _identity(request: BacktestRequest) -> dict[str, Any]:
         **(
             {"fx_spread_pips": request.fx_spread_pips} if request.fx_spread_pips is not None else {}
         ),
+        **({"crypto_fee_tier": request.crypto_fee_tier} if request.crypto_fee_tier else {}),
     }
 
 

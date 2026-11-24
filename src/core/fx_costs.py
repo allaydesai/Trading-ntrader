@@ -147,12 +147,14 @@ class FxCosts:
 
 
 @dataclass
-class _OrderCharges:
+class OrderCharges:
     """One order's running totals, so partial fills add up to the order's exact charge.
 
-    The fee model is called per fill; IB charges per order. Each fill adds its USD value and
-    its unrounded USD half-spread, then pays the order's cents-rounded totals so far less what
-    earlier fills paid: ``max(bps, minimum)`` once, and the spread without per-fill rounding.
+    Shared by the FX and crypto (``src/core/crypto_costs.py``) fee models, the crypto one keeping
+    one per order and liquidity side. The fee model is called per fill; IB charges per order.
+    Each fill adds its USD value and its unrounded USD half-spread, then pays the order's
+    cents-rounded totals so far less what earlier fills paid: ``max(bps, minimum)`` once, and
+    the spread without per-fill rounding.
     """
 
     rate_bps: Decimal
@@ -193,7 +195,7 @@ class FxCommissionModel(FeeModel):
         self.costs: dict[str, FxCosts] = {str(iid): FxCosts() for iid in self.terms}
         self.misses: list[str] = []
         self._cache = cache
-        self._orders: dict[str, _OrderCharges] = {}
+        self._orders: dict[str, OrderCharges] = {}
         self._odd_lots: set[str] = set()
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:  # noqa: D102
@@ -206,7 +208,7 @@ class FxCommissionModel(FeeModel):
             self.misses.append(f"{instrument.id} {order.client_order_id}: no {terms.quote}/USD")
             return Money(0, ACCOUNT_CURRENCY)
         self._warn_odd_lot(instrument, terms, order.quantity.as_decimal() * px * rate)
-        charges = self._orders.setdefault(str(order.client_order_id), _OrderCharges(terms.rate_bps))
+        charges = self._orders.setdefault(str(order.client_order_id), OrderCharges(terms.rate_bps))
         charges.add(qty * px * rate, qty * terms.half_spread * rate)
         commission, spread = charges.top_up(terms.min_per_order_usd, self.scale)
         costs = self.costs[str(instrument.id)]

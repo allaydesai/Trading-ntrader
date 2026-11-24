@@ -29,6 +29,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import FuturesContract, Instrument
 from nautilus_trader.model.objects import Money
 
+from src.core.crypto_costs import CryptoCommissionModel, crypto_terms_by_instrument
 from src.core.fx_costs import FxCommissionModel, fx_terms_by_instrument
 
 _TERM_KEYS = ("margin_initial_usd", "margin_maintenance_usd", "commission_per_contract_usd")
@@ -196,9 +197,14 @@ def venue_cost_models(
     per-contract commission model (falling back to the equity model) and a dollar-per-contract
     margin model. An FX venue (FX M4; spot pairs only, ``backtest_venue`` refuses a mix) gets
     ``FxCommissionModel`` (``cache`` gives it cross rates and keeps its cost totals) and
-    Nautilus' default margin model, which applies the pair's percentage ``margin_init``.
+    Nautilus' default margin model, which applies the pair's percentage ``margin_init``. A spot
+    crypto venue (crypto M3; crypto pairs only, ``backtest_venue`` refuses a mix) gets
+    ``CryptoCommissionModel`` and Nautilus' default margin model (``margin_init`` 1).
     """
     instruments = list(instruments)
+    crypto = crypto_terms_by_instrument(instruments)
+    if crypto:
+        return CryptoCommissionModel(crypto, cache=cache, scale=cost_multiplier), None
     fx = fx_terms_by_instrument(instruments)
     if fx:
         return FxCommissionModel(fx, cache=cache, scale=cost_multiplier), None

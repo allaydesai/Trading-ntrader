@@ -155,6 +155,13 @@ def backtest():
     help="FX only: override the pair's modelled bid/ask spread in pips (default: pair spec).",
 )
 @click.option(
+    "--fee-tier",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Spot crypto only: the Kraken Pro spot fee tier to charge, 1-17 (default: the coin "
+    "spec's tier 2). Recorded with the run.",
+)
+@click.option(
     "--timeframe",
     "-t",
     default=None,
@@ -193,6 +200,7 @@ def run_backtest(
     contracts: int | None,
     units: int | None,
     spread_pips: float | None,
+    fee_tier: int | None,
     timeframe: str | None,
     catalog_name: str | None,
     persist: bool,
@@ -244,6 +252,7 @@ def run_backtest(
             contracts=contracts,
             units=units,
             spread_pips=spread_pips,
+            fee_tier=fee_tier,
         )
 
         # Display mode indicator
