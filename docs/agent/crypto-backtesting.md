@@ -93,9 +93,12 @@ discounted-pair rebate and the absence of a minimum fee are VERIFIED against
 - **Gate** (`src/core/margin_gate.py`, `CryptoSpotRequirement`): an entry needs its full USD
   notional free (limit or trigger price, else the last price), else
   `MARGIN_EXCEEDS_FREE_BALANCE: 2 BTC/USD.KRAKEN coin(s) need 156000.00 USD initial margin,
-  free=2152.42 USD`. A parentless, non-reduce-only `SELL` must close an open long by position
-  id and not oversell it (net of other working sells on it), else `CRYPTO_SPOT_NO_SHORT: SELL
-  0.10000000 BTC/USD.KRAKEN would go short; ...`. Bracket legs and reduce-only exits pass;
+  free=2152.42 USD`. A parentless `SELL`, reduce-only included, must close an open long by
+  position id and not oversell it: its size less every working sell on it, a bracket's stop
+  and take-profit counted once. Else `CRYPTO_SPOT_NO_SHORT: SELL 0.10000000 BTC/USD.KRAKEN
+  would go short; ...`. So a strategy must cancel a resting sell before closing the long at
+  market (otherwise the resting sell would fill later as a short). Bracket legs pass at
+  submission; crypto sells hold no margin and their reprices are never margined;
   quantity-raising modifies are refused `CRYPTO_QTY_INCREASE_NOT_SUPPORTED`.
 - **Metrics** (C20): mark-to-market Sharpe, Sortino and volatility annualise on 365 for a run
   with a crypto pair (252 otherwise). If mark-to-market is unavailable, the realised fallback

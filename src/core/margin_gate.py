@@ -24,10 +24,13 @@ risk engine's own ``_deny_order``/``_reject_modify_order`` (so the strategy rece
   (``MARGIN_EXCEEDS_FREE_BALANCE``);
 - an FX entry that would rest (it has a limit or trigger) but cannot be margined yet because
   its quote has no USD rate (``FX_MARGIN_UNPRICEABLE``);
-- a spot crypto ``SELL`` without a parent that does not close an open long by position id, or
-  sells more of it than is free to sell (``CRYPTO_SPOT_NO_SHORT``). Under ``HEDGING`` a ``SELL``
-  with no position id opens a new short whatever else is held, so spot (long-only) needs the
-  rule; reduce-only exits and bracket legs (they have a parent) only ever close and pass.
+- a spot crypto ``SELL`` without a parent (reduce-only included) that does not close an open
+  long by position id, or sells more of it than is free to sell: its size less every working
+  sell on it, bracket siblings counted once (``CRYPTO_SPOT_NO_SHORT``). Under ``HEDGING`` a
+  ``SELL`` with no position id opens a new short whatever else is held, and a sell left working
+  after another one flattens the long fills as a short later, so spot (long-only) needs the
+  rule; bracket legs (they have a parent) pass at submission. A crypto ``SELL`` only ever
+  closes, so it holds no margin and its reprices are never margined.
 
 What one unit needs is per instrument (a :class:`MarginRequirement`):
 
@@ -403,7 +406,7 @@ def _margin_increase(
     reference = _new_reference(order, *new_prices)
     if requirement is None or not requirement.price_sensitive or reference is None:
         return ZERO
-    if order.is_reduce_only or order.parent_order_id is not None:
+    if order.is_reduce_only or order.parent_order_id is not None or _spot_sell(requirement, order):
         return ZERO
     held_qty = order.quantity.as_decimal()
     after = min(held_qty, quantity) if quantity is not None else held_qty
@@ -440,6 +443,8 @@ def _free_usd(cache, terms, instrument_id: InstrumentId) -> Decimal:
         if requirement is None or order.status != OrderStatus.SUBMITTED:
             continue
         if not order.is_reduce_only and order.parent_order_id is None:
+            if _spot_sell(requirement, order):
+                continue
             held = requirement.initial_usd(order.leaves_qty.as_decimal(), order, cache)
             free -= held or ZERO
     return free
@@ -464,31 +469,51 @@ def _closing_credit(cache, position, submitting: set) -> Decimal:
 def _short_sale_reason(cache, terms, orders: list[Order], position) -> str | None:
     """Why a spot crypto ``SELL`` in ``orders`` would go short, or ``None``.
 
-    A parentless, non-reduce-only ``SELL`` must close ``position``, an open long of the same
-    pair, and the sells together may not exceed what of it is free to sell: its size less
-    what other working sells on it already claim (``_closing_credit``).
+    A parentless ``SELL`` (reduce-only too: it could flatten the long under a resting sell)
+    must close ``position``, an open long of the same pair, and the sells together may not
+    exceed what of it is free to sell (:func:`_spot_free_to_sell`).
     """
     sells = [
-        o
-        for o in orders
-        if o.side == OrderSide.SELL
-        and o.parent_order_id is None
-        and not o.is_reduce_only
-        and isinstance(terms.get(o.instrument_id), CryptoSpotRequirement)
+        o for o in orders if o.parent_order_id is None and _spot_sell(terms.get(o.instrument_id), o)
     ]
     if not sells:
         return None
-    credit = _closing_credit(cache, position, {o.client_order_id for o in orders})
+    credit = _spot_free_to_sell(cache, position, {o.client_order_id for o in orders})
     for order in sells:
         quantity = order.quantity.as_decimal()
         held = position is not None and position.is_long
         if not held or position.instrument_id != order.instrument_id or quantity > credit:
+            free = f"{credit.normalize():f}"
             return (
                 f"{NO_SHORT_REASON}: SELL {order.quantity} {order.instrument_id} would go short; "
-                f"a spot sell must close an open long by position id (free to sell: {credit})"
+                f"a spot sell must close an open long by position id (free to sell: {free})"
             )
         credit -= quantity
     return None
+
+
+def _spot_sell(requirement, order: Order) -> bool:
+    """A spot crypto ``SELL``: it only ever closes a long (shorts are denied at submission)."""
+    return isinstance(requirement, CryptoSpotRequirement) and order.side == OrderSide.SELL
+
+
+def _spot_free_to_sell(cache, position, submitting: set) -> Decimal:
+    """Units of a long still free to sell: its size less every working ``SELL`` on it.
+
+    Unlike :func:`_closing_credit`, reduce-only sells count, and contingent siblings (a
+    bracket's stop and take-profit share a parent; one cancels the other) claim the long once,
+    at their largest ``leaves_qty``.
+    """
+    if position is None or not position.is_open or not position.is_long:
+        return ZERO
+    claims: dict = {}
+    for order in cache.orders_for_position(position.id):
+        if order.client_order_id in submitting or order.side != OrderSide.SELL:
+            continue
+        if order.is_open or order.is_inflight:
+            key = order.parent_order_id or order.client_order_id
+            claims[key] = max(claims.get(key, ZERO), order.leaves_qty.as_decimal())
+    return max(position.quantity.as_decimal() - sum(claims.values(), ZERO), ZERO)
 
 
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:

@@ -15,6 +15,12 @@ unchanged.
 - **WHEN** a 0.1 BTC long carries a resting stop-loss and a take-profit SELL of 0.1 BTC each
 - **THEN** both exits are accepted and the one that fills closes the position
 
+#### Scenario: a close cannot strand a resting sell
+- **WHEN** a 0.1 BTC long has a resting 0.1 BTC limit SELL and the strategy closes the long at
+  market
+- **THEN** the close is denied with a reason starting `CRYPTO_SPOT_NO_SHORT` and the long stays
+  open
+
 #### Scenario: no leverage
 - **WHEN** an account with USD 10,000 free submits a BUY of 0.2 BTC at 78,000
 - **THEN** the order is denied with a reason starting `MARGIN_EXCEEDS_FREE_BALANCE`

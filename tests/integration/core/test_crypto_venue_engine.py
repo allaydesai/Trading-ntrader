@@ -111,6 +111,16 @@ class _Script(Strategy):
             (position,) = self.cache.positions_open(instrument_id=instrument.id)
             self._limit(instrument, OrderSide.SELL, "0.128", "79000", position.id)
 
+    def _stranded(self, instrument) -> None:
+        """Bar 1: buy 0.1; bar 2: rest a 0.1 limit sell at 90,000; bar 3: close at market."""
+        if self.bar == 1:
+            self._market(instrument, OrderSide.BUY, "0.1")
+        elif self.bar == 2:
+            (position,) = self.cache.positions_open(instrument_id=instrument.id)
+            self._limit(instrument, OrderSide.SELL, "0.1", "90000", position.id)
+        elif self.bar == 3:
+            self.close_all_positions(instrument.id)  # reduce-only, would strand the limit
+
     def _bracket(self, instrument) -> None:
         """Bar 1: bracket buy 0.1. Bar 2: over-cash buy, then a naked short."""
         if self.bar == 1:
@@ -290,6 +300,18 @@ def test_the_bracket_runs_and_the_overspend_and_short_are_denied(runs):
     (position,) = run.engine.cache.positions()
     assert position.is_closed
     assert run.balance() == START_USD + 200 - Decimal("47.58") - Decimal("24.80")
+
+
+def test_a_close_that_would_strand_a_resting_sell_is_denied(runs):
+    """Else the 90,000 limit would fill after the long is flat: a short on a long-only account."""
+    run = _run("stranded", TAKER_BARS)
+    runs.append(run)
+    assert run.strategy.denied == [
+        "CRYPTO_SPOT_NO_SHORT: SELL 0.10000000 BTC/USD.KRAKEN would go short; a spot sell must "
+        "close an open long by position id (free to sell: 0)"
+    ]
+    (position,) = run.engine.cache.positions()
+    assert position.is_long and position.is_open
 
 
 # --- venue wiring --------------------------------------------------------------------------

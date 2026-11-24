@@ -362,8 +362,11 @@ Implemented as above (`src/core/crypto_costs.py`, `src/core/margin_gate.py`,
   `MARGIN_EXCEEDS_FREE_BALANCE: 2 BTC/USD.KRAKEN coin(s) need 156000.00 USD initial margin,
   free=2152.42 USD` (the spike's prototype printed unrounded `156000.2468`). The no-short reason
   is `CRYPTO_SPOT_NO_SHORT: SELL <qty> <id> would go short; a spot sell must close an open long
-  by position id (free to sell: <n>)`. A reduce-only `SELL` passes the gate: Nautilus' matching
-  engine rejects a reduce-only order with no position and trims one larger than the position.
+  by position id (free to sell: <n>)`. Reduce-only sells are checked too, and every working sell
+  on the long claims it (bracket siblings, which share a parent, once): otherwise a reduce-only
+  close could flatten the long under a resting limit sell that later fills as a short
+  (CodeRabbit, PR #72). A strategy cancels its resting sells before closing at market. A crypto
+  `SELL` only ever closes, so it holds no in-flight margin and its reprices are not margined.
 - **Rounding**: maker and taker are kept as separate per-order running totals (an order can
   fill partly as taker on arrival and rest for the rest), each rounded to cents once; cost
   stress multiplies before rounding.

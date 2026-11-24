@@ -239,10 +239,32 @@ class TestNoShort:
         reason = _gate().denial_reason([entry, take], None)
         assert reason is not None and reason.startswith(NO_SHORT_REASON)
 
-    def test_a_reduce_only_exit_is_allowed(self):
-        # Nautilus' matching engine rejects a reduce-only order with no position to reduce
+    def test_a_reduce_only_exit_of_the_long_is_allowed(self):
         sell = _order("0.1", OrderSide.SELL, reduce_only=True)
-        assert _gate().denial_reason([sell], None) is None
+        assert _gate(position=_long("0.1")).denial_reason([sell], LONG) is None
+
+    def test_a_reduce_only_exit_cannot_strand_a_resting_sell(self):
+        # the exit would flatten the long and leave the 0.1 limit sell to fill as a short later
+        resting = _order("0.1", OrderSide.SELL, "80000.0000", status=OrderStatus.ACCEPTED)
+        gate = _gate(position=_long("0.1"), working=[resting])
+        reason = gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+
+    def test_a_reduce_only_sell_with_no_position_is_denied(self):
+        sell = _order("0.1", OrderSide.SELL, reduce_only=True)
+        assert _gate().denial_reason([sell], None).startswith(NO_SHORT_REASON)
+
+    def test_bracket_siblings_claim_the_long_once(self):
+        # an OCO stop and take-profit both close the same 0.1: together they claim 0.1, not 0.2
+        parent = ClientOrderId("O-ENTRY")
+        stop = _order("0.1", OrderSide.SELL, trigger="70000.0000", status=OrderStatus.ACCEPTED)
+        stop.order_type, stop.parent_order_id = OrderType.STOP_MARKET, parent
+        take = _order(
+            "0.1", OrderSide.SELL, "80000.0000", parent=parent, status=OrderStatus.ACCEPTED
+        )
+        gate = _gate(position=_long("0.2"), working=[stop, take])
+        assert gate.denial_reason([_order("0.1", OrderSide.SELL)], LONG) is None
+        assert gate.denial_reason([_order("0.11", OrderSide.SELL)], LONG) is not None
 
     def test_a_buy_is_never_a_short(self):
         assert _gate(position=_long("0.1")).denial_reason([_order("0.01")], LONG) is None
@@ -255,6 +277,19 @@ class TestNoShort:
 
 
 class TestModify:
+    def test_repricing_a_closing_sell_needs_no_margin(self):
+        # raising a 0.1 BTC closing stop from 70,000 to 75,000 adds no exposure, even with
+        # no free USD (the FX rule would price the order's full quantity: USD 500 more)
+        stop = _order("0.1", OrderSide.SELL, trigger="70000.0000", status=OrderStatus.ACCEPTED)
+        stop.order_type = OrderType.STOP_MARKET
+        gate = _gate("0", position=_long("0.1"), working=[stop])
+        assert gate.modify_denial_reason(stop, None, None, Price.from_str("75000.0000")) is None
+
+    def test_repricing_an_entry_buy_above_the_cash_is_refused(self):
+        buy = _order("0.1", price="70000.0000", status=OrderStatus.ACCEPTED)
+        reason = _gate("0").modify_denial_reason(buy, None, Price.from_str("75000.0000"))
+        assert reason is not None and reason.startswith(DENIAL_REASON)
+
     def test_a_quantity_increase_is_refused_with_the_crypto_prefix(self):
         order = _order("0.1", price="78000.0000", status=OrderStatus.ACCEPTED)
         reason = _gate().modify_denial_reason(order, BTC.make_qty(Decimal("0.2")))
