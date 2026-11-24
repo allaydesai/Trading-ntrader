@@ -4,6 +4,7 @@ Runs against a real ``ParquetDataCatalog`` in ``tmp_path`` and an in-memory stan
 the ``catalog_instruments`` metadata service, like the futures import service tests.
 """
 
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -226,3 +227,37 @@ class TestFailures:
         assert result.status == "success"
         assert result.row_count == 5
         assert result.warnings
+
+
+#: Damage that reaches a source after a good import: truncated, garbled text, binary junk.
+_DAMAGE = {"empty": b"", "garbled": b"not,a,bar\n", "binary": bytes(range(256)) * 8}
+
+
+class TestDamagedSourceKeepsTheSeries:
+    """A source with no readable bar is refused before the existing series is touched."""
+
+    @pytest.mark.parametrize("damage", sorted(_DAMAGE))
+    def test_damaged_source_keeps_the_imported_series(self, source, catalog_dir, metadata, damage):
+        _run(_service(catalog_dir, metadata), source)
+        parts = _parts(catalog_dir)
+        (source / "EURUSD_full_1hour.txt").write_bytes(_DAMAGE[damage])
+        [result] = _run(_service(catalog_dir, metadata), source)
+        assert result.status == "failed"
+        assert _parts(catalog_dir) == parts  # nothing deleted or appended
+        assert len(_read_all(catalog_dir)) == 20
+        assert metadata.rows[(CATALOG, "EURUSD")].bar_count_hourly == 20
+        bar_dir = catalog_dir / CATALOG / "data" / "bar" / EUR_HOUR_DIR
+        assert not (bar_dir / ".import-incomplete").exists()  # the next run still skips
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads a chmod 000 file")
+    def test_unreadable_source_keeps_the_imported_series(self, source, catalog_dir, metadata):
+        _run(_service(catalog_dir, metadata), source)
+        path = source / "EURUSD_full_1hour.txt"
+        path.chmod(0)
+        try:
+            [result] = _run(_service(catalog_dir, metadata), source)
+        finally:
+            path.chmod(0o644)
+        assert result.status == "failed"
+        assert len(_read_all(catalog_dir)) == 20
+        assert metadata.rows[(CATALOG, "EURUSD")].bar_count_hourly == 20
