@@ -14,10 +14,13 @@ from src.core.fx_rates import fx_units, usd_per_quote
 from src.core.position_sizing import (
     ONE,
     contract_notional,
+    crypto_units,
     instrument_multiplier,
+    is_crypto,
     is_fx_pair,
     units_for_notional,
     whole_contracts,
+    whole_units,
 )
 from src.core.strategy_registry import StrategyRegistry, register_strategy
 from src.core.strategy_warmup import warmup_lookback
@@ -46,9 +49,10 @@ class SMAConfig(StrategyConfig):
     contracts : int, optional
         Futures only (``backtest run --contracts N``): trade exactly this many whole
         contracts per entry, ignoring the notional budget. Unset sizes by notional.
-    units : int, optional
-        FX only (``backtest run --units N``): trade exactly this many base-currency units
-        per entry, ignoring the notional budget. Unset sizes by notional.
+    units : int | Decimal, optional
+        FX and spot crypto (``backtest run --units N``): trade exactly this many base units
+        per entry, ignoring the notional budget. Whole units for FX; a decimal multiple of
+        the coin's size increment for crypto (``0.25`` BTC). Unset sizes by notional.
     """
 
     instrument_id: InstrumentId
@@ -58,7 +62,7 @@ class SMAConfig(StrategyConfig):
     portfolio_value: Decimal = Decimal("1000000")
     position_size_pct: Decimal = Decimal("10.0")
     contracts: int | None = None
-    units: int | None = None
+    units: int | Decimal | None = None
 
 
 def _sized_quantity(
@@ -75,20 +79,26 @@ def _sized_quantity(
     Shares (multiplier 1) are whole, at least 1; crypto (size precision > 0) is fractional;
     a multiplied contract (futures) floors to whole contracts and is ``None`` below one.
     ``config.contracts`` (futures only) replaces the budget with exactly that many contracts,
-    ``config.units`` (FX only, M5) with exactly that many base units.
+    ``config.units`` (FX M5, crypto M4) with exactly that many base units.
+    Spot crypto (crypto M4) is sized in coin units floored to its size increment, ``None``
+    under one increment or Kraken's minimum order: USD 10,000 of BTC at 78,000 is 0.12820512.
     A spot FX pair (FX M4) is sized in base units worth ``position_value`` USD, floored to its
     size increment and ``None`` below one: USD 100,000 of USDJPY is 100,000 units, not
     ``100,000 / 157``. A cross reads its quote/USD rate from ``cache``.
 
     Raises:
         ValueError: ``contracts`` for an instrument with no multiplier (not futures),
-            ``units`` for one that is not an FX pair, or a cross with no USD rate in ``cache``.
+            ``units`` for one that is not an FX or crypto pair (or, for crypto, not a multiple
+            of its size increment), or a cross with no USD rate in ``cache``.
     """
     multiplier = instrument_multiplier(instrument)
     fixed_contracts = getattr(config, "contracts", None)
     if (fixed_units := getattr(config, "units", None)) is not None:
+        if is_crypto(instrument):
+            units = _fixed_crypto_units(Decimal(str(fixed_units)), instrument)
+            return instrument.make_qty(units), units, ONE  # type: ignore[union-attr]
         if not is_fx_pair(instrument):
-            raise ValueError("units applies to FX pairs only")
+            raise ValueError("units applies to FX pairs and spot crypto only")
         if (rate := usd_per_quote(instrument, price, cache)) is None:  # type: ignore[arg-type]
             raise ValueError(f"No USD rate for {instrument.id} yet: USD notional unknown")  # type: ignore[union-attr]
         return Quantity.from_int(fixed_units), Decimal(fixed_units), rate
@@ -101,6 +111,9 @@ def _sized_quantity(
         rate = usd_per_quote(instrument, price, cache) or ONE  # type: ignore[arg-type]
         size_prec = instrument.size_precision  # type: ignore[union-attr]
         return (Quantity(units, size_prec) if units else None), units, rate
+    if is_crypto(instrument):  # fractional coin units, floored; None under the minimum
+        units = crypto_units(position_value, price, instrument)
+        return (instrument.make_qty(units) if units else None), units, ONE  # type: ignore[union-attr]
     raw_qty = units_for_notional(position_value, price, multiplier)
     size_prec = getattr(instrument, "size_precision", 0) if instrument else 0
     if multiplier != 1:
@@ -109,6 +122,40 @@ def _sized_quantity(
     if size_prec > 0:
         return Quantity.from_str(f"{float(raw_qty):.{size_prec}f}"), raw_qty, multiplier
     return Quantity.from_int(max(int(raw_qty), 1)), raw_qty, multiplier
+
+
+def _fixed_crypto_units(units: Decimal, instrument) -> Decimal:
+    """A fixed crypto size (``--units 0.25``), refused unless a positive increment multiple.
+
+    ``make_qty`` would round a stray digit half-even; a fixed size is never silently changed.
+    """
+    step = Decimal(str(instrument.size_increment))
+    if units <= 0 or whole_units(units, step) != units:
+        raise ValueError(
+            f"units {units:f} for {instrument.id} is not a positive multiple of {step:f}"
+        )
+    return units
+
+
+def _unsized(strategy, position_value: Decimal) -> Quantity | None:
+    """Log a budget that sized to no order (always ``None``); crypto warns once and counts (C13)."""
+    instrument = strategy.cache.instrument(strategy.instrument_id)
+    if not is_crypto(instrument):
+        strategy.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
+        return None
+    strategy._unsized_orders = getattr(strategy, "_unsized_orders", 0) + 1
+    if strategy._unsized_orders == 1:
+        strategy.log.warning(
+            f"Position sizing: ${position_value:,.2f} is under the {instrument.id} minimum "
+            "order; no order (later drops are counted and reported on stop)"
+        )
+    return None
+
+
+def _report_unsized(strategy) -> None:
+    """The run's count of crypto orders dropped under the minimum, once, on stop."""
+    if count := getattr(strategy, "_unsized_orders", 0):
+        strategy.log.warning(f"Position sizing: {count} order(s) dropped under the minimum order")
 
 
 @register_strategy(
@@ -189,6 +236,7 @@ class SMACrossover(Strategy):
     def on_stop(self) -> None:
         """Actions to be performed on strategy stop."""
         self.unsubscribe_bars(self.bar_type)
+        _report_unsized(self)
 
     def on_bar(self, bar: Bar) -> None:
         """
@@ -259,8 +307,7 @@ class SMACrossover(Strategy):
         sizing = (position_value, current_price, self.cache.instrument(self.instrument_id))
         quantity, raw_qty, multiplier = _sized_quantity(*sizing, self.config, self.cache)
         if quantity is None:
-            self.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
-            return None
+            return _unsized(self, position_value)
 
         notional = contract_notional(Decimal(str(quantity)), current_price, multiplier)
         self.log.info(

@@ -28,7 +28,13 @@ from nautilus_trader.trading.strategy import Strategy
 from pydantic import BaseModel, Field
 
 from src.core.fx_rates import fx_units
-from src.core.position_sizing import instrument_multiplier, is_fx_pair, units_for_notional
+from src.core.position_sizing import (
+    crypto_units,
+    instrument_multiplier,
+    is_crypto,
+    is_fx_pair,
+    units_for_notional,
+)
 
 
 class BuyAndHoldConfig(StrategyConfig, kw_only=True, frozen=True):  # type: ignore[misc]
@@ -51,7 +57,7 @@ class BuyAndHoldParameters(BaseModel):
 
 
 class BuyAndHold(Strategy):
-    """Buy whole shares with ``allocation_pct`` of the cash on the first bar; hold to the end."""
+    """Buy ``allocation_pct`` of the cash on the first bar (whole shares; coins fractionally)."""
 
     def __init__(self, config: BuyAndHoldConfig) -> None:
         """Initialize the benchmark."""
@@ -76,7 +82,7 @@ class BuyAndHold(Strategy):
         self._bought = True
         quantity = self._entry_quantity(Decimal(str(bar.close)))
         if quantity <= 0:
-            self.log.warning("Allocation buys less than one share; holding cash")
+            self.log.warning("Allocation buys less than one share (or minimum order); holding cash")
             return
         order = self.order_factory.market(
             instrument_id=self.instrument_id,
@@ -97,6 +103,8 @@ class BuyAndHold(Strategy):
         budget = cash * self.config.allocation_pct / Decimal(100)
         if is_fx_pair(self.instrument):  # base units worth the USD budget (FX M4)
             return fx_units(budget, price, self.instrument, self.cache)
+        if is_crypto(self.instrument):  # fractional coins, floored; 0 under the minimum (C13)
+            return crypto_units(budget, price, self.instrument)
         # Exposure, not cash: a futures contract costs price x multiplier (ES 50), so
         # $1M buys 2 ES contracts, not 140. Shares have multiplier 1 (unchanged).
         units = units_for_notional(budget, price, instrument_multiplier(self.instrument))
