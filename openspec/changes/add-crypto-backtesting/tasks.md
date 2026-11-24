@@ -136,13 +136,17 @@ Below-minimum orders are dropped and counted. Equity, futures and FX sizing unch
 - [x] 4.1 Unit (failing first): `crypto_units_for_notional`/`crypto_units_for_risk`: flooring to
       the increment, no minimum of 1, zero on a sub-minimum order, Decimal in and out.
 - [x] 4.2 Implement in `src/core/position_sizing.py`.
-- [ ] 4.3 Component (failing first): `sma_crossover` and `buy_and_hold` on a crypto pair size
+- [x] 4.3 Component (failing first): `sma_crossover` and `buy_and_hold` on a crypto pair size
       fractionally and submit `instrument.make_qty`; equity/futures/FX unchanged.
-- [ ] 4.4 Route the core strategies.
+- [x] 4.4 Route the core strategies.
 - [x] 4.5 Unit/component (failing first): `backtest run --units 0.25` accepted for crypto, rejected
       (exit 2) when not a multiple of the increment or for a non-crypto symbol; FX int rule kept;
       MCP `submit_backtest`/`validate_config` follow the same rules.
 - [x] 4.6 Implement the CLI/MCP validation (`sizing_overrides.py`).
+      Result (2026-11-24): BTC/ETH 1-day 2023-2024 on `firstrate-crypto` size 0.14-0.40 BTC and
+      2.7-6.0 ETH at 10% notional, exactly 0.25 with `--units 0.25`; a USD 0.50 budget drops
+      every order (warned once, count logged on stop); smoke table in
+      `docs/agent/crypto-backtesting.md` ("Fractional sizing (M4)").
 
 ## M5. Reporting, dashboard, CLI and MCP
 
