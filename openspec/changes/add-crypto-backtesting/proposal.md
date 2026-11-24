@@ -18,14 +18,15 @@ without any error:
   `Quantity.from_int(qty)`. A USD 10,000 BTC budget at USD 78,000 is `max(int(0.128), 1)` =
   **1 BTC (about 7.8x the budget)**. On SOL it is merely rounded down by up to one coin.
 - **Costs.** Non-FX, non-futures venues get the IBKR per-share model (USD 0.005 per unit,
-  USD 1 minimum), so 0.128 BTC costs USD 1 and 1,000 SOL costs USD 5. Neither matches IBKR's
-  crypto schedule (18 bp of trade value, USD 1.75 minimum, published) or Kraken's maker/taker
-  percentages. The Kraken fallback instrument's `maker_fee/taker_fee` (0.16%/0.26%) is not
+  USD 1 minimum), so 0.128 BTC (about USD 10,000) costs USD 1. Kraken Pro, the venue Allay
+  will trade on, charges a percentage of trade value: tier 1 is 0.40% maker / 0.80% taker
+  (USD 40-80 on that order). The Kraken fallback instrument's `maker_fee/taker_fee` (0.16%/0.26%) is not
   charged: `venue_cost_models` installs the equity per-share model for any venue without
   futures or FX, and a venue fee model replaces the instrument's fees.
 - **Leverage and shorting.** Venues are `MARGIN` with Nautilus' default leverage, and nothing
-  stops a spot crypto short or a levered spot position. IBKR's Paxos/Zero Hash crypto and
-  Kraken spot (without margin) are long-only, cash-funded.
+  stops a spot crypto short or a levered spot position. Kraken spot without margin is
+  long-only and cash-funded (Kraken margin is a separate product with its own opening and
+  rollover fees).
 - **Wrong price series on the Kraken path.** `KrakenPairMapper.to_kraken_charts("BTC/USD")`
   returns `PF_XBTUSD`, Kraken's **perpetual futures** chart symbol, and the bars are wrapped in a
   **spot** `CurrencyPair` priced and charged as spot. Perp prices carry a funding basis.
@@ -33,22 +34,21 @@ without any error:
   day has 24 hourly bars, daily bars equal the UTC-midnight aggregate of the hourly bars 1000/1000).
   The equity parser localises every row to `America/New_York`, which would shift crypto bars by
   4-5 hours and split each UTC day.
-- **Live.** Nautilus 1.220 has no Kraken adapter, and its IB adapter turns IB `CRYPTO`/`PAXOS`
-  contracts into an **inverse** `CryptoPerpetual` (`is_inverse=True`, margin and fees 0). A
-  backtest that used that model would settle P&L in BTC, not USD.
+- **Live.** Nautilus 1.220 (the pinned version) has no Kraken adapter, so live Kraken
+  trading needs a newer Nautilus or a custom adapter.
 
 This change plans crypto support in the same shape as FX: one reviewable PR per milestone.
-It keeps the model compatible with later live trading on IB `PAXOS`, which is a separate
-effort.
+**Kraken is the venue and fee schedule** (Allay, 2026-11-24). The instrument ids
+(`BTC/USD.KRAKEN`) are the ones the existing Kraken data path already uses, so a later live
+Kraken effort can reuse backtest configs unchanged.
 
 ## What changes (by milestone; details in `design.md`, tasks in `tasks.md`)
 
 - **M1: instrument model and engine spike.** A versioned, hand-curated
   `src/services/crypto/coin_specs.yaml` (base, quote, price precision, size precision and
-  increment, minimum order, typical spread, per-venue profiles for `PAXOS` and `KRAKEN` with the
-  IB `CRYPTO` contract block and the Kraken REST/charts symbols) validated by pydantic with
-  `CryptoSpecError`. `build_crypto_pair()` returns a Nautilus `CurrencyPair` with id
-  `BTC/USD.PAXOS` (IB symbology) and fractional size precision. `build_instrument` routes
+  increment, Kraken minimum order and symbols, typical spread, and the dated 17-tier Kraken Pro
+  spot fee schedule) validated by pydantic with `CryptoSpecError`. `build_crypto_pair()`
+  returns a Nautilus `CurrencyPair` with id `BTC/USD.KRAKEN` and fractional size precision. `build_instrument` routes
   `CRYPTO` to it. A forked spike picks the account model for long-only, unlevered spot (a USD
   `MARGIN` account with `margin_init = 1` plus a gate, or a Nautilus `CASH` account) and proves
   fractional quantities, bracket orders and USD P&L work end to end.
@@ -58,8 +58,9 @@ effort.
   Gaps (sparse early minutes) and the 2026-03-21 volume rounding change are counted as
   warnings.
 - **M3: account, costs and the no-short/no-leverage gate.** Crypto venues get the M1-chosen
-  account. `CryptoCommissionModel` (a percentage of trade value with an optional per-order
-  minimum and a cap, per venue profile, plus a modelled half-spread per side). The generalised
+  account. `CryptoCommissionModel`: the run's Kraken Pro tier rate (maker for fills that
+  rested on the book, taker otherwise) times trade value, no minimum, plus a modelled
+  half-spread per side. The generalised
   `MarginGate` gains a `CryptoSpotRequirement` (100% of notional) and denies orders that would
   open or increase a short (`CRYPTO_SPOT_NO_SHORT`). Results, mark-to-market and metrics stay
   in USD with a UTC day.
@@ -71,30 +72,33 @@ effort.
   (coin quantity, USD notional, return on the underlying, fees split, "spot, unlevered,
   long-only"), MCP `asset_class: "crypto"` plus a `crypto` object, the dashboard panel and
   badge (needs a FROZEN_VIEWS ruling), `--symbol BTCUSD|BTC/USD|BTC` resolution and
-  `--fee-profile paxos|kraken`.
+  `--fee-tier N`.
 - **M6: strategies.** Submodule PR plus pointer bump: Riptide and Bollinger Reversal size in
   fractional coin units, round prices at instrument precision, and treat the day as the UTC
   date. Configs `riptide_crypto.yaml`, `bollinger_crypto.yaml`. Smoke runs on BTC/ETH/SOL.
-- **M7: Kraken path correction.** `--data-source kraken` fetches the spot series (or refuses
-  clearly), builds its instrument through `coin_specs.yaml`, and stops relying on the
-  perpetual chart symbol. Kraken-fetched and FirstRate-imported runs report the same
+- **M7: Kraken data path correction.** `--data-source kraken` fetches the spot series (or
+  refuses clearly), builds its instrument and fees through `coin_specs.yaml`, and stops
+  relying on the perpetual chart symbol. It also evaluates Kraken's own trade history as a
+  same-venue data source (FirstRate's source exchange is unknown). Kraken-fetched and FirstRate-imported runs report the same
   instrument terms.
 
 ## Interfaces crossed
 
 - **CLI**: `import --format firstrate --asset-class crypto` imports (it exits 2 today with
   "No parser registered"), defaulting to all five timeframes. `backtest run` resolves
-  `--symbol BTC`, `BTCUSD` or `BTC/USD` to `BTC/USD.PAXOS` for a crypto catalog, and its
+  `--symbol BTC`, `BTCUSD` or `BTC/USD` to `BTC/USD.KRAKEN` for a crypto catalog, and its
   `--units` accepts a decimal for crypto (integers for FX, unchanged). New optional
-  `--fee-profile paxos|kraken` and `--spread-bps`. No exit-code changes.
+  `--fee-tier N` (1-17) and `--spread-bps`. No exit-code changes.
 - **Parser registry**: `get_parser(AssetClass.CRYPTO)` returns the new parser.
 - **Record shape**: crypto `catalog_instruments` rows (`asset_class = CRYPTO`, `ticker = BTC`,
-  `nautilus_id = BTC/USD.PAXOS`, `currency = USD`, `tick_size` = price increment,
+  `nautilus_id = BTC/USD.KRAKEN`, `currency = USD`, `tick_size` = price increment,
   `multiplier = 1`). Crypto `backtest_runs.config_snapshot` gains `crypto_pairs` (terms used)
   and `account_currency`. `trades.quantity` is fractional (the column is already
   `Numeric(20, 8)`).
-- **Bar type naming**: `BTC/USD.PAXOS-1-HOUR-LAST-EXTERNAL`; on disk
-  `BTCUSD.PAXOS-1-HOUR-LAST-EXTERNAL` (Nautilus strips `/`).
+- **Bar type naming**: `BTC/USD.KRAKEN-1-HOUR-LAST-EXTERNAL`; on disk
+  `BTCUSD.KRAKEN-1-HOUR-LAST-EXTERNAL` (Nautilus strips `/`).
+- **Fee terms**: `KRAKEN_DEFAULT_MAKER_FEE`/`TAKER_FEE` (0.16%/0.26%, outdated) stop being the
+  source of Kraken fees; the spec's schedule and `--fee-tier` are (M3/M7).
 - **Order events**: new deny reasons `CRYPTO_SPOT_NO_SHORT` and, reusing the existing prefix,
   `MARGIN_EXCEEDS_FREE_BALANCE` for unlevered over-allocation. Futures and FX reasons are
   unchanged.
@@ -127,10 +131,14 @@ effort.
 - **Perpetuals and dated crypto futures** (`CryptoPerpetual`, `CryptoFuture`), funding rates,
   liquidation. Recommended as a separate later change (decision C1). CME crypto futures
   (MBT/MET) already fit the futures path with a contract spec, if wanted.
-- **Live/paper crypto trading** via IB PAXOS or Kraken (separate effort; notes in design).
+- **Live/paper crypto trading** on Kraken (separate effort: needs a Nautilus Kraken adapter;
+  notes in design). IBKR/PAXOS crypto is not planned.
 - **Crypto-quoted pairs** (ETH/BTC) and stablecoin quotes (USDT/USDC). The model allows a non-USD
   quote later through the FX rate machinery, but only USD-quoted pairs are built and tested.
-- **Margin/lending, staking, custody or account fees** (IB's USD 0.15/month Paxos fee).
+- **Kraken margin trading** (opening and 4-hourly rollover fees), staking, and the 0.02%
+  discount on Kraken's "selected spot pairs" (the list was not readable; recorded, not modelled).
+- **Dynamic fee tiers.** A run uses one fixed tier; tiers that change with rolling 30-day
+  volume or assets on platform are not simulated.
+- **Kraken futures/perps fee tiers** (on the same page; for the later perps change).
 - Real bid/ask or order-book data. The spread is modelled.
 - Coins without data on the VPS. Adding one is a spec entry plus an import.
-- IB historical crypto download (`ibkr_data_provider` is `STK`-only). Follow-up source.

@@ -9,14 +9,15 @@ merges.
 
 ## M1. Coin specs, `CurrencyPair` model, engine-acceptance spike
 
-Acceptance: `build_instrument("CRYPTO", "BTC/USD.PAXOS", "BTC", bars)` returns a valid
+Acceptance: `build_instrument("CRYPTO", "BTC/USD.KRAKEN", "BTC", bars)` returns a valid
 `CurrencyPair` with size precision 8. Equity, futures and FX dispatch is byte-identical. A forked
 engine test settles the account model (decision C8) and proves fractional fills and USD P&L.
 
 - [ ] 1.1 Unit (failing first): `tests/unit/services/crypto/test_coin_specs.py`: the shipped file
-      loads BTC, ETH, SOL; per-coin base/quote/precision/increment and venue blocks; fee profiles
-      PAXOS and KRAKEN; unknown key, non-USD quote, key != base, increment decimals over
-      precision, venue block mismatch, unknown fee profile, unknown schema version all raise
+      loads BTC, ETH, SOL; per-coin base/quote/precision/increment and Kraken block; the 17-tier
+      Kraken Pro spot schedule (tier 1 0.40/0.80%, tier 17 0.00/0.05%) and `default_tier`;
+      unknown key, non-USD quote, key != base, increment decimals over precision, tiers not
+      1..N, maker > taker, default tier outside the schedule, unknown schema version all raise
       `CryptoSpecError` naming the dotted field.
 - [ ] 1.2 `src/services/crypto/coin_specs.yaml` (`source`/`as_of` per value, UNVERIFIED flagged)
       and `coin_specs.py`.
@@ -24,9 +25,10 @@ engine test settles the account model (decision C8) and proves fractional fills 
       only for `info.asset_class == "CRYPTO"`; `is_fx_pair`/`is_fx` stay false for it.
 - [ ] 1.4 Implement `is_crypto` (core, duck-typed).
 - [ ] 1.5 Component (failing first): `tests/component/services/crypto/test_instrument_builder.py`:
-      id `BTC/USD.PAXOS` (parses with the IB adapter's `RE_CRYPTO`), `raw_symbol BTC.USD`,
-      currencies, price precision follows bars, size precision 8 / increment 1e-8, margins 1,
-      fees 0, `info` terms; the KRAKEN profile builds `BTC/USD.KRAKEN`.
+      id `BTC/USD.KRAKEN` (equal to `KrakenPairMapper.to_nautilus_id("BTC/USD")`),
+      `raw_symbol XBTUSD`, currencies, price precision follows bars, size precision 8 /
+      increment 1e-8, margins 1, fees 0, `info` terms (Kraken symbols, minimums, fee schedule
+      `as_of`).
 - [ ] 1.6 `build_crypto_pair()`.
 - [ ] 1.7 Component (failing first): `test_build_instrument.py`: `CRYPTO` gives a crypto
       `CurrencyPair`; STOCK/ETF/None/FUTURES/FX unchanged; `load_from_catalog` with a crypto row.
@@ -57,8 +59,8 @@ skips. Peak RSS on BTC 1-minute stays under 1.5 GB.
 - [ ] 2.2 Implement `FirstRateCryptoParser` and register it.
 - [ ] 2.3 Component (failing first):
       `tests/component/services/firstrate/test_crypto_import_service.py` against a tmp catalog:
-      spec-filled rows (`ticker BTC`, `nautilus_id BTC/USD.PAXOS`, `asset_class CRYPTO`,
-      `currency USD`); bar directory `BTCUSD.PAXOS-1-HOUR-LAST-EXTERNAL`; read-back precision;
+      spec-filled rows (`ticker BTC`, `nautilus_id BTC/USD.KRAKEN`, `asset_class CRYPTO`,
+      `currency USD`); bar directory `BTCUSD.KRAKEN-1-HOUR-LAST-EXTERNAL`; read-back precision;
       skip/overwrite; incomplete-marker reimport; unknown coin fails that file only.
 - [ ] 2.4 Implement `CryptoImportService` (share helpers with the FX/futures services; no growth
       of `ImportService`/`_run_import` baselines).
@@ -76,16 +78,18 @@ skips. Peak RSS on BTC 1-minute stays under 1.5 GB.
 ## M3. Account, costs and the spot gate
 
 Acceptance: a BTC round trip of 0.128 persists fractional `quantity`, USD `profit_loss` and
-commission equal to a hand calculation for both fee profiles. Short and levered orders are
+commission equal to a hand calculation at tier 1 (taker and maker) and at a chosen tier. Short and levered orders are
 denied with the pinned reasons. Equity, futures and FX runs produce byte-identical results and
 snapshots.
 
-- [ ] 3.1 Component (failing first): `tests/component/core/test_crypto_costs.py`: PAXOS 18 bp
-      with USD 1.75 minimum and 1% cap (USD 9,984 gives 17.97; USD 500 gives 1.75; USD 100 gives
-      1.00); minimum applied once per order across partial fills; KRAKEN maker vs taker by
-      liquidity side; half-spread component; cost-stress scaling; totals per instrument.
-- [ ] 3.2 Implement `src/core/crypto_costs.py` (`CryptoCommissionModel`, reusing the FX per-order
-      ledger) and route crypto venues in `venue_cost_models`.
+- [ ] 3.1 Component (failing first): `tests/component/core/test_crypto_costs.py`: USD 9,984 of
+      BTC costs 79.87 taker / 39.94 maker at tier 1 and 34.94 taker at tier 4; maker only for a
+      fill whose `liquidity_side` is `MAKER` (a resting limit), taker for market, stop and
+      marketable-limit fills; no minimum (USD 10 at tier 1 taker costs 0.08); split fills
+      sum to the single-fill charge within a cent; half-spread component; cost-stress
+      scaling; totals per instrument and per liquidity side.
+- [ ] 3.2 Implement `src/core/crypto_costs.py` (`CryptoCommissionModel`; per-order cent rounding
+      shared with the FX model) and route crypto venues in `venue_cost_models`.
 - [ ] 3.3 Component (failing first): `tests/component/core/test_margin_gate_crypto.py`:
       `CryptoSpotRequirement` = qty x price; over-allocation denied
       `MARGIN_EXCEEDS_FREE_BALANCE`; a SELL with no position, or a SELL larger than the long, denied
@@ -101,8 +105,9 @@ snapshots.
       `account_currency` and `periods_per_year`, omitted when unset.
 - [ ] 3.8 Unit (failing first): `risk_metrics` annualises on 365 for a crypto run and 252
       otherwise (decision C20); implement.
-- [ ] 3.9 Manual: Allay confirms (or accepts as defaults) the PAXOS tier, the Kraken tier and the
-      spread defaults; record the answer and date in `coin_specs.yaml` and the design.
+- [ ] 3.9 Manual: Allay confirms the default tier (their current Kraken Pro tier), whether
+      BTC/ETH/SOL are on the 0.02% discounted-pair list, and the spread defaults; record the
+      answers and date in `coin_specs.yaml` and the design.
 
 ## M4. Fractional sizing
 
@@ -129,7 +134,7 @@ byte-identical (goldens captured before the change).
 - [ ] 5.1 Unit (failing first): `src/services/crypto/returns.py` figures (design section 10).
 - [ ] 5.2 Implement `returns.py` and `display.py`.
 - [ ] 5.3 Unit/component (failing first): CLI blocks and `--symbol BTC|BTCUSD|BTC/USD`
-      resolution, `--timeframe` to `-LAST`, `--fee-profile`, `--spread-bps`.
+      resolution, `--timeframe` to `-LAST`, `--fee-tier N` (1-17, else exit 2), `--spread-bps`.
 - [ ] 5.4 Implement the CLI changes and `price_type_for(CRYPTO)`.
 - [ ] 5.5 Component (failing first): MCP `get_run`/`compare_runs`/`export_results` crypto object
       (additive; existing payloads unchanged).
@@ -154,7 +159,7 @@ Equity and FX results for the existing smoke configs are unchanged.
 - [ ] 6.4 Bump the submodule pointer (no `.gitmodules` change); smoke runs BTC/ETH/SOL 1-day
       2021-2025 and BTC 1-hour 2024, results recorded in `docs/agent/crypto-backtesting.md`.
 
-## M7. Kraken path correction
+## M7. Kraken data path correction
 
 Acceptance: `--data-source kraken` never builds a spot instrument from perpetual prices; it
 fetches the spot series or refuses with a clear message; its instrument and fees come from
@@ -162,13 +167,14 @@ fetches the spot series or refuses with a clear message; its instrument and fees
 
 - [ ] 7.1 Manual/spike: confirm against the live Kraken API whether the Charts API serves spot
       OHLC (tick type, symbol) and how far back; record the answer (removes the UNVERIFIED in
-      design section 11).
+      design section 11). Also check Kraken's downloadable OHLCVT/trade history as a same-venue
+      source for BTC/ETH/SOL (coverage, format); record a recommendation, no import yet.
 - [ ] 7.2 Unit (failing first): `KrakenPairMapper` spot charts symbol (or the refusal when the
       range is older than the REST window); the mapper never returns a `PF_` symbol for spot.
 - [ ] 7.3 Implement; move code out of `kraken_client.py`/`_backtest_helpers.py` (no baseline growth).
-- [ ] 7.4 Component (failing first): the fetched instrument is spec-built (`BTC/USD.KRAKEN`,
-      KRAKEN fee profile), the venue gets `CryptoCommissionModel`, and the fallback for a coin
-      without a spec uses the KRAKEN profile.
+- [ ] 7.4 Component (failing first): the fetched instrument is spec-built (`BTC/USD.KRAKEN`),
+      the venue gets `CryptoCommissionModel` at the run's tier, and a coin without a spec gets
+      the fallback instrument with the same schedule.
 - [ ] 7.5 Implement; update `KrakenSettings` docs and the README.
 - [ ] 7.6 Archive: `/openspec-archive-change add-crypto-backtesting` once M7 merges, so
       `openspec/specs/crypto-*` matches the code.

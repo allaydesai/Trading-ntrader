@@ -19,21 +19,23 @@ unchanged.
 - **WHEN** an account with USD 10,000 free submits a BUY of 0.2 BTC at 78,000
 - **THEN** the order is denied with a reason starting `MARGIN_EXCEEDS_FREE_BALANCE`
 
-### Requirement: Crypto commission follows the selected venue fee profile, in USD
-A crypto venue SHALL charge, in USD and scaled by the cost-stress multiplier, the PAXOS profile
-`min(max(rate_bps / 10,000 x trade value, minimum per order), cap % x trade value)` with the
-minimum applied once per order across partial fills, or the KRAKEN profile's maker or taker
-percentage by fill liquidity side, plus a modelled half-spread per side. Equity, futures and FX
-venues SHALL keep their models unchanged.
+### Requirement: Crypto commission follows the Kraken Pro spot schedule, in USD
+A crypto venue SHALL charge each fill, in USD and scaled by the cost-stress multiplier, the
+run's Kraken Pro fee tier rate times the fill's trade value, using the maker rate for a fill
+that rested on the book and the taker rate otherwise, plus a modelled half-spread per side.
+No minimum fee SHALL apply. Equity, futures and FX venues SHALL keep their models unchanged.
 
-#### Scenario: PAXOS standard order
-- **WHEN** 0.128 BTC is bought at 78,000 with 18 bp, a USD 1.75 minimum and a 1% cap, and no
-  spread
-- **THEN** the commission is USD 17.97
+#### Scenario: tier 1 taker
+- **WHEN** 0.128 BTC is bought at 78,000 by a market order at tier 1, with no spread
+- **THEN** the commission is USD 79.87
 
-#### Scenario: PAXOS small order hits the cap
-- **WHEN** USD 100 of SOL is bought under the same profile
-- **THEN** the commission is USD 1.00
+#### Scenario: tier 1 maker
+- **WHEN** the same quantity fills from a resting limit order at tier 1, with no spread
+- **THEN** the commission is USD 39.94
+
+#### Scenario: selected tier
+- **WHEN** the run is started with fee tier 4 and the market order above fills
+- **THEN** the commission is USD 34.94 and the snapshot records tier 4
 
 ### Requirement: Crypto positions are sized in fractional coin units
 Sizing helpers and strategies SHALL size crypto orders in base-coin units floored to the
@@ -56,8 +58,9 @@ periods per year and record the value in its config snapshot. Other runs SHALL k
 ### Requirement: Kraken-fetched data is never priced from perpetuals
 A backtest with `--data-source kraken` SHALL fetch a spot price series for a spot pair, or
 refuse the request with a message naming the unsupported range, and SHALL build its instrument
-and fees from the coin spec's KRAKEN profile when the coin has a spec.
+and fees from the coin spec when the coin has a spec.
 
 #### Scenario: BTC/USD from Kraken
 - **WHEN** `backtest run --data-source kraken --symbol BTC/USD` fetches bars
-- **THEN** no perpetual (`PF_`) chart symbol is requested and the venue charges the KRAKEN profile
+- **THEN** no perpetual (`PF_`) chart symbol is requested and the venue charges the Kraken Pro
+  spot schedule
