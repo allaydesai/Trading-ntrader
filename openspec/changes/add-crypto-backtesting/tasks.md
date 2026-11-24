@@ -133,9 +133,9 @@ snapshots.
 Acceptance: a USD 10,000 budget on BTC at 78,000 sizes 0.12820512 BTC (floored to 1e-8), not 1.
 Below-minimum orders are dropped and counted. Equity, futures and FX sizing unchanged.
 
-- [ ] 4.1 Unit (failing first): `crypto_units_for_notional`/`crypto_units_for_risk`: flooring to
+- [x] 4.1 Unit (failing first): `crypto_units_for_notional`/`crypto_units_for_risk`: flooring to
       the increment, no minimum of 1, zero on a sub-minimum order, Decimal in and out.
-- [ ] 4.2 Implement in `src/core/position_sizing.py`.
+- [x] 4.2 Implement in `src/core/position_sizing.py`.
 - [ ] 4.3 Component (failing first): `sma_crossover` and `buy_and_hold` on a crypto pair size
       fractionally and submit `instrument.make_qty`; equity/futures/FX unchanged.
 - [ ] 4.4 Route the core strategies.
