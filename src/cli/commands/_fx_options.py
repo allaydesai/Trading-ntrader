@@ -73,7 +73,7 @@ def _units_value(request: BacktestRequest, units: Decimal, is_fx: bool) -> int |
         raise click.UsageError(f"--units: {exc}") from None
 
 
-def _apply_units(request: BacktestRequest, units: Decimal, is_fx: bool) -> BacktestRequest:
+def _apply_units(request: BacktestRequest, units: Decimal | int, is_fx: bool) -> BacktestRequest:
     if not config_declares(request.config_path, UNITS_KEY):
         supported = strategies_declaring(UNITS_KEY)
         raise click.UsageError(
