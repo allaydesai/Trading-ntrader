@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from src.cli.commands._crypto_options import apply_crypto_options, with_fee_tier
 from src.cli.commands._fx_options import apply_fx_options, with_spread_pips
 from src.cli.commands._strategy_params import _cli_strategy_params, apply_contracts
 from src.core.backtest_orchestrator import BacktestOrchestrator
@@ -116,6 +117,7 @@ def resolve_backtest_request(
     contracts: int | None = None,
     units: int | None = None,
     spread_pips: float | None = None,
+    fee_tier: int | None = None,
 ) -> tuple[BacktestRequest, str]:
     """Resolve inputs into BacktestRequest based on mode (config vs CLI).
 
@@ -139,6 +141,7 @@ def resolve_backtest_request(
         contracts: Futures only: whole contracts per entry (both modes; see apply_contracts)
         units: FX only: base units per entry (both modes; see ``_fx_options``)
         spread_pips: FX only: the modelled spread override (both modes)
+        fee_tier: Spot crypto only: the Kraken Pro fee tier (both modes; see ``_crypto_options``)
 
     Returns:
         Tuple of (BacktestRequest, resolved_data_source)
@@ -187,8 +190,10 @@ def resolve_backtest_request(
         messages = "; ".join(err.get("msg", "") for err in e.errors())
         messages = messages.replace("Value error, ", "")
         raise click.UsageError(messages or str(e)) from e
-    # FX (M5): EUR/USD -> EURUSD, MID bars for an FX catalog row, --units, --spread-pips
-    return apply_fx_options(apply_contracts(request, contracts), units, spread_pips), source
+    # FX (M5): EUR/USD -> EURUSD, MID bars for an FX catalog row, --units, --spread-pips;
+    # crypto (M3): --fee-tier
+    request = apply_fx_options(apply_contracts(request, contracts), units, spread_pips)
+    return apply_crypto_options(request, fee_tier), source
 
 
 def _resolve_config_mode(
@@ -740,6 +745,7 @@ async def execute_backtest(
     check_contracts_instrument(request.strategy_config, instrument)
     check_units_instrument(request.strategy_config, instrument)
     instrument = with_spread_pips(instrument, request.fx_spread_pips)
+    instrument = with_fee_tier(instrument, request.crypto_fee_tier)
     orchestrator = BacktestOrchestrator()
 
     try:

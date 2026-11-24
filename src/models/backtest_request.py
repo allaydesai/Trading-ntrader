@@ -101,6 +101,9 @@ class BacktestRequest(BaseModel):
     # FX only (``backtest run --spread-pips``): replaces the pair's modelled spread (design D7).
     # Part of the run's identity only when set.
     fx_spread_pips: Decimal | None = Field(default=None, ge=0, description="FX spread override")
+    # Crypto only (``backtest run --fee-tier``): the Kraken Pro spot tier every fill is charged
+    # at (decision C21); None charges the spec's default tier. Part of the identity only when set.
+    crypto_fee_tier: int | None = Field(default=None, ge=1, description="Crypto fee tier")
 
     # Execution options
     persist: bool = Field(default=True, description="Persist results to database")
