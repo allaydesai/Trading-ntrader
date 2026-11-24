@@ -16,6 +16,9 @@ _OMITTED_WHEN_UNSET = (
     "profit_pct_basis",
     "account_currency",
     "fx_pairs",
+    "fee_tier",
+    "crypto_pairs",
+    "periods_per_year",
 )
 
 
@@ -127,6 +130,17 @@ class StrategyConfigSnapshot(BaseModel):
         description="FX runs only: per instrument id, base, quote, pip size, margin %, "
         "commission terms, spread, as-of and conversion pair the run used (filled from M4). "
         "Omitted from the dump otherwise, so equity and futures rows stay byte-identical.",
+    )
+
+    # Crypto runs only (M3), each omitted while None so other rows stay byte-identical: the one
+    # Kraken Pro fee tier of the run (C21); per pair the tier rates, spread, precision, as-of and
+    # USD charged (maker/taker commission, spread); the 365 days risk metrics annualised on (C20).
+    fee_tier: int | None = Field(default=None, description="Crypto: Kraken Pro spot fee tier")
+    crypto_pairs: dict[str, dict[str, Any]] | None = Field(
+        default=None, description="Crypto: per pair, the cost terms used and USD charged"
+    )
+    periods_per_year: int | None = Field(
+        default=None, description="Crypto: days a year the risk metrics annualise on (365)"
     )
 
     metrics_basis: str | None = Field(
