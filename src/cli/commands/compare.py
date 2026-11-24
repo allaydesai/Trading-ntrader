@@ -15,6 +15,7 @@ from rich.text import Text
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.crypto import display as crypto_display
 from src.services.futures.display import run_summary, signed_pct
 from src.services.fx import display as fx_display
 
@@ -189,8 +190,8 @@ def _display_comparison_table(backtests: List):
     add_metric_row("Strategy", lambda bt: bt.strategy_name, lambda x: x)
     add_metric_row("Symbol", lambda bt: bt.instrument_symbol, lambda x: x)
     add_metric_row("Date", lambda bt: bt.created_at, lambda x: x.strftime("%Y-%m-%d"))
-    # Only when a compared run is futures (M4) or FX (M5)
-    for row in _futures_rows(backtests) + _fx_rows(backtests):
+    # Only when a compared run is futures (M4), FX (M5) or crypto (crypto M5)
+    for row in _futures_rows(backtests) + _fx_rows(backtests) + _crypto_rows(backtests):
         table.add_row(*row)
 
     # Performance metric rows
@@ -236,7 +237,9 @@ def _display_comparison_table(backtests: List):
 def _asset_class(bt) -> str:
     if futures := run_summary(bt):
         return futures.asset_class
-    return "fx" if fx_display.run_summary(bt) else "equity"
+    if fx_display.run_summary(bt):
+        return "fx"
+    return "crypto" if crypto_display.run_summary(bt) else "equity"
 
 
 def _futures_rows(backtests: List) -> list[list[str]]:
@@ -274,6 +277,26 @@ def _fx_rows(backtests: List) -> list[list[str]]:
         ["Pips", *(fx_display.pips(s.pips) if s else "-" for s in summaries)],
         ["Peak Leverage", *(fx_display.leverage(s.peak_leverage) if s else "-" for s in summaries)],
         ["Total Costs", *(fx_display.usd(s.costs_usd) if s else "-" for s in summaries)],
+    ]
+
+
+def _crypto_rows(backtests: List) -> list[list[str]]:
+    """Crypto figures beside the account return; none unless a compared run is crypto.
+
+    The asset class row comes from the futures or FX rows when such a run is compared too.
+    """
+    summaries = [crypto_display.run_summary(bt) for bt in backtests]
+    if not any(summaries):
+        return []
+    other = any(run_summary(bt) or fx_display.run_summary(bt) for bt in backtests)
+    rows = [] if other else [["Asset Class", *(_asset_class(bt) for bt in backtests)]]
+    tier = [f"Kraken {s.fee_tier}" if s and s.fee_tier else "-" for s in summaries]
+    # FX has its own Total Costs row; two rows of that name would read as one figure
+    costs = "Crypto Costs" if any(fx_display.run_summary(bt) for bt in backtests) else "Total Costs"
+    return rows + [
+        ["Fee Tier", *tier],
+        ["Peak Exposure", *(crypto_display.pct(s.peak_exposure) if s else "-" for s in summaries)],
+        [costs, *(crypto_display.usd(s.costs_usd) if s else "-" for s in summaries)],
     ]
 
 

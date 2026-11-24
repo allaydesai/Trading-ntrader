@@ -12,6 +12,7 @@ from rich.table import Table
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.crypto.display import symbol_cell as crypto_symbol_cell
 from src.services.futures.display import history_return_cell, run_summary, symbol_cell
 from src.services.fx.display import symbol_cell as fx_symbol_cell
 
@@ -266,10 +267,12 @@ def _list_history_sync(
 
 
 def _symbol_cell(bt) -> str:
-    """The symbol, marked ``(fx)`` for an FX run (M5) or ``(fut)`` for a futures run."""
-    snapshot = bt.config_snapshot
-    return fx_symbol_cell(bt.instrument_symbol, snapshot) or symbol_cell(
-        bt.instrument_symbol, snapshot
+    """The symbol, marked ``(fx)``, ``(crypto)`` (M5) or ``(fut)`` for its asset class."""
+    snapshot, symbol = bt.config_snapshot, bt.instrument_symbol
+    return (
+        fx_symbol_cell(symbol, snapshot)
+        or crypto_symbol_cell(symbol, snapshot)
+        or symbol_cell(symbol, snapshot)
     )
 
 

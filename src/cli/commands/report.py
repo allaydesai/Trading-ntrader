@@ -13,6 +13,8 @@ from rich.table import Table
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.crypto import display as crypto_display
+from src.services.crypto import returns as crypto_returns
 from src.services.futures.display import (
     flat_report_fields,
     print_futures,
@@ -64,6 +66,8 @@ def summary(result_id: str):
 
             # FX runs: the account return above stays the headline (M5, D10)
             _display_fx(backtest)
+            # Crypto runs likewise (crypto M5, C19)
+            _display_crypto(backtest)
 
     except Exception as e:
         console.print(f"❌ Error loading result: {e}", style="red bold")
@@ -225,6 +229,11 @@ def _display_fx(backtest):
     fx_display.print_fx(console, backtest)
 
 
+def _display_crypto(backtest):
+    """The crypto table for a spot crypto run; nothing otherwise."""
+    crypto_display.print_crypto(console, backtest)
+
+
 def _trade_json(backtest, rows):
     """Per-trade report rows: identity and timestamps, then the asset class's figures."""
     return [
@@ -246,6 +255,16 @@ def _fx_json(backtest) -> dict:
         return {}
     rows = fx_returns.trade_rows(backtest.config_snapshot, backtest.trades or [])
     return {"fx": {**fx_returns.report_fields(summary), "trades": _trade_json(backtest, rows)}}
+
+
+def _crypto_json(backtest) -> dict:
+    """``{"crypto": ...}`` for a crypto run's JSON report (with per-trade figures); else {}."""
+    summary = crypto_display.run_summary(backtest)
+    if summary is None:
+        return {}
+    rows = crypto_returns.trade_rows(backtest.config_snapshot, backtest.trades or [])
+    fields = crypto_returns.report_fields(summary)
+    return {"crypto": {**fields, "trades": _trade_json(backtest, rows)}}
 
 
 def _futures_json(backtest) -> dict:
@@ -410,6 +429,8 @@ def _generate_text_report(backtest, output_path=None):
         report_content = summary_text(futures) + "\n\n" + report_content
     elif fx := fx_display.run_summary(backtest):
         report_content = report_content + "\n\n" + fx_display.summary_text(fx)
+    elif crypto := crypto_display.run_summary(backtest):
+        report_content = report_content + "\n\n" + crypto_display.summary_text(crypto)
 
     if output_path:
         # Save to file
@@ -459,6 +480,8 @@ def _generate_csv_report(backtest, output_path):
         metrics_dict.update(flat_report_fields(futures))
     elif fx := fx_display.run_summary(backtest):
         metrics_dict.update(fx_display.flat_report_fields(fx))
+    elif crypto := crypto_display.run_summary(backtest):
+        metrics_dict.update(crypto_display.flat_report_fields(crypto))
 
     success = exporter.export_metrics(metrics_dict, output_path)
 
@@ -511,6 +534,7 @@ def _generate_json_report(backtest, output_path):
         ),
         **_futures_json(backtest),
         **_fx_json(backtest),
+        **_crypto_json(backtest),
     }
 
     # Write to JSON file
