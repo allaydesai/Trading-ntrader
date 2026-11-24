@@ -20,7 +20,7 @@ from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from rich.console import Console
 
 from src.cli.commands._backtest_helpers import resolve_backtest_request
-from src.cli.commands._crypto_options import with_fee_tier
+from src.cli.commands._crypto_options import with_crypto_terms
 from src.cli.commands.backtest import run_backtest
 from src.core.crypto_costs import crypto_terms
 from src.models.backtest_request import BacktestRequest
@@ -85,20 +85,20 @@ class TestRequest:
 class TestInstrument:
     def test_the_pair_is_rebuilt_at_the_tier(self):
         pair = build_crypto_pair(get_coin_spec("BTC"), price_precision=2)
-        rebuilt = with_fee_tier(pair, 4)
+        rebuilt = with_crypto_terms(pair, 4)
         assert rebuilt.id == pair.id and rebuilt.price_precision == 2
         assert rebuilt.info["fee_tier"] == 4
         assert crypto_terms(rebuilt).fee_tier == 4
 
     def test_no_tier_leaves_the_instrument(self):
         pair = build_crypto_pair(get_coin_spec("ETH"))
-        assert with_fee_tier(pair, None) is pair
+        assert with_crypto_terms(pair, None) is pair
         equity = TestInstrumentProvider.equity("AAPL", "XNAS")
-        assert with_fee_tier(equity, None) is equity
+        assert with_crypto_terms(equity, None) is equity
 
     def test_a_non_crypto_instrument_is_refused(self):
-        with pytest.raises(ValueError, match="fee tier applies to spot crypto only"):
-            with_fee_tier(TestInstrumentProvider.equity("AAPL", "XNAS"), 2)
+        with pytest.raises(ValueError, match="fee tier or spread applies to spot crypto only"):
+            with_crypto_terms(TestInstrumentProvider.equity("AAPL", "XNAS"), 2)
 
 
 class TestUnits:

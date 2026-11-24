@@ -292,6 +292,7 @@ class TestExecuteBacktest:
         mock_request = MagicMock()
         mock_request.strategy_config = {}  # no --contracts
         mock_request.crypto_fee_tier = None  # no --fee-tier
+        mock_request.crypto_spread_bps = None  # no --spread-bps
         mock_request.persist = True
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()
@@ -331,6 +332,7 @@ class TestExecuteBacktest:
         mock_request = MagicMock()
         mock_request.strategy_config = {}  # no --contracts
         mock_request.crypto_fee_tier = None  # no --fee-tier
+        mock_request.crypto_spread_bps = None  # no --spread-bps
         mock_request.persist = False
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()
@@ -366,6 +368,7 @@ class TestExecuteBacktest:
         mock_request = MagicMock()
         mock_request.strategy_config = {}  # no --contracts
         mock_request.crypto_fee_tier = None  # no --fee-tier
+        mock_request.crypto_spread_bps = None  # no --spread-bps
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()
 
@@ -401,6 +404,7 @@ class TestExecuteBacktest:
         mock_request = MagicMock()
         mock_request.strategy_config = {}  # no --contracts
         mock_request.crypto_fee_tier = None  # no --fee-tier
+        mock_request.crypto_spread_bps = None  # no --spread-bps
         mock_request.persist = False
         mock_bars = [MagicMock()]
         mock_instrument = MagicMock()

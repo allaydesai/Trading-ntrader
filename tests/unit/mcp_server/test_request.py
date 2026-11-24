@@ -216,3 +216,52 @@ class TestSizingOverrides:
 
     def _btc(self, **overrides):
         return _spec(symbol="BTC", catalog="firstrate-crypto", params={}, **overrides)
+
+
+class TestCryptoSymbols:
+    """Crypto M5: every shipped spelling of a pair names the coin's catalog ticker."""
+
+    @pytest.mark.parametrize("symbol", ["BTC", "BTC/USD", "BTCUSD", "XBTUSD", "BTC/USD.KRAKEN"])
+    def test_every_form_resolves_to_the_btc_row(self, symbol):
+        request = resolve(self._spec(symbol), default_catalog="").request
+        assert (request.symbol, request.instrument_id) == ("BTC", "BTC.NAMED_CATALOG")
+        assert request.bar_type == "1-DAY-LAST"
+
+    def test_every_form_is_the_same_run(self):
+        hashes = {
+            resolve(self._spec(s), default_catalog="").config_hash
+            for s in ("BTC", "btc/usd", "XBTUSD", "BTC/USD.KRAKEN")
+        }
+        assert len(hashes) == 1
+
+    def test_units_take_any_form(self):
+        spec = self._spec("XBTUSD", units=0.25)
+        assert resolve(spec, default_catalog="").request.strategy_config["units"] == Decimal("0.25")
+
+    @pytest.mark.parametrize(
+        ("symbol", "why"),
+        [("BTC/EUR", "quoted in USD only"), ("DOGE/USD", "unknown crypto coin DOGE")],
+    )
+    def test_an_unshipped_pair_is_refused_naming_the_shipped_ones(self, symbol, why):
+        with pytest.raises(ToolFailure) as exc:
+            resolve(self._spec(symbol), default_catalog="")
+        assert exc.value.code == "unknown_crypto_pair"
+        assert why in exc.value.message and "BTC/USD, ETH/USD, SOL/USD" in exc.value.message
+
+    def test_validation_looks_up_the_coin_row(self, monkeypatch):
+        from src.mcp_server import validation
+
+        seen = []
+        monkeypatch.setattr(
+            validation,
+            "catalog_availability",
+            lambda symbol, catalog: seen.append(symbol) or {"backtestable": True},
+        )
+        monkeypatch.setattr(validation, "_window_problems", lambda spec, coverage: ([], []))
+        monkeypatch.setattr(validation, "_conversion_problems", lambda spec, coverage: [])
+        validation._coverage(self._spec("BTC/USD.KRAKEN"), "firstrate-crypto")
+        assert seen == ["BTC"]
+
+    @staticmethod
+    def _spec(symbol, **overrides):
+        return _spec(symbol=symbol, catalog="firstrate-crypto", params={}, **overrides)

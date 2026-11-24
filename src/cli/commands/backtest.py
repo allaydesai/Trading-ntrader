@@ -166,6 +166,13 @@ def backtest():
     "spec's tier 2). Recorded with the run.",
 )
 @click.option(
+    "--spread-bps",
+    type=click.FloatRange(min=0),
+    default=None,
+    help="Spot crypto only: override the coin's modelled full bid/ask spread in basis points "
+    "(default: coin spec; half is charged per side).",
+)
+@click.option(
     "--timeframe",
     "-t",
     default=None,
@@ -205,6 +212,7 @@ def run_backtest(
     units: Decimal | None,
     spread_pips: float | None,
     fee_tier: int | None,
+    spread_bps: float | None,
     timeframe: str | None,
     catalog_name: str | None,
     persist: bool,
@@ -257,6 +265,7 @@ def run_backtest(
             units=units,
             spread_pips=spread_pips,
             fee_tier=fee_tier,
+            spread_bps=spread_bps,
         )
 
         # Display mode indicator

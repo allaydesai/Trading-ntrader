@@ -70,11 +70,18 @@ def check_contracts_instrument(strategy_config: dict, instrument: object) -> Non
 
 
 def coin_for_symbol(symbol: str) -> str | None:
-    """The coin (``BTC``) when ``symbol`` names one with a coin spec, else ``None``."""
-    from src.services.crypto.coin_specs import coin_names
+    """The coin (``BTC``) when ``symbol`` names one with a coin spec, else ``None``.
 
-    coin = symbol.strip().upper()
-    return coin if coin in coin_names() else None
+    Any shipped spelling counts (``BTC/USD``, ``XBTUSD``, ``BTC/USD.KRAKEN``; crypto M5). A
+    crypto-shaped symbol no spec ships is ``None`` here; the request resolvers
+    (:func:`src.services.crypto.symbols.crypto_coin`) refuse it with the reason.
+    """
+    from src.services.crypto.symbols import CryptoSymbolError, crypto_coin
+
+    try:
+        return crypto_coin(symbol)
+    except CryptoSymbolError:
+        return None
 
 
 def crypto_units(units: object, coin: str, increment: Decimal, minimum: Decimal) -> Decimal:

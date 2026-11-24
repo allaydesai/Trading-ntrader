@@ -77,8 +77,12 @@ def resolve_fx_symbol(
 def run_target(form: Any) -> tuple[str, str]:
     """``(symbol, bar spec)`` for a run form (``catalog_name``, ``symbol``, ``timeframe``).
 
-    ``LAST`` bars for equity and crypto; an FX catalog row's ticker and ``MID`` bars (M5).
+    ``LAST`` bars for equity and crypto; an FX catalog row's ticker and ``MID`` bars (M5); a
+    crypto spelling's coin (``BTC/USD`` -> ``BTC``, crypto M5). An unshipped crypto pair is
+    left as typed, for the catalog loader to refuse.
     """
+    from src.services.sizing_overrides import coin_for_symbol
+
     bar_type_spec = f"{form.timeframe}-{DEFAULT_PRICE_TYPE}"
     resolved = resolve_fx_symbol(form.catalog_name, form.symbol, bar_type_spec)
-    return resolved or (form.symbol, bar_type_spec)
+    return resolved or (coin_for_symbol(form.symbol) or form.symbol, bar_type_spec)
