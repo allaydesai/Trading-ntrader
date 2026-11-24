@@ -19,7 +19,7 @@ Public API:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -51,7 +51,9 @@ _FIRSTRATE_TIMEZONE = ZoneInfo("America/New_York")
 _FX_SESSION_OPEN = "17:00:00"
 
 
-def compute_source_last_date(file_path: Path) -> datetime | None:
+def compute_source_last_date(
+    file_path: Path, *, source_tz: tzinfo = _FIRSTRATE_TIMEZONE
+) -> datetime | None:
     """Return the UTC datetime of the latest row in a FirstRate CSV.
 
     FirstRate files are not guaranteed sorted (see
@@ -71,6 +73,8 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
 
     Args:
         file_path: Path to the source ``.txt`` file.
+        source_tz: The wall clock the file's stamps are in: US/Eastern for every FirstRate
+            series except crypto, whose files are UTC (crypto M2 passes ``timezone.utc``).
 
     Returns:
         A UTC-aware :class:`datetime` for the max-date row, or ``None``
@@ -78,7 +82,7 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         whose first column parses as a FirstRate timestamp.
     """
     try:
-        return _probe(file_path)
+        return _probe(file_path, source_tz)
     except FileNotFoundError:
         return None
     except (PermissionError, OSError) as exc:
@@ -133,7 +137,9 @@ def _separator_shaped(stamp: str) -> bool:
     return len(stamp) == 10 or (stamp[10] == " " and stamp[13] == ":" and stamp[16] == ":")
 
 
-def _latest(file_path: Path, check_digits: bool = False) -> tuple[str | None, datetime | None]:
+def _latest(
+    file_path: Path, source_tz: tzinfo, check_digits: bool = False
+) -> tuple[str | None, datetime | None]:
     """Largest canonical stamp string, and the latest parsed odd-shaped stamp.
 
     Canonical stamps are compared as strings; anything else (e.g. ``2025-1-3``, which
@@ -151,40 +157,40 @@ def _latest(file_path: Path, check_digits: bool = False) -> tuple[str | None, da
             if not check_digits or stamp.translate(_SEPARATORS).isdigit():
                 best = stamp
                 continue
-        dt = _parse_timestamp(stamp)
+        dt = _parse_timestamp(stamp, source_tz)
         if dt is not None and (other is None or dt > other):
             other = dt
     return best, other
 
 
-def _probe(file_path: Path) -> datetime | None:
+def _probe(file_path: Path, source_tz: tzinfo) -> datetime | None:
     """Cheap pass; a digit-checked pass if its winner does not parse; full parse last."""
     for check_digits in (False, True):
-        best, other = _latest(file_path, check_digits)
+        best, other = _latest(file_path, source_tz, check_digits)
         if best is None:
             return other
-        parsed = _parse_timestamp(best)
+        parsed = _parse_timestamp(best, source_tz)
         if parsed is not None:
             return parsed if other is None else max(parsed, other)
-    return _max_parsed_stamp(file_path)
+    return _max_parsed_stamp(file_path, source_tz)
 
 
-def _max_parsed_stamp(file_path: Path) -> datetime | None:
+def _max_parsed_stamp(file_path: Path, source_tz: tzinfo) -> datetime | None:
     max_dt: datetime | None = None
     for stamp in _first_columns(file_path):
-        dt = _parse_timestamp(stamp)
+        dt = _parse_timestamp(stamp, source_tz)
         if dt is not None and (max_dt is None or dt > max_dt):
             max_dt = dt
     return max_dt
 
 
-def _parse_timestamp(ts_str: str) -> datetime | None:
+def _parse_timestamp(ts_str: str, source_tz: tzinfo = _FIRSTRATE_TIMEZONE) -> datetime | None:
     """Parse a FirstRate timestamp string to a UTC-aware datetime.
 
     FirstRate CSV timestamps are US Eastern wall-clock time with DST, so
     ``2018-01-16 09:30:00`` is 09:30 EST (= 14:30 UTC) and
     ``2018-07-16 09:30:00`` is 09:30 EDT (= 13:30 UTC). Daily rows
-    localize to midnight ET.
+    localize to midnight ET. ``source_tz=timezone.utc`` (crypto) takes the stamp as UTC.
 
     Mirrors
     :meth:`src.services.firstrate.parsers.firstrate_csv_parser.FirstRateCsvParser._parse_timestamp`
@@ -202,4 +208,4 @@ def _parse_timestamp(ts_str: str) -> datetime | None:
             naive = datetime.strptime(ts_str, _DAILY_FMT)
         except ValueError:
             return None
-    return naive.replace(tzinfo=_FIRSTRATE_TIMEZONE).astimezone(timezone.utc)
+    return naive.replace(tzinfo=source_tz).astimezone(timezone.utc)

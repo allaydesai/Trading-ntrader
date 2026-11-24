@@ -172,6 +172,31 @@ class TestComputeSourceLastDate:
 
 
 @pytest.mark.unit
+class TestUtcSourceTimezone:
+    """Crypto M2: FirstRate crypto files are UTC, so the probe must not localise them."""
+
+    def test_intraday_utc_stamp_is_taken_as_is(self, tmp_path: Path) -> None:
+        body = "2026-05-02 22:00:00,1,1,1,1,1\n2026-05-02 23:59:00,1,1,1,1,1\n"
+        file_path = _write(tmp_path / "BTC_full_1min.txt", body)
+        result = compute_source_last_date(file_path, source_tz=timezone.utc)
+        assert result == datetime(2026, 5, 2, 23, 59, tzinfo=timezone.utc)
+
+    def test_daily_utc_stamp_is_midnight_utc(self, tmp_path: Path) -> None:
+        file_path = _write(tmp_path / "BTC_full_1day.txt", "2026-05-01,1,1,1,1,1\n")
+        result = compute_source_last_date(file_path, source_tz=timezone.utc)
+        assert result == datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+    def test_dst_spring_forward_hour_is_not_shifted(self, tmp_path: Path) -> None:
+        file_path = _write(tmp_path / "BTC_full_1hour.txt", "2024-03-10 02:00:00,1,1,1,1,1\n")
+        result = compute_source_last_date(file_path, source_tz=timezone.utc)
+        assert result == datetime(2024, 3, 10, 2, tzinfo=timezone.utc)
+
+    def test_default_is_still_new_york(self, tmp_path: Path) -> None:
+        file_path = _write(tmp_path / "SPY_full_1hour.txt", "2024-07-01 09:00:00,1,1,1,1,1\n")
+        assert compute_source_last_date(file_path) == datetime(2024, 7, 1, 13, tzinfo=timezone.utc)
+
+
+@pytest.mark.unit
 class TestSourceProbeImportIsolation:
     """Ensure the probe module stays free of ``nautilus_trader`` imports.
 
