@@ -116,7 +116,7 @@ def test_info_records_the_terms():
         "venue": "KRAKEN",
         "source": schedule.source,
         "as_of": "2026-11-24",
-        "default_tier": 1,
+        "default_tier": 2,
     }
     assert set(info["unverified"]) == set(spec.unverified_fields())
     assert "kraken_min_order_base" in info["unverified"]

@@ -20,7 +20,7 @@ without any error:
 - **Costs.** Non-FX, non-futures venues get the IBKR per-share model (USD 0.005 per unit,
   USD 1 minimum), so 0.128 BTC (about USD 10,000) costs USD 1. Kraken Pro, the venue Allay
   will trade on, charges a percentage of trade value: tier 1 is 0.40% maker / 0.80% taker
-  (USD 40-80 on that order). The Kraken fallback instrument's `maker_fee/taker_fee` (0.16%/0.26%) is not
+  (USD 40-80 on that order) and Allay's tier 2 is 0.30% / 0.60% (USD 30-60). The Kraken fallback instrument's `maker_fee/taker_fee` (0.16%/0.26%) is not
   charged: `venue_cost_models` installs the equity per-share model for any venue without
   futures or FX, and a venue fee model replaces the instrument's fees.
 - **Leverage and shorting.** Venues are `MARGIN` with Nautilus' default leverage, and nothing

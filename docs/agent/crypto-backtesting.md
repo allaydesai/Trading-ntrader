@@ -21,7 +21,7 @@ Kraken fetch path (M7) name the same instrument (decision C2).
 
 - `src/services/crypto/coin_specs.yaml` + `coin_specs.py`: per-coin specs (USD quote only,
   price precision 4, size precision 8 / increment 1e-8, modelled spread, Kraken block) and the
-  17-tier Kraken Pro spot fee schedule (`get_fee_schedule()`, default tier 1). Invalid files
+  17-tier Kraken Pro spot fee schedule (`get_fee_schedule()`, default tier 2). Invalid files
   raise `CryptoSpecError` naming the dotted field.
 - `src/services/crypto/instrument_builder.py`: `build_crypto_pair(spec, nautilus_id=...,
   price_precision=...)` gives a Nautilus `CurrencyPair` (Nautilus `asset_class`
@@ -45,12 +45,12 @@ Kraken fetch path (M7) name the same instrument (decision C2).
 | Tick size (live only) | `coins.*.kraken.tick_size` | 0.1 / 0.01 / 0.01 |
 | Discounted pair (C23) | `coins.*.kraken.discounted_pair` | false |
 | Spread (C4) | `coins.*.typical_spread_bps` | 2 / 3 / 5 bp |
-| Fee tier (C21) | `fee_schedule.default_tier` | 1 |
 | Fee currency | `fee_schedule.fee_currency` | USD (the page does not say) |
 
 The tier rates (tier 1 0.40% maker / 0.80% taker down to tier 17 0.00% / 0.05%), the 0.02%
 discounted-pair rebate and the absence of a minimum fee are VERIFIED against
-<https://www.kraken.com/ca/pro/fees> (read 2026-11-24).
+<https://www.kraken.com/ca/pro/fees> (read 2026-11-24). The default tier (C21) is **tier 2**
+(0.30% maker / 0.60% taker), confirmed by Allay from his Kraken fee screen on 2026-11-24.
 
 ## Account model: the M1 spike (decision C8)
 

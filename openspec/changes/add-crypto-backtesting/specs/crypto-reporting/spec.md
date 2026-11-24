@@ -9,7 +9,7 @@ FX output SHALL be unchanged.
 
 #### Scenario: CLI show of a BTC run
 - **WHEN** `show` is run for a persisted BTC run with a 0.12820512 BTC trade
-- **THEN** the crypto block lists `BTC/USD (crypto, KRAKEN, fee tier 1)`, quantity `0.12820512`, its USD
+- **THEN** the crypto block lists `BTC/USD (crypto, KRAKEN, fee tier 2)`, quantity `0.12820512`, its USD
   notional and the costs split
 
 #### Scenario: MCP payload is additive

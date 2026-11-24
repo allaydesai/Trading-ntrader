@@ -34,7 +34,7 @@ fee_schedule:
   source: https://www.kraken.com/ca/pro/fees
   as_of: "2026-11-24"
   status: VERIFIED          # the tier rates and thresholds, as published
-  default_tier: 1           # decision C21 (provisional): most conservative until Allay's tier
+  default_tier: 2           # decision C21: Allay's Kraken Pro tier (0.30% maker / 0.60% taker)
   discounted_pair_bps_off: "2"   # "-0.02% off the selected spot pairs", all tiers
   min_fee_usd: "0"          # the page shows no minimum fee
   fee_currency: USD         # the model charges the quote; the page does not say
@@ -61,10 +61,10 @@ fee_schedule:
     17: {maker: "0.00", taker: "0.05", spot_30d_usd: "500000000", futures_30d_usd: "5000000000", assets_usd: "100000000"}
   sources:
     default_tier:
-      status: UNVERIFIED
+      status: VERIFIED
       source: >-
-        Decision C21 provisional default (tier 1, most conservative) pending Allay's current
-        Kraken Pro tier.
+        Decision C21 confirmed by Allay from his Kraken account's fee screen: Kraken Pro spot
+        tier 2 (0.30% maker / 0.60% taker).
       as_of: "2026-11-24"
     discounted_pair_bps_off:
       status: VERIFIED

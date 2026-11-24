@@ -85,7 +85,8 @@ denied with the pinned reasons. Equity, futures and FX runs produce byte-identic
 snapshots.
 
 - [ ] 3.1 Component (failing first): `tests/component/core/test_crypto_costs.py`: USD 9,984 of
-      BTC costs 79.87 taker / 39.94 maker at tier 1 and 34.94 taker at tier 4; maker only for a
+      BTC costs 79.87 taker / 39.94 maker at tier 1, 59.90 taker / 29.95 maker at the
+      default tier 2 and 34.94 taker at tier 4; maker only for a
       fill whose `liquidity_side` is `MAKER` (a resting limit), taker for market, stop and
       marketable-limit fills; no minimum (USD 10 at tier 1 taker costs 0.08); split fills
       sum to the single-fill charge within a cent; half-spread component; cost-stress
@@ -108,7 +109,8 @@ snapshots.
       `account_currency` and `periods_per_year`, omitted when unset.
 - [ ] 3.8 Unit (failing first): `risk_metrics` annualises on 365 for a crypto run and 252
       otherwise (decision C20); implement.
-- [ ] 3.9 Manual: Allay confirms the default tier (their current Kraken Pro tier), whether
+- [ ] 3.9 Manual: the default tier is confirmed (tier 2, Allay's Kraken fee screen,
+      2026-11-24, recorded in `coin_specs.yaml` and design C21); Allay confirms whether
       BTC/ETH/SOL are on the 0.02% discounted-pair list, and the spread defaults; record the
       answers and date in `coin_specs.yaml` and the design.
 
