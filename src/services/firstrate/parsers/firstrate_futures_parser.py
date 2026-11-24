@@ -19,7 +19,7 @@ bar open (``ts_event == ts_init``), the same convention as equities.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,14 +62,20 @@ class FuturesChunk:
     errors: list[str] = field(default_factory=list)
 
 
-def _to_utc_ns(ts: pd.Series) -> pd.Series:
-    """US/Eastern wall-clock strings -> UTC epoch ns (``NaT`` where unparseable)."""
+def naive_stamps(ts: pd.Series) -> pd.Series:
+    """``YYYY-MM-DD[ HH:MM:SS]`` strings -> naive datetimes (``NaT`` where unparseable)."""
     text = ts.astype(str).str.strip()
     intraday = text.str.len() > len("YYYY-MM-DD")
     naive = pd.to_datetime(text.where(intraday), format=_INTRADAY_FMT, errors="coerce")
     if not intraday.all():
         daily = pd.to_datetime(text.where(~intraday), format=_DAILY_FMT, errors="coerce")
         naive = naive.where(intraday, daily)
+    return naive
+
+
+def _to_utc_ns(ts: pd.Series) -> pd.Series:
+    """US/Eastern wall-clock strings -> UTC epoch ns (``NaT`` where unparseable)."""
+    naive = naive_stamps(ts)
     local = naive.dt.tz_localize(
         _TIMEZONE,
         ambiguous=np.ones(len(naive), dtype=bool),
@@ -78,8 +84,15 @@ def _to_utc_ns(ts: pd.Series) -> pd.Series:
     return local.dt.tz_convert("UTC")
 
 
-def _clean(frame: pd.DataFrame, precision: int) -> tuple[pd.DataFrame, pd.Series]:
+def _clean(
+    frame: pd.DataFrame,
+    precision: int,
+    to_ns: Callable[[pd.Series], pd.Series] = _to_utc_ns,
+) -> tuple[pd.DataFrame, pd.Series]:
     """Coerce + round; return the frame and a mask of rows that make valid bars.
+
+    ``to_ns`` turns the stamp column into UTC datetimes (US/Eastern wall clock by default;
+    the crypto parser passes a plain UTC reading).
 
     OHLC ordering is checked on the source values (rounding could hide a ``high < low``);
     positivity and Nautilus' representable range on the rounded values that are emitted.
@@ -88,7 +101,7 @@ def _clean(frame: pd.DataFrame, precision: int) -> tuple[pd.DataFrame, pd.Series
     source = pd.DataFrame({col: pd.to_numeric(frame[col], errors="coerce") for col in _PRICES})
     o, h, lo, c = (source[col] for col in _PRICES)
     out = pd.DataFrame(index=frame.index)
-    out["ts"] = _to_utc_ns(frame["ts"])
+    out["ts"] = to_ns(frame["ts"])
     for col in _PRICES:
         out[col] = source[col].round(precision)
     out["volume"] = pd.to_numeric(frame["volume"], errors="coerce")
@@ -107,7 +120,9 @@ def _errors_for(frame: pd.DataFrame, invalid: pd.Series, limit: int) -> list[str
     ]
 
 
-def _build_bars(frame: pd.DataFrame, bar_type: BarType, precision: int) -> list[Bar]:
+def _build_bars(
+    frame: pd.DataFrame, bar_type: BarType, precision: int, volume_precision: int = 0
+) -> list[Bar]:
     stamps = frame["ts"].astype("int64").tolist()
     columns = [frame[col].tolist() for col in _PRICES]
     volumes = frame["volume"].tolist()
@@ -118,7 +133,7 @@ def _build_bars(frame: pd.DataFrame, bar_type: BarType, precision: int) -> list[
             high=Price(h, precision),
             low=Price(lo, precision),
             close=Price(c, precision),
-            volume=Quantity(v, 0),
+            volume=Quantity(v, volume_precision),
             ts_event=t,
             ts_init=t,
         )
@@ -126,11 +141,11 @@ def _build_bars(frame: pd.DataFrame, bar_type: BarType, precision: int) -> list[
     ]
 
 
-def _process_chunk(
-    raw: pd.DataFrame, bar_type: BarType, precision: int, after_ns: int | None, errors_left: int
-) -> FuturesChunk:
-    frame, valid = _clean(raw, precision)
-    errors = _errors_for(raw, ~valid, errors_left) if errors_left > 0 else []
+def ordered_rows(
+    frame: pd.DataFrame, valid: pd.Series, after_ns: int | None
+) -> tuple[pd.DataFrame, int]:
+    """Valid rows sorted by time, duplicates resolved to the last, and those at or before
+    ``after_ns`` (the previous chunk's last bar) dropped; returns the rows and that count."""
     good = frame[valid].sort_values("ts", kind="stable")
     good = good[~good["ts"].duplicated(keep="last")]
     behind = 0
@@ -138,6 +153,15 @@ def _process_chunk(
         ahead = good["ts"].astype("int64") > after_ns
         behind = int((~ahead).sum())
         good = good[ahead]
+    return good, behind
+
+
+def _process_chunk(
+    raw: pd.DataFrame, bar_type: BarType, precision: int, after_ns: int | None, errors_left: int
+) -> FuturesChunk:
+    frame, valid = _clean(raw, precision)
+    errors = _errors_for(raw, ~valid, errors_left) if errors_left > 0 else []
+    good, behind = ordered_rows(frame, valid, after_ns)
     return FuturesChunk(
         bars=_build_bars(good, bar_type, precision),
         row_count=len(raw),
