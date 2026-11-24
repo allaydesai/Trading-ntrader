@@ -30,6 +30,7 @@ from src.mcp_server.jobs.store import utc_now
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.runs import parse_run_ids
 from src.mcp_server.settings import McpSettings
+from src.services.crypto import returns as crypto_returns
 from src.services.futures.returns import report_fields, summarise_run, trade_rows
 from src.services.fx import returns as fx_returns
 from src.services.provenance import REPO_ROOT, STRATEGIES_SUBMODULE, git_output
@@ -162,6 +163,20 @@ def fx_trade_fields(
     return [{**t, **f} for t, f in zip(trades, fx_returns.trade_rows(snapshot, trades))]
 
 
+def crypto_trade_fields(
+    row: dict[str, Any], snapshot: dict[str, Any] | None, trades: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """A crypto run's trades with their crypto columns, and ``row["crypto"]`` (crypto M5).
+
+    Any other run's trades come back as they are (the same list) and ``row`` is untouched.
+    """
+    summary = crypto_returns.summarise_run(snapshot, trades, row.get("initial_capital"))
+    if summary is None:
+        return trades
+    row["crypto"] = crypto_returns.report_fields(summary)
+    return [{**t, **f} for t, f in zip(trades, crypto_returns.trade_rows(snapshot, trades))]
+
+
 def git_info() -> dict[str, Any]:
     """Repository state in the runner's ``git`` shape."""
     submodule = REPO_ROOT / STRATEGIES_SUBMODULE
@@ -200,6 +215,7 @@ def load_runs(run_ids: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, 
             row["trade_stats"] = trade_stats(trades, row)
             trades = futures_trade_fields(row, run.config_snapshot, trades)
             trades = fx_trade_fields(row, run.config_snapshot, trades)
+            trades = crypto_trade_fields(row, run.config_snapshot, trades)
             row.pop("id", None)
             runs.append(row)
             all_trades += [{**t, "run_id": run_id} for t in trades]
@@ -244,7 +260,7 @@ def write_export(
         json_tmp.write_text(text, encoding="utf-8")
         if trades:
             with csv_tmp.open("w", newline="", encoding="utf-8") as handle:
-                # Every key in first-seen order: futures/FX runs add columns equity rows lack.
+                # Every key in first-seen order: futures/FX/crypto runs add columns equity lacks.
                 columns = list(dict.fromkeys(k for t in trades for k in t))
                 writer = csv.DictWriter(handle, fieldnames=columns, restval="")
                 writer.writeheader()
