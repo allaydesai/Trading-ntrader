@@ -47,6 +47,8 @@ from src.services.crypto.coin_specs import get_fee_schedule
 
 #: Cache key (Nautilus' general object store) holding the run's per-pair cost totals as JSON.
 CRYPTO_COSTS_KEY = "ntrader.crypto_costs"
+#: Cache key holding, per pair, the orders strategies dropped under Kraken's minimum (M5).
+ORDERS_BELOW_MINIMUM_KEY = "ntrader.crypto_orders_below_minimum"
 #: Crypto trades every calendar day: daily returns annualise on 365, not 252 (decision C20).
 CRYPTO_PERIODS_PER_YEAR = 365
 CENT = Decimal("0.01")
@@ -203,23 +205,43 @@ class CryptoCommissionModel(FeeModel):
         return f"CryptoCommissionModel({', '.join(map(str, self.terms))}, scale={self.scale})"
 
 
+def _cached_json(cache, key: str) -> dict[str, Any]:
+    raw = cache.get(key) if cache is not None else None
+    return json.loads(raw) if raw else {}
+
+
+def count_order_below_minimum(cache, instrument_id) -> int:
+    """Count one order a strategy dropped under the pair's minimum; returns the pair's total.
+
+    Kept in the run's cache (like the cost totals) so :func:`crypto_snapshot` saves it with the
+    run (``crypto_pairs[<id>].orders_below_minimum``), not only in the strategy log (M5).
+    """
+    counts = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
+    iid = str(instrument_id)
+    counts[iid] = int(counts.get(iid, 0)) + 1
+    cache.add(ORDERS_BELOW_MINIMUM_KEY, json.dumps(counts).encode())
+    return counts[iid]
+
+
 def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, Any]:
     """``config_snapshot`` keys for a run's crypto pairs; ``{}`` when there are none.
 
     The account currency, the run's fee tier (``None`` if pairs ran at different tiers), 365
-    periods a year, and per pair the terms the run used and the USD it was charged.
+    periods a year, and per pair the terms the run used, the USD it was charged and the orders
+    dropped under the minimum (0 when none were).
     """
     instruments = list(instruments)
     terms = crypto_terms_by_instrument(instruments)
     if not terms:
         return {}
-    raw = cache.get(CRYPTO_COSTS_KEY) if cache is not None else None
-    charged = json.loads(raw) if raw else {}
+    charged = _cached_json(cache, CRYPTO_COSTS_KEY)
+    dropped = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
     pairs = {}
     for instrument in instruments:
         if instrument.id in terms:
             entry = terms[instrument.id].as_snapshot(instrument)
             entry["costs_usd"] = charged.get(str(instrument.id), CryptoCosts().as_snapshot())
+            entry["orders_below_minimum"] = int(dropped.get(str(instrument.id), 0))
             pairs[str(instrument.id)] = entry
     tiers = {t.fee_tier for t in terms.values()}
     return {

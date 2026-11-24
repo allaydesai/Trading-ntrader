@@ -10,6 +10,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
+from src.core.crypto_costs import count_order_below_minimum
 from src.core.fx_rates import fx_units, usd_per_quote
 from src.core.position_sizing import (
     ONE,
@@ -147,6 +148,7 @@ def _unsized(strategy, position_value: Decimal) -> Quantity | None:
         strategy.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
         return None
     strategy._unsized_orders = getattr(strategy, "_unsized_orders", 0) + 1
+    count_order_below_minimum(strategy.cache, instrument.id)  # saved with the run (M5)
     if strategy._unsized_orders == 1:
         strategy.log.warning(
             f"Position sizing: ${position_value:,.2f} is under the {instrument.id} minimum "
