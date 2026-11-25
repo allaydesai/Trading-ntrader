@@ -1,0 +1,53 @@
+# configs/riptide_crypto.yaml
+# Riptide on spot crypto (crypto M6), daily LAST bars from the `firstrate-crypto` catalog.
+#
+#   backtest run configs/riptide_crypto.yaml --catalog firstrate-crypto
+#   backtest run configs/riptide_crypto.yaml --catalog firstrate-crypto --symbol ETH
+#   backtest run configs/riptide_crypto.yaml --catalog firstrate-crypto --units 0.25
+#
+# Crypto differences from configs/riptide.yaml (equities):
+# - Sizes are fractional coins worth `position_size_pct` of `portfolio_value` in USD, floored
+#   to the coin's size increment (1e-8). A size under Kraken's minimum order places no order
+#   and is counted for the saved run. `units: X` (or `--units X`) trades exactly X coins.
+# - Limit and stop prices keep the pair's precision (4 dp on the FirstRate catalog).
+# - Spot is unlevered and long-only (Riptide is long-only already). Charged at the Kraken Pro
+#   spot fee tier (default tier 2; `--fee-tier N`) plus the coin's modelled spread.
+# - Crypto trades 24/7: the "next open" is the next UTC bar, weekends included, and
+#   `max_hold_days` counts BARS: calendar days on 1-day bars, hours on 1-hour bars.
+# - `min_adv_dollars` is sized for 1-day bars on one venue (Kraken), well under consolidated
+#   volume: USD 1,000,000 a day. On 1-hour bars (`--timeframe 1-hour`) scale it to the bar
+#   (about USD 40,000 an hour) and `max_hold_days` to hours, in a copy of this file.
+# - FirstRate volume is whole coins from 2026-03-21 (C15), so the ADV filter reads coarser
+#   volume after that date.
+strategy_path: "src.core.strategies.custom.riptide:Riptide"
+config_path: "src.core.strategies.custom.riptide:RiptideConfig"
+
+config:
+  instrument_id: "BTC/USD.KRAKEN"
+  bar_type: "BTC/USD.KRAKEN-1-DAY-LAST-EXTERNAL"
+
+  # Position sizing (USD)
+  portfolio_value: 100000    # Should match backtest.initial_capital
+  position_size_pct: 10.0    # USD 10,000 per entry, in fractional coins
+
+  # Setup filters
+  sma_trend_period: 200      # Trend: close must be above the 200-bar SMA
+  pullback_period: 15        # Pullback: close must be a 15-bar low
+  adv_period: 20             # Liquidity: 20-bar average USD volume (close x coin volume)
+  min_adv_dollars: 1000000   # ...at least USD 1M a day on Kraken alone
+
+  # Entry
+  limit_offset_pct: 2.0      # Buy limit 2% below the setup-bar close (1-bar validity)
+
+  # Exits
+  atr_period: 14
+  atr_stop_mult: 2.5         # Hard stop at 2.5 * ATR below entry
+  max_hold_days: 10          # Time stop after 10 BARS held (10 calendar days on 1-day bars)
+
+  roc_period: 100
+
+backtest:
+  start_date: "2021-01-01"
+  end_date: "2025-12-31"
+  initial_capital: 100000
+  fill_model: gap_aware      # next-open exits; a gapped stop fills at the open

@@ -30,7 +30,10 @@ risk engine's own ``_deny_order``/``_reject_modify_order`` (so the strategy rece
   ``SELL`` with no position id opens a new short whatever else is held, and a sell left working
   after another one flattens the long fills as a short later, so spot (long-only) needs the
   rule; bracket legs (they have a parent) pass at submission. A crypto ``SELL`` only ever
-  closes, so it holds no margin and its reprices are never margined.
+  closes, so it holds no margin and its reprices are never margined. A reduce-only ``SELL``
+  pending cancel does not claim the long against a reduce-only close, so an exit sent beside
+  its hard stop's cancel fills on the signal bar; the venue's reduce-only check keeps the pair
+  from going short should the cancel fail.
 
 What one unit needs is per instrument (a :class:`MarginRequirement`):
 
@@ -469,24 +472,29 @@ def _short_sale_reason(cache, terms, orders: list[Order], position) -> str | Non
 
     A parentless ``SELL`` (reduce-only too: it could flatten the long under a resting sell)
     must close ``position``, an open long of the same pair, and the sells together may not
-    exceed what of it is free to sell (:func:`_spot_free_to_sell`).
+    exceed what of it is free to sell (:func:`_spot_free_to_sell`). A reduce-only sell may also
+    take what reduce-only sells pending cancel claim (an exit sent beside its stop's cancel),
+    unless a plain sell is in ``orders`` too (it needs every reduce-only claim to count).
     """
     sells = [
         o for o in orders if o.parent_order_id is None and _spot_sell(terms.get(o.instrument_id), o)
     ]
     if not sells:
         return None
-    credit = _spot_free_to_sell(cache, position, {o.client_order_id for o in orders})
+    free, reduce_free = _spot_free_to_sell(cache, position, {o.client_order_id for o in orders})
+    if any(not o.is_reduce_only for o in sells):
+        reduce_free = free
     for order in sells:
         quantity = order.quantity.as_decimal()
+        credit = reduce_free if order.is_reduce_only else free
         held = position is not None and position.is_long
         if not held or position.instrument_id != order.instrument_id or quantity > credit:
-            free = f"{credit.normalize():f}"
+            shown = f"{credit.normalize():f}"
             return (
                 f"{NO_SHORT_REASON}: SELL {order.quantity} {order.instrument_id} would go short; "
-                f"a spot sell must close an open long by position id (free to sell: {free})"
+                f"a spot sell must close an open long by position id (free to sell: {shown})"
             )
-        credit -= quantity
+        free, reduce_free = max(free - quantity, ZERO), reduce_free - quantity
     return None
 
 
@@ -501,23 +509,40 @@ def _margined(terms, order: Order) -> bool:
     return requirement is not None and not _spot_sell(requirement, order)
 
 
-def _spot_free_to_sell(cache, position, submitting: set) -> Decimal:
-    """Units of a long still free to sell: its size less every working ``SELL`` on it.
+def _spot_free_to_sell(cache, position, submitting: set) -> tuple[Decimal, Decimal]:
+    """``(free, free to a reduce-only sell)``: a long's size less the working ``SELL``s on it.
 
     Unlike :func:`_closing_credit`, reduce-only sells count, and contingent siblings (a
     bracket's stop and take-profit share a parent; one cancels the other) claim the long once,
     at their largest ``leaves_qty``.
+
+    A reduce-only sell pending cancel does not claim the long against a reduce-only sell being
+    submitted (the second figure): the strategy is closing beside the cancel, as an exit that
+    cancels its hard stop does. Should the cancel fail, the venue (``use_reduce_only``) fills
+    the later of the two reduce-only orders only up to what is left of the long and cancels it
+    once the long is flat, so neither can go short. Any other sell keeps its claim, and while a
+    plain (not reduce-only) sell works on the long nothing is released: the venue clamps only
+    reduce-only fills, so if the cancel failed the reduce-only sells could flatten the long
+    first and leave the plain sell to fill as a short.
     """
     if position is None or not position.is_open or not position.is_long:
-        return ZERO
+        return ZERO, ZERO
     claims: dict = {}
+    firm: dict = {}
+    plain = False
     for order in cache.orders_for_position(position.id):
         if order.client_order_id in submitting or order.side != OrderSide.SELL:
             continue
         if order.is_open or order.is_inflight:
             key = order.parent_order_id or order.client_order_id
-            claims[key] = max(claims.get(key, ZERO), order.leaves_qty.as_decimal())
-    return max(position.quantity.as_decimal() - sum(claims.values(), ZERO), ZERO)
+            leaves = order.leaves_qty.as_decimal()
+            claims[key] = max(claims.get(key, ZERO), leaves)
+            plain = plain or not order.is_reduce_only
+            if not (order.is_reduce_only and order.status == OrderStatus.PENDING_CANCEL):
+                firm[key] = max(firm.get(key, ZERO), leaves)
+    size = position.quantity.as_decimal()
+    free = max(size - sum(claims.values(), ZERO), ZERO)
+    return free, free if plain else max(size - sum(firm.values(), ZERO), ZERO)
 
 
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:

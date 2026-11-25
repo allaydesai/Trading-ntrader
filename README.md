@@ -298,7 +298,10 @@ maker for a resting limit and taker otherwise, plus a modelled half-spread, in U
 `--spread-bps X` overrides the coin's modelled spread. Sharpe, Sortino
 and volatility annualise on 365 days. Positions are fractional coin units: `sma_crossover` and
 `buy_and_hold` floor their USD budget to the coin's 1e-8 increment (USD 10,000 of BTC at 78,000
-is 0.12820512 BTC) and place no order under Kraken's minimum. `--units X` trades exactly X coins
+is 0.12820512 BTC) and place no order under Kraken's minimum; `riptide` and
+`bollinger_reversal` size the same way by USD notional or USD risk, long-only
+(`configs/riptide_crypto.yaml`, `configs/bollinger_crypto.yaml`, both on 1-day bars; other
+strategies are not ported). `--units X` trades exactly X coins
 per entry: a decimal on the increment and at or above the coin's minimum (BTC 0.00005); for
 example `--units 0.25`. Anything else exits 2. `backtest show`, `report`, `history`,
 `compare`, the MCP `get_run`/`compare_runs`/`export_results` and the dashboard show a crypto
@@ -311,6 +314,8 @@ uv run python -m src.cli.main backtest run --symbol BTC --catalog firstrate-cryp
   --timeframe 1-day --start 2023-01-01 --end 2024-12-31 --starting-balance 100000 --fee-tier 2
 uv run python -m src.cli.main backtest run --symbol ETH --catalog firstrate-crypto \
   --timeframe 1-day --start 2023-01-01 --end 2024-12-31 --starting-balance 100000 --units 0.25
+uv run python -m src.cli.main backtest run configs/riptide_crypto.yaml --catalog firstrate-crypto \
+  --symbol SOL
 ```
 
 The research MCP's `submit_backtest`/`validate_config` take the same sizes as optional `units`

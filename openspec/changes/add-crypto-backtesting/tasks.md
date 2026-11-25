@@ -180,13 +180,17 @@ Acceptance: Riptide and Bollinger Reversal run on BTC/ETH/SOL 1-day and 1-hour w
 sizes, instrument-precision prices and no denied orders other than the pinned no-short ones.
 Equity and FX results for the existing smoke configs are unchanged.
 
-- [ ] 6.1 Submodule unit tests (failing first): `_sizing` crypto branch; Riptide price rounding at
+- [x] 6.1 Submodule unit tests (failing first): `_sizing` crypto branch; Riptide price rounding at
       instrument precision for crypto; Bollinger bracket precision; Bollinger weekly bucket stays
       UTC ISO week for crypto; long-only on crypto logs once.
-- [ ] 6.2 Implement in the submodule; open the submodule PR.
-- [ ] 6.3 Configs `configs/riptide_crypto.yaml`, `configs/bollinger_crypto.yaml`.
-- [ ] 6.4 Bump the submodule pointer (no `.gitmodules` change); smoke runs BTC/ETH/SOL 1-day
+- [x] 6.2 Implement in the submodule; open the submodule PR. (strategies #6, merged `32c8322`;
+      exit-timing follow-up strategies #7. The gate now lets a reduce-only close take a
+      reduce-only stop's claim while its cancel is pending, decision C24.)
+- [x] 6.3 Configs `configs/riptide_crypto.yaml`, `configs/bollinger_crypto.yaml` (Bollinger on
+      1-day bars, C25).
+- [x] 6.4 Bump the submodule pointer (no `.gitmodules` change); smoke runs BTC/ETH/SOL 1-day
       2021-2025 and BTC 1-hour 2024, results recorded in `docs/agent/crypto-backtesting.md`.
+      (Pinned to #7's merge `67ebddb`, which includes #6.)
 
 ## M7. Kraken data path correction
 

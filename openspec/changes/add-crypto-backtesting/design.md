@@ -436,6 +436,41 @@ bar's volume one increment worse; the importer does not inflate volume.
 | bollinger_reversal | short entries, if enabled | denied `CRYPTO_SPOT_NO_SHORT` by the gate; config runs long-only on crypto and logs once |
 | both | | configs `configs/riptide_crypto.yaml`, `configs/bollinger_crypto.yaml`; smoke runs BTC/ETH/SOL 1-day and 1-hour, 2021-2025 |
 
+### M6 result (2026-11-24): exit timing (decision C24)
+
+Strategies PR #6 found that the M3 gate counted a reduce-only hard stop **pending cancel**
+against the long, so Riptide's green/time exit (cancel the stop, send a reduce-only market
+close beside it) was denied `CRYPTO_SPOT_NO_SHORT` and the long never closed. #6 worked around
+it in the strategy by sending the close once the cancel landed, which fills crypto exits one
+bar later than equities under next-bar execution (`gap_aware`).
+
+Options considered:
+
+1. **Keep the strategy workaround**: correct but one bar late, and every future strategy that
+   cancels a stop and closes in the same bar has to repeat it.
+2. **Count a pending-cancel order as released for every sell**: on time, but a plain sell
+   beside the cancel could go short if the cancel failed (the stop fills first, then the sell).
+3. **Release only reduce-only for reduce-only** (chosen, Allay 2026-11-24): a reduce-only
+   `SELL` being submitted does not count reduce-only sells that are `PENDING_CANCEL` on the
+   same long. Everything else still claims the long: a non-reduce-only order pending cancel,
+   working stops and limits, and a close already in flight (so a second close is denied).
+   Nothing is released while a plain (not reduce-only) sell works on the long or is in the
+   same submission: the venue clamps only reduce-only fills, so if the cancel failed the
+   reduce-only sells could flatten the long first and the plain sell would fill as a short.
+   Safe if the cancel fails: Nautilus' matching engine (`use_reduce_only`, on by default)
+   fills a reduce-only order only up to the position's size and cancels resting reduce-only
+   orders once the position is flat, so the pair cannot go short.
+
+Implemented in `src/core/margin_gate.py` (`_spot_free_to_sell` returns the free size and the
+free size for a reduce-only sell); pinned in `tests/component/core/test_margin_gate_crypto.py`
+(`TestExitBesideAStopPendingCancel`) and `tests/integration/core/test_crypto_venue_engine.py`
+(a real engine: the exit fills on the signal bar; a second close, an oversell and a naked sell
+beside the cancel are denied). Strategies PR #7 (merge `67ebddb`, pinned) removes the
+workaround; with it every Riptide
+crypto exit in the smoke runs fills one bar after its signal, as on equities
+(`docs/agent/crypto-backtesting.md`, M6). Bollinger's crypto config defaults to 1-day bars
+(decision C25).
+
 ## 9. Metrics: annualisation
 
 `TRADING_DAYS = 252` (`mark_to_market.py`) and `metrics.py`'s `periods_per_year = 252` assume
@@ -604,3 +639,5 @@ defaults.
 | C21 | Fee tier | one fixed tier per run, **default tier 2** (Allay's Kraken Pro spot tier: 0.30% maker / 0.60% taker); `--fee-tier N` overrides; no re-tiering inside a run | **confirmed by Allay, 2026-11-24** (source: Allay's Kraken fee screen; `coin_specs.yaml` `default_tier: 2`, VERIFIED) |
 | C22 | Trading currency on Kraken | **USD pairs**, to match the data. If Allay will trade BTC/CAD etc., the account and reports need CAD (FX conversion via the FX rate machinery), which is a scope change | provisional default (USD pairs), pending Allay's confirmation: which currency will you trade in? |
 | C23 | Discounted pairs | assume BTC/ETH/SOL are **not** on the 0.02%-off list (conservative) until confirmed | provisional default (`discounted_pair: false` per coin), pending Allay's confirmation |
+| C24 | Exit beside a stop's cancel | the gate lets a reduce-only close take the claim of a reduce-only sell pending cancel, so exits fill on the same bar as equities (section 8, M6 result); the strategy-side wait in strategies #6 is removed by #7 (pinned `67ebddb`) | **decided by Allay, 2026-11-24** |
+| C25 | Bollinger crypto bar size | `configs/bollinger_crypto.yaml` defaults to 1-day bars | **decided by Allay, 2026-11-24** |

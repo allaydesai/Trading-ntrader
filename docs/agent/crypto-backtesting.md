@@ -1,14 +1,12 @@
 # Crypto backtesting: coins, instruments, account model
 
 Spot crypto on Kraken, planned in `openspec/changes/add-crypto-backtesting/` (milestones
-M1-M7; decisions C1-C23 in `design.md` section 13). **Status: M1-M3 implemented** (coin
+M1-M7; decisions C1-C25 in `design.md` section 13). **Status: M1-M6 implemented** (coin
 specs, instruments, catalog dispatch, engine spike; the FirstRate importer and the
-`firstrate-crypto` catalog; the account, Kraken fees and the spot gate, below). Crypto
-backtests run (`backtest run --symbol BTC --catalog firstrate-crypto`), charged at the Kraken
-Pro tier and held to spot rules. Not yet: floor-to-increment sizing (M4; `sma_crossover`
-already sizes BTC fractionally through its `size_precision` branch, which rounds instead of
-flooring), crypto reporting (M5), the `BTC/USD` symbol forms and `--spread-bps` (M5), strategy
-ports (M6) and the Kraken data path (M7).
+`firstrate-crypto` catalog; the account, Kraken fees and the spot gate; fractional sizing;
+reporting, symbols and the dashboard; the `riptide` and `bollinger_reversal` ports, below).
+Crypto backtests run (`backtest run --symbol BTC --catalog firstrate-crypto`), charged at the
+Kraken Pro tier and held to spot rules. Not yet: the Kraken data path (M7).
 
 ## Ids and instruments
 
@@ -97,7 +95,13 @@ discounted-pair rebate and the absence of a minimum fee are VERIFIED against
   position id and not oversell it: its size less every working sell on it, a bracket's stop
   and take-profit counted once. Else `CRYPTO_SPOT_NO_SHORT: SELL 0.10000000 BTC/USD.KRAKEN
   would go short; ...`. So a strategy must cancel a resting sell before closing the long at
-  market (otherwise the resting sell would fill later as a short). Bracket legs pass at
+  market (otherwise the resting sell would fill later as a short). One exception (M6): a
+  reduce-only sell pending cancel does not claim the long against a reduce-only close, so an
+  exit can cancel its reduce-only hard stop and close beside it in the same bar; should the
+  cancel fail, the venue fills the later reduce-only order only up to what is left and cancels
+  it once the long is flat. Not while a plain (not reduce-only) sell works on the long or is in
+  the same submission: the venue does not clamp it, so every claim still counts. Bracket legs
+  pass at
   submission; crypto sells hold no margin and their reprices are never margined;
   quantity-raising modifies are refused `CRYPTO_QTY_INCREASE_NOT_SUPPORTED`.
 - **Metrics** (C20): mark-to-market Sharpe, Sortino and volatility annualise on 365 for a run
@@ -191,6 +195,59 @@ reports 37 dropped orders on stop (final balance 5.00).
 **Check (2026-11-24, real runs)**: `--symbol BTC/USD.KRAKEN --fee-tier 3 --starting-balance
 100000` 1-day 2023-2024: 18 trades, 0.14020419 to 0.4023753 BTC, taker 1,407.85 + spread 37.05,
 final 109,045.18; `--symbol XBTUSD --starting-balance 5`: no trades, 37 drops saved and shown.
+
+## Strategies: `riptide` and `bollinger_reversal` (M6)
+
+The strategies submodule (`Trading-ntrader-strategies` PR #6, merge `32c8322`, and the
+exit-timing follow-up #7, merge `67ebddb`, the pinned commit) sizes both in
+fractional coins through the M4 helpers, rounds limit, stop and bracket prices at the pair's
+precision (4 dp), counts orders under Kraken's minimum (M5) and runs long-only: Bollinger
+skips bearish setups (warns once, logs the count on stop) and caps its risk size at what the
+free USD buys; Riptide is long-only already. Configs:
+
+- `configs/riptide_crypto.yaml`: the equity parameters on 1-day bars, USD 100,000, 10% per
+  entry, `min_adv_dollars` USD 1,000,000 (single-venue Kraken volume, a day), `max_hold_days`
+  10 **bars** (calendar days on 1-day bars; crypto trades 24/7), `fill_model: gap_aware`. For
+  1-hour bars, copy it with `min_adv_dollars` about USD 40,000 (an hour) and `max_hold_days`
+  in hours.
+- `configs/bollinger_crypto.yaml`: 1-day bars by default (Allay, 2026-11-24), 1% risk of USD
+  100,000, the FX/equity band, weekly SMA and ATR settings; weekly buckets are UTC ISO weeks.
+
+**Exit timing (decision C24).** Riptide's green and time exits cancel the hard stop and send a
+reduce-only market close beside it. The M3 gate counted the stop pending cancel against the
+long and denied the close (`CRYPTO_SPOT_NO_SHORT`), so the long never closed. PR #6 worked
+around it by sending the close once the cancel landed, which fills one bar late under
+`gap_aware`. NTrader now lets a reduce-only close take a reduce-only stop's claim while its
+cancel is pending (above); strategies PR #7 (`fix/crypto-exit-timing`) removes the
+workaround (pinned), so crypto exits fill at the next bar's open, as on equities.
+
+**Smoke (2026-11-24, real `firstrate-crypto` bars, USD 100,000, tier 2, `--no-persist`).**
+Riptide 1-day and Bollinger 1-day: 2021-01-01 to 2025-12-31 (SOL data starts 2021-03-01).
+Riptide 1-hour: BTC 2024 with `min_adv_dollars` 40,000 and `max_hold_days` 10 (bars). Exit
+lag is market-exit fill bar minus signal bar. No order was denied in any run and no position
+was left open.
+
+| Run | Trades (stop / other exits) | Coin sizes | Fees incl. spread (USD) | Exit lag (bars) | Final balance |
+|---|---|---|---|---|---|
+| Riptide BTC 1d | 24 (4 / 20) | 0.08814773 to 0.45953774 | 2,203.02 | 1 | 96,980.51 |
+| Riptide ETH 1d | 25 (3 / 22) | 2.42285156 to 6.60056770 | 2,324.85 | 1 | 97,648.64 |
+| Riptide SOL 1d | 33 (2 / 31) | 45.14680839 to 505.15255607 | 3,173.39 | 1 | 102,966.60 |
+| Riptide BTC 1h 2024 | 11 (2 / 9) | 0.09927447 to 0.22444903 | 1,015.99 | 1 | 99,634.99 |
+| Bollinger BTC 1d | 8 (4 stops) | 0.12932707 to 0.64617253 | 1,141.21 | - | 102,858.79 |
+| Bollinger ETH 1d | 12 (7 stops) | 1.33009802 to 16.88333614 | 1,382.12 | - | 101,617.88 |
+| Bollinger SOL 1d | 8 (7 stops) | 23.17573831 to 380.10425716 | 568.43 | - | 94,431.55 |
+
+Runs on `163122b`, the head of #7, whose tree is identical to the pinned merge `67ebddb`.
+Bollinger skipped 30 (BTC), 21 (ETH) and 20 (SOL) bearish setups as long-only. Every Riptide
+exit fills one bar after its signal (the equity next-open rule). On #6 alone (the
+wait-for-cancel workaround) the same runs filled exits 2 bars after the signal and traded
+21 / 23 / 32 / 10 times (final 96,571.00 / 96,876.00 / 104,811.85 / 99,649.29); #7 fits in a
+few more trades because each long closes a bar sooner and Riptide holds one position at a
+time. Bollinger is identical on both. Unchanged by M6 (fill events identical
+before and after the pin bump and gate fix): Riptide AAPL 2019-2024 (20 trades) and the
+default `configs/riptide.yaml`; Riptide EURUSD (16) and USDJPY (24) and Bollinger EURUSD (92)
+and USDJPY (104) on `configs/*_fx.yaml`; Riptide ES (7) and Bollinger ES (36) 2019-2024 with
+`--contracts 1`; Bollinger AAPL 2019-2024 (one entry, still open at the end).
 
 ## Account model: the M1 spike (decision C8)
 

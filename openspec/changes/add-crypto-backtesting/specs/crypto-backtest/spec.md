@@ -21,6 +21,18 @@ unchanged.
 - **THEN** the close is denied with a reason starting `CRYPTO_SPOT_NO_SHORT` and the long stays
   open
 
+#### Scenario: an exit closes beside its stop's cancel
+- **WHEN** a 0.1 BTC long has a reduce-only 0.1 BTC stop SELL, and in one bar the strategy
+  cancels the stop and submits a reduce-only 0.1 BTC market close of the long
+- **THEN** the close is accepted and fills on that bar, and a second close, a 0.2 BTC
+  reduce-only close or a SELL with no position id submitted beside the cancel is denied with a
+  reason starting `CRYPTO_SPOT_NO_SHORT`
+
+#### Scenario: a plain sell keeps the stop's claim
+- **WHEN** a 0.3 BTC long has a reduce-only 0.1 BTC stop SELL pending cancel and a resting
+  plain 0.1 BTC limit SELL, and the strategy submits a reduce-only 0.2 BTC close
+- **THEN** the close is denied with a reason starting `CRYPTO_SPOT_NO_SHORT`
+
 #### Scenario: no leverage
 - **WHEN** an account with USD 10,000 free submits a BUY of 0.2 BTC at 78,000
 - **THEN** the order is denied with a reason starting `MARGIN_EXCEEDS_FREE_BALANCE`

@@ -9,6 +9,8 @@ the Kraken Pro fee model at the run's tier and the spot gate. In a real ``Backte
 - a resting limit fills as maker, market and stop orders as taker;
 - the over-cash buy and the naked sell of the spike's bracket scenario are denied with the
   pinned reasons, and the bracket's take-profit still closes the long;
+- a reduce-only exit sent beside its hard stop's cancel fills on the signal bar, while a
+  second close, an oversell and a naked sell beside the cancel are still denied;
 - the equity venue's ``add_venue`` call is unchanged, and a venue mixing crypto with FX or
   equities is refused.
 
@@ -29,7 +31,13 @@ from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide
+from nautilus_trader.model.enums import (
+    AccountType,
+    LiquiditySide,
+    OmsType,
+    OrderSide,
+    OrderStatus,
+)
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
@@ -71,6 +79,7 @@ class _Script(Strategy):
         super().__init__(config)
         self.bar = 0
         self.denied: list[str] = []
+        self.hard_stop = None
 
     def on_start(self) -> None:
         self.subscribe_bars(BarType.from_str(self.config.bar_type))
@@ -120,6 +129,47 @@ class _Script(Strategy):
             self._limit(instrument, OrderSide.SELL, "0.1", "90000", position.id)
         elif self.bar == 3:
             self.close_all_positions(instrument.id)  # reduce-only, would strand the limit
+
+    def _beside_cancel(self, instrument, bar3) -> None:
+        """Bar 1: buy 0.1; bar 2: rest a reduce-only hard stop; bar 3: cancel it, run ``bar3``."""
+        if self.bar == 1:
+            self._market(instrument, OrderSide.BUY, "0.1")
+        elif self.bar == 2:
+            (position,) = self.cache.positions_open(instrument_id=instrument.id)
+            self.hard_stop = self.order_factory.stop_market(
+                instrument.id,
+                OrderSide.SELL,
+                position.quantity,
+                trigger_price=instrument.make_price(Decimal("70000")),
+                reduce_only=True,
+            )
+            self.submit_order(self.hard_stop, position_id=position.id)
+        elif self.bar == 3:
+            self.cancel_order(self.hard_stop)  # PENDING_CANCEL from here until the venue answers
+            (position,) = self.cache.positions_open(instrument_id=instrument.id)
+            bar3(instrument, position)
+
+    def _exit_beside_cancel(self, instrument) -> None:
+        self._beside_cancel(instrument, lambda i, position: self.close_position(position))
+
+    def _double_exit_beside_cancel(self, instrument) -> None:
+        def twice(i, position) -> None:
+            self.close_position(position)
+            self.close_position(position)
+
+        self._beside_cancel(instrument, twice)
+
+    def _oversell_beside_cancel(self, instrument) -> None:
+        def oversell(i, position) -> None:
+            order = self.order_factory.market(
+                i.id, OrderSide.SELL, self._qty(i, "0.2"), reduce_only=True
+            )
+            self.submit_order(order, position_id=position.id)
+
+        self._beside_cancel(instrument, oversell)
+
+    def _naked_beside_cancel(self, instrument) -> None:
+        self._beside_cancel(instrument, lambda i, position: self._market(i, OrderSide.SELL, "0.1"))
 
     def _bracket(self, instrument) -> None:
         """Bar 1: bracket buy 0.1. Bar 2: over-cash buy, then a naked short."""
@@ -312,6 +362,54 @@ def test_a_close_that_would_strand_a_resting_sell_is_denied(runs):
     ]
     (position,) = run.engine.cache.positions()
     assert position.is_long and position.is_open
+
+
+def _no_short(qty: str, free: str) -> str:
+    return (
+        f"CRYPTO_SPOT_NO_SHORT: SELL {qty} BTC/USD.KRAKEN would go short; a spot sell must "
+        f"close an open long by position id (free to sell: {free})"
+    )
+
+
+def _fill_bars(run: _Run) -> list[tuple[str, str, int]]:
+    """(side, price, bar index) of every fill."""
+    events = [e for o in run.engine.cache.orders() for e in o.events]
+    fills = [e for e in events if type(e).__name__ == "OrderFilled"]
+    return sorted(
+        (e.order_side.name, str(e.last_px), (e.ts_event - T0) // MINUTE_NS) for e in fills
+    )
+
+
+def test_an_exit_beside_the_stops_cancel_closes_on_the_same_bar(runs):
+    """A reduce-only close sent with its hard stop's cancel is not denied and fills at once."""
+    run = _run("exit_beside_cancel", TAKER_BARS)
+    runs.append(run)
+    assert run.strategy.denied == []
+    assert run.gate.denied_count == 0
+    # bar index 2 is the third bar, the one the exit was signalled on (79,000)
+    assert _fill_bars(run) == [("BUY", "78000.0000", 0), ("SELL", "79000.0000", 2)]
+    assert run.strategy.hard_stop.status == OrderStatus.CANCELED
+    (position,) = run.engine.cache.positions()
+    assert position.is_closed
+
+
+@pytest.mark.parametrize(
+    ("script", "reason"),
+    [
+        # a second close once the first is in flight would sell the long twice
+        ("double_exit_beside_cancel", _no_short("0.10000000", "0")),
+        ("oversell_beside_cancel", _no_short("0.20000000", "0.1")),
+        # no position id: under HEDGING a new short, whatever the stop is doing
+        ("naked_beside_cancel", _no_short("0.10000000", "0")),
+    ],
+)
+def test_beside_the_stops_cancel_oversells_and_naked_sells_are_still_denied(runs, script, reason):
+    run = _run(script, TAKER_BARS)
+    runs.append(run)
+    assert run.strategy.denied == [reason]
+    assert all(not p.is_short for p in run.engine.cache.positions())
+    sells = [fill for fill in _fill_bars(run) if fill[0] == "SELL"]
+    assert len(sells) == (1 if script == "double_exit_beside_cancel" else 0)
 
 
 # --- venue wiring --------------------------------------------------------------------------
