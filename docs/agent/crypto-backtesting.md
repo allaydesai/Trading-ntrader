@@ -288,8 +288,9 @@ note (no backfill, no row changes).
   balance by more than a cent per fill (Nautilus rounds each fill's P&L from floats).
 - **Computed**: `src/services/crypto/exposure.py` replays the fills: per position, quantity and
   average open price; the USD balance is the starting capital plus each fill's realised P&L
-  (in whole cents) less its charge, as the account books it, so the last balance equals the
-  run's final balance. After every fill, notional = sum of `|qty| x average open price` (cost
+  (in whole cents) less its charge, as the account books it, so the last balance agrees with
+  the run's final balance within the save-time tolerance of a cent per fill (both smoke runs
+  below match it exactly). After every fill, notional = sum of `|qty| x average open price` (cost
   basis, as M5) and exposure = notional / balance. A round trip inside one bar counts while
   held; fills at one timestamp are applied in engine order.
 - **Shown**: the note reads "Peak notional and exposure are exact, replayed from every fill"

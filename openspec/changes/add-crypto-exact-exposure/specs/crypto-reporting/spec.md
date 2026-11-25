@@ -21,4 +21,6 @@ figures and the upper-bound note. Non-crypto runs SHALL be unchanged.
 
 #### Scenario: replay matches the account
 - **WHEN** a run's series is replayed from its starting capital
-- **THEN** the last balance equals the run's final account balance to the cent
+- **THEN** the last balance agrees with the run's final account balance within one cent per
+  fill (Nautilus rounds each fill's P&L from floats); a run outside that tolerance is saved
+  without the series and reports the upper bound

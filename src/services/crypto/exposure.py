@@ -11,7 +11,8 @@ their sum) and ``commission_usd`` is what the fill was charged (commission plus 
 Replaying the fills in ``seq`` order keeps each position's quantity and average open price
 (Nautilus' ``avg_px_open``: adds re-average it, reductions keep it) and the USD balance (the
 starting capital plus realised P&L net of costs, each fill's P&L in whole cents, as the
-single-currency account books it; the replay lands on the run's final balance to the cent).
+single-currency account books it; the replay agrees with the run's final balance within a
+cent per fill, which :func:`src.core.crypto_costs.crypto_snapshot` checks before saving).
 After every fill the run's notional is the sum over open positions of ``|quantity| x average
 open price`` (cost basis, the figure the M5 upper bound uses per trade) and exposure is that
 notional over the balance. A position opened and closed inside one bar counts while it was
