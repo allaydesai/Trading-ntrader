@@ -1,0 +1,40 @@
+# configs/bollinger_crypto.yaml
+# Bollinger Band reversal with the weekly SMA filter on spot crypto (crypto M6), daily LAST
+# bars from the `firstrate-crypto` catalog. Daily bars are the default (Allay, 2026-11-24).
+#
+#   backtest run configs/bollinger_crypto.yaml --catalog firstrate-crypto
+#   backtest run configs/bollinger_crypto.yaml --catalog firstrate-crypto --symbol ETH
+#   backtest run configs/bollinger_crypto.yaml --catalog firstrate-crypto --units 0.25
+#
+# Crypto differences from equities:
+# - Risk sizing: `max_risk_pct` of `portfolio_value` over the ATR stop, in fractional coins
+#   floored to the size increment (1e-8) and capped at what the free USD balance buys (spot
+#   is unlevered). A size under Kraken's minimum order places no order and is counted for the
+#   saved run. `units: X` (or `--units X`) trades exactly X coins.
+# - Bracket stop/target prices keep the pair's precision (4 dp on the FirstRate catalog).
+# - Long-only: spot cannot short, so bearish (short) setups are skipped, logged once and
+#   counted on stop.
+# - Weekly SMA buckets are the UTC ISO week (crypto trades 24/7, weekends included).
+# - Charged at the Kraken Pro spot fee tier (default tier 2; `--fee-tier N`) plus the coin's
+#   modelled spread.
+strategy_path: "src.core.strategies.custom.bollinger_reversal:BollingerReversalStrategy"
+config_path: "src.core.strategies.custom.bollinger_reversal:BollingerReversalConfig"
+
+config:
+  instrument_id: "BTC/USD.KRAKEN"
+  bar_type: "BTC/USD.KRAKEN-1-DAY-LAST-EXTERNAL"
+
+  portfolio_value: 100000    # Should match backtest.initial_capital (USD)
+  max_risk_pct: 1.0          # USD 1,000 at risk per trade
+  daily_bb_period: 20
+  daily_bb_std_dev: 2.0
+  weekly_ma_period: 20
+  weekly_ma_tolerance_pct: 0.05
+  stop_loss_atr_mult: 2.0
+  take_profit_rr: 2.0
+  atr_period: 14
+
+backtest:
+  start_date: "2021-01-01"
+  end_date: "2025-12-31"
+  initial_capital: 100000
