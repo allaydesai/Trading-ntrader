@@ -18,7 +18,9 @@ position's largest quantity and its open time, not its fill history, so a positi
 in is counted at its largest size from its open, and a position opened and closed at one
 timestamp counts as held then (:func:`src.services.fx.returns.peaks`): exact for single-entry
 positions that span bars, an upper bound otherwise (:func:`note` says so). See section 10 of
-``openspec/changes/add-crypto-backtesting/design.md``.
+``openspec/changes/add-crypto-backtesting/design.md``. Runs saved with a fill series
+(``crypto_pairs[<id>].position_series``) get exact figures instead
+(:mod:`src.services.crypto.exposure`, ``openspec/changes/add-crypto-exact-exposure``).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
+from src.services.crypto import exposure as exact_exposure
 from src.services.fx.returns import peaks
 
 CRYPTO = "crypto"
@@ -39,15 +42,25 @@ _PCT = Decimal("0.0001")
 _USD = Decimal("0.01")
 
 
-def note(fee_tier: int | None) -> str:
-    """The statement every crypto report carries (design section 10)."""
+def note(fee_tier: int | None, exact: bool = False) -> str:
+    """The statement every crypto report carries (design section 10).
+
+    ``exact`` when the run saved its fill series: the peak figures are then exact, otherwise the
+    M5 upper-bound wording stays (runs saved before the series, no backfill).
+    """
     tier = f"fee tier {fee_tier}" if fee_tier is not None else "fee tier per pair"
+    peak = (
+        "Peak notional and exposure are exact, replayed from every fill: cost-basis notional "
+        "over the USD balance after each fill."
+        if exact
+        else "Peak notional and exposure use each position's largest "
+        "size from its open and count a position opened and closed at one timestamp as held "
+        "then: an upper bound when a position scales in or round-trips within one bar."
+    )
     return (
         f"Spot, unlevered, long-only; Kraken Pro {tier}; spread modelled (half per side). "
         "Commission and spread are charged in USD; the spread and Kraken pair terms are "
-        "UNVERIFIED working defaults. Peak notional and exposure use each position's largest "
-        "size from its open and count a position opened and closed at one timestamp as held "
-        "then: an upper bound when a position scales in or round-trips within one bar."
+        f"UNVERIFIED working defaults. {peak}"
     )
 
 
@@ -119,6 +132,8 @@ class RunSummary:
     commission_taker_usd: Decimal
     spread_usd: Decimal
     orders_below_minimum: int | None
+    #: Peak notional/exposure replayed from the saved fill series (else the M5 upper bound)
+    exposure_exact: bool = False
 
     @property
     def commission_usd(self) -> Decimal:
@@ -244,7 +259,14 @@ def summarise_run(
         )
         if f.return_on_underlying_pct is not None
     ]
-    peak_notional, _, exposure = peaks(rows, _dec(capital)) if rows else (None, None, None)
+    series = {iid: t.raw.get("position_series") for iid, t in terms.items()}
+    exact = exact_exposure.has_series(series)
+    if exact:
+        peak_notional, exposure = exact_exposure.peaks(
+            {iid: s or [] for iid, s in series.items()}, _dec(capital)
+        )
+    else:
+        peak_notional, _, exposure = peaks(rows, _dec(capital)) if rows else (None, None, None)
     return RunSummary(
         asset_class=CRYPTO,
         venue=next(iter(terms.values())).venue,
@@ -264,6 +286,7 @@ def summarise_run(
         commission_taker_usd=sum((t.commission_taker_usd for t in terms.values()), Decimal(0)),
         spread_usd=sum((t.spread_usd for t in terms.values()), Decimal(0)),
         orders_below_minimum=_dropped(terms),
+        exposure_exact=exact,
     )
 
 
@@ -324,13 +347,14 @@ def report_fields(summary: RunSummary) -> dict[str, Any]:
         "peak_exposure_pct": _fmt(
             None if summary.peak_exposure is None else summary.peak_exposure * _HUNDRED, _PCT
         ),
+        "peak_exposure_basis": "exact" if summary.exposure_exact else "upper_bound",
         "commission_usd": _fmt(summary.commission_usd, _USD),
         "commission_maker_usd": _fmt(summary.commission_maker_usd, _USD),
         "commission_taker_usd": _fmt(summary.commission_taker_usd, _USD),
         "spread_usd": _fmt(summary.spread_usd, _USD),
         "costs_usd": _fmt(summary.costs_usd, _USD),
         "orders_below_minimum": summary.orders_below_minimum,
-        "note": note(summary.fee_tier),
+        "note": note(summary.fee_tier, summary.exposure_exact),
         "pairs": {iid: _pair_fields(t) for iid, t in summary.pairs.items()},
     }
 

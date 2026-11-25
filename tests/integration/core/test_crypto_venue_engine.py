@@ -47,6 +47,7 @@ from src.core.backtest_venue import add_backtest_venue, cost_snapshot, setup_bac
 from src.core.crypto_costs import CryptoCommissionModel
 from src.core.fee_models import IBKRCommissionModel
 from src.core.margin_gate import MarginGate
+from src.services.crypto import exposure
 from src.services.crypto.coin_specs import get_coin_spec
 from src.services.crypto.instrument_builder import build_crypto_pair
 from src.services.fx.instrument_builder import build_fx_pair
@@ -171,6 +172,28 @@ class _Script(Strategy):
     def _naked_beside_cancel(self, instrument) -> None:
         self._beside_cancel(instrument, lambda i, position: self._market(i, OrderSide.SELL, "0.1"))
 
+    def _scale_in(self, instrument) -> None:
+        """Two hedged longs: P1 scales in and is cut back, P2 closes; both flat by bar 4."""
+        if self.bar == 1:
+            self._market(instrument, OrderSide.BUY, "0.05")
+            self._market(instrument, OrderSide.BUY, "0.02")
+            return
+        # P1 is the larger long (0.05, then 0.1); P2 the 0.02 one
+        p2, p1 = sorted(self.cache.positions(instrument_id=instrument.id), key=lambda p: p.quantity)
+        if self.bar == 2:
+            buy = self.order_factory.market(
+                instrument.id, OrderSide.BUY, self._qty(instrument, "0.05")
+            )
+            self.submit_order(buy, position_id=p1.id)
+        elif self.bar == 3:
+            sell = self.order_factory.market(
+                instrument.id, OrderSide.SELL, self._qty(instrument, "0.04"), reduce_only=True
+            )
+            self.submit_order(sell, position_id=p1.id)
+            self.close_position(p2)
+        elif self.bar == 4:
+            self.close_all_positions(instrument.id)
+
     def _bracket(self, instrument) -> None:
         """Bar 1: bracket buy 0.1. Bar 2: over-cash buy, then a naked short."""
         if self.bar == 1:
@@ -195,6 +218,7 @@ MAKER_BARS = [
     ("78000", "79500", "77900", "79400"),  # trades through the 79,000 sell
     _flat("79400"),
 ]
+SCALE_BARS = [_flat("78000"), _flat("80000"), _flat("82000"), _flat("81000"), _flat("81000")]
 BRACKET_BARS = [
     _flat("78000"),
     _flat("78000"),
@@ -326,6 +350,36 @@ def test_a_maker_round_trip_matches_the_hand_calculation_at_tier_1(runs):
         "commission_taker": "0.00",
         "spread": "2.00",
     }
+
+
+# --- exact peak exposure: the saved position series ----------------------------------------
+
+
+def test_the_saved_position_series_replays_to_the_account_balance(runs):
+    """Fills in engine order, per hedged position; the replay lands on the booked balance."""
+    run = _run("scale_in", SCALE_BARS)
+    runs.append(run)
+    assert run.strategy.denied == []
+    series = cost_snapshot(run.engine.cache)["crypto_pairs"]["BTC/USD.KRAKEN"]["position_series"]
+    assert [entry[0] for entry in series] == list(range(6))
+    p1, p2 = series[0][2], series[1][2]
+    assert p1 != p2
+    assert [(e[2], e[3], e[4]) for e in series] == [
+        (p1, "0.05000000", "78000.0000"),
+        (p2, "0.02000000", "78000.0000"),
+        (p1, "0.10000000", "80000.0000"),
+        (p1, "0.06000000", "82000.0000"),
+        (p2, "0.00000000", "82000.0000"),
+        (p1, "0.00000000", "81000.0000"),
+    ]
+    assert sum(Decimal(e[5]) for e in series) == sum(f[4].as_decimal() for f in run.fills())
+    samples = exposure.replay({"BTC/USD.KRAKEN": series}, START_USD)
+    assert samples[-1].balance == run.balance()
+    assert samples[-1].notional == 0
+    # P1 0.1 at an average 79,000 plus P2 0.02 at 78,000, after the third fill
+    notional, peak = exposure.peaks({"BTC/USD.KRAKEN": series}, START_USD)
+    assert notional == Decimal("9460") == samples[2].notional
+    assert peak == Decimal("9460") / samples[2].balance
 
 
 # --- the spot gate in the real engine ------------------------------------------------------

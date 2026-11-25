@@ -100,7 +100,9 @@ def symbol_cell(symbol: str, snapshot: Mapping[str, Any] | None) -> str | None:
 
 def crypto_table(summary: RunSummary) -> Table:
     """A Rich table of :func:`summary_rows`, captioned with the spot/fee-tier note."""
-    table = Table(title=TITLE, caption=note(summary.fee_tier), show_header=False)
+    table = Table(
+        title=TITLE, caption=note(summary.fee_tier, summary.exposure_exact), show_header=False
+    )
     table.add_column("Figure", style="cyan", no_wrap=True)
     table.add_column("Value", style="white")
     for label, value in summary_rows(summary):
@@ -111,7 +113,7 @@ def crypto_table(summary: RunSummary) -> Table:
 def summary_text(summary: RunSummary) -> str:
     """Plain-text block for the text report: ``label: value`` lines and the note."""
     lines = [TITLE, *(f"  {label}: {value}" for label, value in summary_rows(summary))]
-    return "\n".join([*lines, f"  Note: {note(summary.fee_tier)}"])
+    return "\n".join([*lines, f"  Note: {note(summary.fee_tier, summary.exposure_exact)}"])
 
 
 def flat_report_fields(summary: RunSummary) -> dict[str, Any]:
@@ -160,8 +162,30 @@ def dashboard_panel(run: Any) -> dict[str, Any] | None:
         "spread": usd(summary.spread_usd),
         "rows": [r for r in rows[1 : len(rows) - n_pairs] if r[0] not in _PANEL_COSTS],
         "pairs": rows[-n_pairs:] if n_pairs else [],
-        "note": note(summary.fee_tier),
+        "note": note(summary.fee_tier, summary.exposure_exact),
     }
+
+
+def snapshot_params(snapshot: Mapping[str, Any] | None) -> Any:
+    """The run's ``config_snapshot`` for display, each pair's fill series cut to a count.
+
+    The series (``crypto_pairs[<id>].position_series``, one entry per fill) is for the exact
+    peak figures, not for reading; ``backtest show`` and the dashboard's parameters list show
+    ``"N fills (exact peak exposure)"`` instead. Anything without a series comes back as is.
+    """
+    pairs = (snapshot or {}).get("crypto_pairs") or {}
+    if not any("position_series" in (p or {}) for p in pairs.values()):
+        return snapshot
+    shown = {
+        iid: {
+            **p,
+            "position_series": f"{len(p['position_series'] or [])} fills (exact peak exposure)",
+        }
+        if "position_series" in (p or {})
+        else p
+        for iid, p in pairs.items()
+    }
+    return {**(snapshot or {}), "crypto_pairs": shown}
 
 
 def _price(value: Any, terms: PairTerms) -> str:

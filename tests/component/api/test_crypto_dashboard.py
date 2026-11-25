@@ -88,6 +88,36 @@ class TestCryptoDetail:
         assert "Spot FX" not in text
 
 
+class TestExactPeakExposure:
+    """Follow-up to M5: a run with its fill series reports the exact peak, an older run the
+    upper bound; the series itself is summarised, not dumped into the parameters list."""
+
+    @staticmethod
+    def _with_series():
+        run = crypto_run()
+        snapshot = json.loads(json.dumps(run.config_snapshot))
+        snapshot["crypto_pairs"]["BTC/USD.KRAKEN"]["position_series"] = [
+            [0, 1, "P1", "0.12820512", "78000.0000", "60.00"],
+            [1, 2, "P1", "0.00000000", "80000.0000", "61.54"],
+            [2, 3, "P2", "0.25000000", "80000.0000", "120.00"],
+            [3, 4, "P2", "0.00000000", "79000.0000", "118.50"],
+        ]
+        run.config_snapshot = snapshot
+        return run
+
+    def test_a_run_with_the_series_shows_the_exact_note_and_a_fill_count(self):
+        text = dash._text(dash.render(self._with_series())["detail.html"])
+        assert "Peak notional and exposure are exact" in text
+        assert "an upper bound" not in text
+        assert "4 fills (exact peak exposure)" in text
+        assert "78000.0000" not in text.split("Strategy-Specific Parameters")[1]
+
+    def test_a_run_saved_before_the_series_keeps_the_upper_bound_note(self):
+        text = dash._text(dash.render(crypto_run())["detail.html"])
+        assert "an upper bound when a position scales in or round-trips" in text
+        assert "exact peak exposure" not in text
+
+
 class TestCryptoTradesTable:
     def test_coin_quantities_at_full_precision_and_usd(self):
         text = dash._text(dash.render(crypto_run())["trades_table.html"])
