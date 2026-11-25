@@ -99,7 +99,9 @@ discounted-pair rebate and the absence of a minimum fee are VERIFIED against
   reduce-only sell pending cancel does not claim the long against a reduce-only close, so an
   exit can cancel its reduce-only hard stop and close beside it in the same bar; should the
   cancel fail, the venue fills the later reduce-only order only up to what is left and cancels
-  it once the long is flat. Bracket legs pass at
+  it once the long is flat. Not while a plain (not reduce-only) sell works on the long or is in
+  the same submission: the venue does not clamp it, so every claim still counts. Bracket legs
+  pass at
   submission; crypto sells hold no margin and their reprices are never margined;
   quantity-raising modifies are refused `CRYPTO_QTY_INCREASE_NOT_SUPPORTED`.
 - **Metrics** (C20): mark-to-market Sharpe, Sortino and volatility annualise on 365 for a run

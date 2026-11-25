@@ -454,6 +454,9 @@ Options considered:
    `SELL` being submitted does not count reduce-only sells that are `PENDING_CANCEL` on the
    same long. Everything else still claims the long: a non-reduce-only order pending cancel,
    working stops and limits, and a close already in flight (so a second close is denied).
+   Nothing is released while a plain (not reduce-only) sell works on the long or is in the
+   same submission: the venue clamps only reduce-only fills, so if the cancel failed the
+   reduce-only sells could flatten the long first and the plain sell would fill as a short.
    Safe if the cancel fails: Nautilus' matching engine (`use_reduce_only`, on by default)
    fills a reduce-only order only up to the position's size and cancels resting reduce-only
    orders once the position is flat, so the pair cannot go short.

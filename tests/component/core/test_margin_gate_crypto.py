@@ -358,12 +358,35 @@ class TestExitBesideAStopPendingCancel:
         assert reason is not None and reason.startswith(NO_SHORT_REASON)
 
     def test_only_the_pending_cancel_claim_is_freed(self):
-        # 0.3 long: a 0.1 stop being cancelled and a 0.1 resting take-profit; 0.2 is free to close
-        take = _order("0.1", OrderSide.SELL, "80000.0000", status=OrderStatus.ACCEPTED)
+        # 0.3 long: a 0.1 stop being cancelled and a 0.1 reduce-only take-profit; 0.2 is free
+        take = _order(
+            "0.1", OrderSide.SELL, "80000.0000", reduce_only=True, status=OrderStatus.ACCEPTED
+        )
         working = [_stop("0.1", OrderStatus.PENDING_CANCEL), take]
         gate = _gate("0", position=_long("0.3"), working=working)
         assert gate.denial_reason([_order("0.2", OrderSide.SELL, reduce_only=True)], LONG) is None
         reason = gate.denial_reason([_order("0.21", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+
+    def test_a_working_plain_sell_keeps_the_stops_claim(self):
+        # 0.3 long, a 0.1 stop being cancelled, a plain 0.1 limit sell. Should the cancel fail,
+        # a 0.2 close and the stop flatten the long and the limit (not clamped) fills short.
+        limit = _order("0.1", OrderSide.SELL, "80000.0000", status=OrderStatus.ACCEPTED)
+        working = [_stop("0.1", OrderStatus.PENDING_CANCEL), limit]
+        gate = _gate("0", position=_long("0.3"), working=working)
+        reason = gate.denial_reason([_order("0.2", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+        assert "(free to sell: 0.1)" in reason
+        assert gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], LONG) is None
+
+    @pytest.mark.parametrize("plain_first", [True, False], ids=["plain_first", "close_first"])
+    def test_a_plain_sell_in_the_same_list_keeps_the_stops_claim(self, plain_first):
+        working = [_stop("0.1", OrderStatus.PENDING_CANCEL)]
+        gate = _gate("0", position=_long("0.3"), working=working)
+        close = _order("0.15", OrderSide.SELL, reduce_only=True)
+        plain = _order("0.1", OrderSide.SELL, "80000.0000")
+        orders = [plain, close] if plain_first else [close, plain]
+        reason = gate.denial_reason(orders, LONG)
         assert reason is not None and reason.startswith(NO_SHORT_REASON)
 
 

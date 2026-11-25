@@ -28,6 +28,11 @@ unchanged.
   reduce-only close or a SELL with no position id submitted beside the cancel is denied with a
   reason starting `CRYPTO_SPOT_NO_SHORT`
 
+#### Scenario: a plain sell keeps the stop's claim
+- **WHEN** a 0.3 BTC long has a reduce-only 0.1 BTC stop SELL pending cancel and a resting
+  plain 0.1 BTC limit SELL, and the strategy submits a reduce-only 0.2 BTC close
+- **THEN** the close is denied with a reason starting `CRYPTO_SPOT_NO_SHORT`
+
 #### Scenario: no leverage
 - **WHEN** an account with USD 10,000 free submits a BUY of 0.2 BTC at 78,000
 - **THEN** the order is denied with a reason starting `MARGIN_EXCEEDS_FREE_BALANCE`
