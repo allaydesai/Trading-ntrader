@@ -27,11 +27,9 @@ from src.services.exceptions import (  # noqa: E402
     CatalogError,
     DataNotFoundError,
     IBKRConnectionError,
-    KrakenConnectionError,
     KrakenRateLimitError,  # noqa: F401
 )
 from src.services.ibkr_client import IBKRHistoricalClient  # noqa: E402
-from src.services.kraken_client import KrakenHistoricalClient  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +51,6 @@ class DataCatalogService:
         self,
         catalog_path: str | Path | None = None,
         ibkr_client: IBKRHistoricalClient | None = None,
-        kraken_client: KrakenHistoricalClient | None = None,
     ) -> None:
         """
         Initialize DataCatalogService.
@@ -65,8 +62,6 @@ class DataCatalogService:
             ibkr_client: Optional IBKR client for data fetching. If None,
                         creates client lazily when first needed (avoids
                         unnecessary connection attempts during backtests).
-            kraken_client: Optional Kraken client for crypto data fetching.
-                          If None, creates client lazily when first needed.
 
         Example:
             >>> service = DataCatalogService()
@@ -87,10 +82,6 @@ class DataCatalogService:
         # This avoids creating connections during backtests when data is already in catalog
         self._ibkr_client = ibkr_client
         self._ibkr_client_initialized = ibkr_client is not None
-
-        # Reason: Store provided Kraken client or None for lazy initialization
-        self._kraken_client = kraken_client
-        self._kraken_client_initialized = kraken_client is not None
 
         logger.info(
             "data_catalog_initialized",
@@ -161,30 +152,6 @@ class DataCatalogService:
         # At this point, _ibkr_client is guaranteed to be non-None
         assert self._ibkr_client is not None
         return self._ibkr_client
-
-    @property
-    def kraken_client(self) -> KrakenHistoricalClient:
-        """Lazy-initialized Kraken client property."""
-        if not self._kraken_client_initialized:
-            from src.config import KrakenSettings
-
-            settings = KrakenSettings()
-            self._kraken_client = KrakenHistoricalClient(
-                api_key=settings.kraken_api_key,
-                api_secret=settings.kraken_api_secret,
-                rate_limit=settings.kraken_rate_limit,
-                default_maker_fee=settings.kraken_default_maker_fee,
-                default_taker_fee=settings.kraken_default_taker_fee,
-            )
-            self._kraken_client_initialized = True
-
-            logger.info(
-                "kraken_client_lazy_initialized",
-                rate_limit=settings.kraken_rate_limit,
-            )
-
-        assert self._kraken_client is not None
-        return self._kraken_client
 
     def _rebuild_availability_cache(self) -> None:
         """
@@ -787,14 +754,15 @@ class DataCatalogService:
             bar_type_spec: Bar type specification (default: "1-MINUTE-LAST")
             correlation_id: Optional correlation ID for logging
             max_retries: Maximum retry attempts for transient failures
-            data_source: Data source to use: "ibkr" (default) or "kraken"
+            data_source: "ibkr" (default); "kraken" is refused (crypto M7: Kraken spot data
+                comes from ``fetch_kraken_spot`` and is never persisted here)
 
         Returns:
             List of Bar objects in chronological order
 
         Raises:
             IBKRConnectionError: If IBKR unavailable and data not in catalog
-            KrakenConnectionError: If Kraken unavailable and data not in catalog
+            ValueError: ``data_source`` is "kraken"
             DataNotFoundError: If data cannot be loaded or fetched
             CatalogError: If catalog operations fail
         """
@@ -807,6 +775,12 @@ class DataCatalogService:
             data_source=data_source,
             correlation_id=correlation_id,
         )
+
+        if data_source == "kraken":  # crypto M7: never read or write the default catalog
+            raise ValueError(
+                "Kraken spot data is fetched by src.services.kraken_client.fetch_kraken_spot, "
+                "not DataCatalogService (Kraken history: import --format kraken)"
+            )
 
         # Reason: Check catalog availability first
         availability = self.get_availability(instrument_id, bar_type_spec)
@@ -822,18 +796,7 @@ class DataCatalogService:
                 self.query_bars, instrument_id, start, end, bar_type_spec
             )
 
-        # Route to appropriate data source
-        if data_source == "kraken":
-            return await self._fetch_and_persist_from_kraken(
-                instrument_id,
-                start,
-                end,
-                bar_type_spec,
-                max_retries,
-                correlation_id,
-            )
-
-        # Default: IBKR path (unchanged)
+        # IBKR path (unchanged)
         return await self._fetch_and_persist_from_ibkr(
             instrument_id,
             start,
@@ -888,136 +851,6 @@ class DataCatalogService:
         )
 
         return bars
-
-    async def _is_kraken_available(self) -> bool:
-        """Check if Kraken client is available and connected."""
-        if not self.kraken_client.is_connected:
-            logger.info("kraken_not_connected_attempting_connection")
-            try:
-                await self.kraken_client.connect(timeout=10)
-                logger.info("kraken_connection_successful")
-            except Exception as e:
-                logger.error("kraken_connection_failed", error=str(e))
-                return False
-
-        return self.kraken_client.is_connected
-
-    async def _fetch_and_persist_from_kraken(
-        self,
-        instrument_id: str,
-        start: datetime,
-        end: datetime,
-        bar_type_spec: str,
-        max_retries: int,
-        correlation_id: str | None,
-    ) -> List[Bar]:
-        """Fetch from Kraken and persist to catalog."""
-        logger.info(
-            "data_missing_attempting_kraken_fetch",
-            instrument_id=instrument_id,
-            correlation_id=correlation_id,
-        )
-
-        if not await self._is_kraken_available():
-            raise KrakenConnectionError(
-                "Kraken connection not available. Cannot fetch missing data."
-            )
-
-        bars, instrument = await self._fetch_from_kraken_with_retry(
-            instrument_id=instrument_id,
-            start=start,
-            end=end,
-            bar_type_spec=bar_type_spec,
-            max_retries=max_retries,
-            correlation_id=correlation_id,
-        )
-
-        if instrument is not None:
-            self.catalog.write_data([instrument])
-
-        self.write_bars(bars, correlation_id=correlation_id)
-
-        logger.info(
-            "fetch_or_load_completed",
-            instrument_id=instrument_id,
-            bar_count=len(bars),
-            source="kraken_fetch",
-            correlation_id=correlation_id,
-        )
-
-        return bars
-
-    async def _fetch_from_kraken_with_retry(
-        self,
-        instrument_id: str,
-        start: datetime,
-        end: datetime,
-        bar_type_spec: str,
-        max_retries: int,
-        correlation_id: str | None,
-    ) -> tuple[List[Bar], object | None]:
-        """Fetch from Kraken with exponential backoff retry logic."""
-        import asyncio
-
-        retry_count = 0
-        last_error = None
-
-        while retry_count <= max_retries:
-            try:
-                logger.info(
-                    "fetching_from_kraken",
-                    instrument_id=instrument_id,
-                    retry_count=retry_count,
-                    correlation_id=correlation_id,
-                )
-
-                bars, instrument = await self.kraken_client.fetch_bars(
-                    instrument_id=instrument_id,
-                    start=start,
-                    end=end,
-                    bar_type_spec=bar_type_spec,
-                )
-
-                logger.info(
-                    "kraken_fetch_successful",
-                    instrument_id=instrument_id,
-                    bar_count=len(bars),
-                    retry_count=retry_count,
-                    correlation_id=correlation_id,
-                )
-
-                return bars, instrument
-
-            except (
-                KrakenConnectionError,
-                KrakenRateLimitError,
-                DataNotFoundError,
-            ) as e:
-                last_error = e
-                retry_count += 1
-
-                logger.warning(
-                    "kraken_fetch_failed_retrying",
-                    instrument_id=instrument_id,
-                    retry_count=retry_count,
-                    max_retries=max_retries,
-                    error=str(e),
-                    correlation_id=correlation_id,
-                )
-
-                if retry_count <= max_retries:
-                    backoff_seconds = 2**retry_count
-                    await asyncio.sleep(backoff_seconds)
-
-        logger.error(
-            "kraken_fetch_failed_all_retries_exhausted",
-            instrument_id=instrument_id,
-            max_retries=max_retries,
-            last_error=str(last_error),
-            correlation_id=correlation_id,
-        )
-
-        raise DataNotFoundError(instrument_id, start, end)
 
     async def _fetch_from_ibkr_with_retry(
         self,

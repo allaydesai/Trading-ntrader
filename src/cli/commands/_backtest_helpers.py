@@ -507,17 +507,6 @@ async def _load_mock_data(
     )
 
 
-def _precision_from_bars(bars: list) -> int:
-    """Detect price precision from Nautilus Bar close prices."""
-    max_prec = 0
-    for bar in bars[:100]:
-        s = str(bar.close)
-        if "." in s:
-            prec = len(s.rstrip("0").split(".")[1])
-            max_prec = max(max_prec, prec)
-    return max(max_prec, 1)
-
-
 async def _load_kraken_data(
     *,
     instrument_id: str,
@@ -526,76 +515,17 @@ async def _load_kraken_data(
     end: datetime,
     console: Console,
 ) -> DataLoadResult:
-    """Load data from Kraken via DataCatalogService."""
-    console.print("   Loading data from Kraken...", style="cyan")
+    """Fetch Kraken spot candles and the coin spec's pair (crypto M7; nothing is persisted).
 
-    catalog_service = DataCatalogService()
+    Raises:
+        KrakenSpotRequestError: The range is older than the spot endpoint's 720-candle window.
+    """
+    from src.services.kraken_client import fetch_kraken_spot
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        transient=True,
-        console=console,
-    ) as progress:
-        task = progress.add_task("Fetching Kraken data...", total=None)
-
-        bars = await catalog_service.fetch_or_load(
-            instrument_id=instrument_id,
-            start=start,
-            end=end,
-            bar_type_spec=bar_type_spec,
-            data_source="kraken",
-            correlation_id=f"backtest-kraken-{instrument_id}-{start.strftime('%Y%m%d')}",
-        )
-
-        progress.update(task, completed=True)
-
-    # Load instrument from catalog (written during fetch)
-    instrument = catalog_service.load_instrument(instrument_id)
-
-    if instrument is None:
-        # Build fallback CurrencyPair from instrument_id
-        console.print(
-            f"   Instrument {instrument_id} not in catalog, building fallback...",
-            style="yellow",
-        )
-        from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
-        from nautilus_trader.model.objects import Currency, Price, Quantity
-
-        from src.services.kraken_client import KrakenPairMapper
-
-        user_pair, venue = KrakenPairMapper.from_nautilus_id(instrument_id)
-        base_str, quote_str = user_pair.split("/")
-        naut_id = InstrumentId(Symbol(user_pair), Venue(venue))
-
-        from nautilus_trader.model.instruments import CurrencyPair
-
-        price_prec = _precision_from_bars(bars)
-        price_inc = f"0.{'0' * (price_prec - 1)}1" if price_prec > 0 else "1"
-
-        instrument = CurrencyPair(
-            instrument_id=naut_id,
-            raw_symbol=Symbol(user_pair.replace("/", "")),
-            base_currency=Currency.from_str(base_str),
-            quote_currency=Currency.from_str(quote_str),
-            price_precision=price_prec,
-            size_precision=8,
-            price_increment=Price.from_str(price_inc),
-            size_increment=Quantity.from_str("0.00000001"),
-            maker_fee=Decimal("0.0016"),
-            taker_fee=Decimal("0.0026"),
-            ts_event=0,
-            ts_init=0,
-        )
-        console.print("   Using fallback crypto instrument", style="yellow")
-
+    console.print("   Loading spot data from Kraken...", style="cyan")
+    bars, instrument = await fetch_kraken_spot(instrument_id, start, end, bar_type_spec)
     console.print(f"   Loaded {len(bars):,} bars from Kraken")
-
-    return DataLoadResult(
-        bars=bars,
-        instrument=instrument,
-        data_source_used="Kraken",
-    )
+    return DataLoadResult(bars=bars, instrument=instrument, data_source_used="Kraken")
 
 
 async def _load_catalog_data(

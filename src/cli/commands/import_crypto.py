@@ -1,10 +1,14 @@
-"""``import --format firstrate --asset-class crypto`` runner (crypto M2).
+"""``import --format firstrate|kraken --asset-class crypto`` runners (crypto M2, M7).
 
 Spot crypto needs no ``company_profiles.csv``: identity and contract fields come from the
 coin spec (``src/services/crypto/coin_specs.yaml``). Bars are trade prices (``LAST``), so
 each ``--timeframe`` spec is mapped to ``LAST``. As for futures and FX, the
 ``catalog_instruments`` writes are committed after every timeframe pass, so a long run keeps
 the series it has finished if a later pass fails.
+
+``--format kraken`` (M7) reads Kraken's own OHLCVT history (``XBTUSD_60.csv``, see
+``src/services/crypto/kraken_import.py``) through the same runner. Kraken publishes 1, 5, 60
+and 1440-minute candles that the catalog records, but no 30-minute ones.
 """
 
 from __future__ import annotations
@@ -21,12 +25,37 @@ from src.cli.commands.import_reporting import (
     determine_exit_code,
 )
 from src.models.catalog import AssetClass, ImportResult
+from src.services.crypto.kraken_ohlcvt_download import INTERVAL_TIMEFRAMES
 
 console = Console()
 
 
-def run_crypto_import(catalog: str, source_path: Path, timeframes: list[str]) -> int:
-    """Import every ``{COIN}_full_{tf}.txt`` under ``source_path``; return the exit code."""
+#: The ``--format kraken`` default: every catalog timeframe Kraken publishes, daily first.
+KRAKEN_TIMEFRAMES = [INTERVAL_TIMEFRAMES[m] for m in sorted(INTERVAL_TIMEFRAMES, reverse=True)]
+
+
+def run_kraken_import(
+    catalog: str, source_path: Path, asset_class: str | None, timeframe: str | None
+) -> int:
+    """``import --format kraken``: validate the options, then run the crypto import."""
+    from src.cli.commands.import_data import parse_timeframes
+
+    if (asset_class or "crypto").lower() != "crypto":
+        console.print("❌ --format kraken imports spot crypto only (--asset-class crypto).")
+        return 2
+    timeframes = parse_timeframes(timeframe) if timeframe else KRAKEN_TIMEFRAMES
+    missing = [tf for tf in timeframes if tf not in KRAKEN_TIMEFRAMES]
+    if missing:
+        console.print(f"❌ Kraken publishes no {', '.join(missing)} candles.", style="red")
+        return 2
+    return run_crypto_import(catalog, source_path, timeframes, source="kraken")
+
+
+def run_crypto_import(
+    catalog: str, source_path: Path, timeframes: list[str], source: str = "firstrate"
+) -> int:
+    """Import every ``{COIN}_full_{tf}.txt`` (or Kraken ``{ALTNAME}_{minutes}.csv`` with
+    ``source="kraken"``) under ``source_path``; return the exit code."""
     from src.config import get_settings
     from src.db.repositories.catalog_instrument_repository import (
         SyncCatalogInstrumentRepository,
@@ -50,7 +79,13 @@ def run_crypto_import(catalog: str, source_path: Path, timeframes: list[str]) ->
         session = session_maker()
         ensure_catalog_dir(catalog_base, catalog)
         metadata = MetadataService(sync_repo=SyncCatalogInstrumentRepository(session))
-        service = CryptoImportService(CatalogManager(catalog_base), metadata)
+        if source == "kraken":
+            from src.services.crypto.kraken_import import KrakenImportService
+
+            service_class: type[CryptoImportService] = KrakenImportService
+        else:
+            service_class = CryptoImportService
+        service = service_class(CatalogManager(catalog_base), metadata)
         click.echo(f"\n--- {AssetClass.CRYPTO.value} ---")
         for tf in (last_timeframe(spec) for spec in timeframes):
             results = service.import_directory(source_path, catalog, AssetClass.CRYPTO, tf)

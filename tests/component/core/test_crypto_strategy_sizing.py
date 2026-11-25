@@ -63,7 +63,7 @@ class TestSmaCrossover:
         assert quantity.as_decimal() * Decimal("91234.5678") <= Decimal("10000")
 
     def test_a_budget_under_the_kraken_minimum_places_no_order_and_warns_once(self):
-        sizing = _sma_self(BTC, 78000.0, pct="0.003")  # USD 3: 0.00003846 BTC < 0.00005
+        sizing = _sma_self(BTC, 78000.0, pct="0.003")  # USD 3: 0.00003846 BTC < 0.00006
         assert SMACrossover._calculate_position_size(sizing) is None
         assert SMACrossover._calculate_position_size(sizing) is None
         sizing.log.warning.assert_called_once()
@@ -80,8 +80,8 @@ class TestSmaCrossover:
         assert "~$19,500 notional" in sizing.log.info.call_args.args[0]
 
     def test_fixed_units_under_the_usd_minimum_place_no_order(self):
-        # 0.00005 BTC meets the base minimum, but at USD 1,000 it is USD 0.05 < USD 0.50
-        sizing = _sma_self(BTC, 1000.0, units=Decimal("0.00005"))
+        # 0.00006 BTC meets the base minimum, but at USD 1,000 it is USD 0.06 < USD 0.50
+        sizing = _sma_self(BTC, 1000.0, units=Decimal("0.00006"))
         assert SMACrossover._calculate_position_size(sizing) is None
         assert "minimum" in sizing.log.warning.call_args.args[0]
 
