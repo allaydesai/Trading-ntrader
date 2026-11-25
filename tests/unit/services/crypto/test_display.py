@@ -119,3 +119,42 @@ class TestDashboard:
 
     def test_no_cells_for_another_run(self):
         assert display.trade_cells({}, TRADES) is None
+
+
+class TestExposureBasis:
+    """Every renderer words the peak by its basis: exact from the series, else the upper bound."""
+
+    @staticmethod
+    def _exact_run():
+        from tests.unit.services.crypto.test_exposure import TRADES as SCRIPTED
+        from tests.unit.services.crypto.test_exposure import _snapshot
+
+        return _run(_snapshot(True), SCRIPTED), _run(_snapshot(False), SCRIPTED)
+
+    def test_cli_table_text_and_dashboard_say_exact_for_a_run_with_the_series(self):
+        exact, old = self._exact_run()
+        assert (
+            dict(display.summary_rows(display.run_summary(exact)))[
+                "Peak exposure (notional / equity)"
+            ]
+            == "55.02%"
+        )
+        text = display.summary_text(display.run_summary(exact))
+        assert "exact, replayed from every fill" in text and "upper bound" not in text
+        assert "upper bound" not in display.dashboard_panel(exact)["note"]
+        assert display.crypto_table(display.run_summary(exact)).caption.endswith("each fill.")
+
+    def test_runs_without_the_series_keep_the_upper_bound_wording(self):
+        _, old = self._exact_run()
+        assert (
+            dict(display.summary_rows(display.run_summary(old)))[
+                "Peak exposure (notional / equity)"
+            ]
+            == "62.00%"
+        )
+        assert "an upper bound" in display.summary_text(display.run_summary(old))
+        assert "an upper bound" in display.dashboard_panel(old)["note"]
+        assert (
+            display.flat_report_fields(display.run_summary(old))["crypto_peak_exposure_basis"]
+            == "upper_bound"
+        )
