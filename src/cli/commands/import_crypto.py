@@ -25,12 +25,13 @@ from src.cli.commands.import_reporting import (
     determine_exit_code,
 )
 from src.models.catalog import AssetClass, ImportResult
+from src.services.crypto.kraken_ohlcvt_download import INTERVAL_TIMEFRAMES
 
 console = Console()
 
 
-#: The ``--format kraken`` default: every catalog timeframe Kraken publishes.
-KRAKEN_TIMEFRAMES = ["1-DAY-LAST", "1-HOUR-LAST", "5-MINUTE-LAST", "1-MINUTE-LAST"]
+#: The ``--format kraken`` default: every catalog timeframe Kraken publishes, daily first.
+KRAKEN_TIMEFRAMES = [INTERVAL_TIMEFRAMES[m] for m in sorted(INTERVAL_TIMEFRAMES, reverse=True)]
 
 
 def run_kraken_import(

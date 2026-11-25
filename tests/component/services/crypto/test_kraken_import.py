@@ -127,3 +127,12 @@ class TestImport:
         assert [(r.status, r.outcome, r.row_count) for r in again] == [
             ("success", "reimported", 22)
         ]
+
+
+def test_two_files_for_one_series_are_refused(tmp_path: Path):
+    """Review follow-up: a full and a quarterly extract side by side would import one of them."""
+    for folder in ("Kraken_OHLCVT_Full", "Kraken_OHLCVT_2026Q3"):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "XBTUSD_60.csv").write_text(_hour_rows(2))
+    with pytest.raises(ValueError, match="XBTUSD_60.csv"):
+        discover_kraken_files(tmp_path)

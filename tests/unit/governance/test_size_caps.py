@@ -209,7 +209,7 @@ SIZE_BASELINE: dict[str, int] = {
     "src/services/comparison_renderer.py::render_comparison_table": 66,
     "src/services/csv_loader.py::CSVLoader": 205,
     "src/services/csv_loader.py::CSVLoader.load_file": 65,
-    "src/services/data_catalog.py::DataCatalogService": 612,
+    "src/services/data_catalog.py::DataCatalogService": 503,
     "src/services/data_catalog.py::DataCatalogService._fetch_from_ibkr_with_retry": 52,
     "src/services/data_catalog.py::DataCatalogService._rebuild_availability_cache": 106,
     "src/services/data_catalog.py::DataCatalogService.query_bars": 61,

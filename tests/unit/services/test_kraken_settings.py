@@ -64,7 +64,7 @@ class TestKrakenSettingsDefaults:
         assert settings.kraken_default_taker_fee == Decimal("0.0060")
 
     def test_default_fees_follow_the_schedules_default_tier(self):
-        """The defaults are read from coin_specs.yaml (the M3 fee model), not hardcoded."""
+        """The literal defaults equal coin_specs.yaml's default tier (the M3 fee model)."""
         from src.services.crypto.coin_specs import get_fee_schedule
 
         schedule = get_fee_schedule()

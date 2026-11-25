@@ -22,7 +22,7 @@ from src.services.crypto.kraken_spot import (
     spot_instrument,
     spot_interval,
 )
-from src.services.exceptions import DataNotFoundError, KrakenSpotRangeError
+from src.services.exceptions import DataNotFoundError, KrakenSpotRequestError
 from src.services.kraken_client import KrakenHistoricalClient, KrakenPairMapper
 
 pytestmark = pytest.mark.component
@@ -88,7 +88,7 @@ class TestWindow:
     async def test_an_older_range_is_refused_before_any_request(self):
         client = KrakenHistoricalClient()
         client._spot_market = MagicMock()
-        with pytest.raises(KrakenSpotRangeError) as caught:
+        with pytest.raises(KrakenSpotRequestError) as caught:
             await client.fetch_bars(
                 "BTC/USD.KRAKEN",
                 datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -187,3 +187,38 @@ class TestFetch:
         start = NOW - timedelta(hours=3)
         with pytest.raises(DataNotFoundError):
             await client.fetch_bars("BTC/USD.KRAKEN", start, NOW, "1-HOUR-LAST", now=NOW)
+
+
+class TestRequestsKrakenCannotServe:
+    """Review follow-up: every unservable request is a ``KrakenSpotRequestError`` (exit 2)."""
+
+    @pytest.mark.parametrize(
+        ("instrument_id", "spec", "match"),
+        [
+            ("BTCUSD.KRAKEN", "1-HOUR-LAST", "BASE/QUOTE"),
+            ("ETH/EUR.KRAKEN", "1-HOUR-LAST", "USD"),
+            ("BTC/USD.KRAKEN", "12-HOUR-LAST", "12-HOUR"),
+        ],
+    )
+    async def test_refused_before_any_request(self, instrument_id, spec, match):
+        client = KrakenHistoricalClient()
+        client._spot_market = MagicMock()
+        with pytest.raises(KrakenSpotRequestError, match=match):
+            await client.fetch_bars(instrument_id, NOW - timedelta(hours=3), NOW, spec, now=NOW)
+        client._spot_market.get_ohlc.assert_not_called()
+        client._spot_market.get_asset_pairs.assert_not_called()
+
+
+def test_bar_volume_uses_the_instruments_size_precision():
+    first = int(datetime(2026, 11, 24, tzinfo=timezone.utc).timestamp())
+    bars = spot_bars(
+        _rows(first, 2),
+        last=first + 2 * H,
+        instrument_id="BTC/USD.KRAKEN",
+        bar_type_spec="1-HOUR-LAST",
+        start=datetime(2026, 11, 24, tzinfo=timezone.utc),
+        end=NOW,
+        price_precision=4,
+        size_precision=6,
+    )
+    assert str(bars[0].volume) == "1.500000"

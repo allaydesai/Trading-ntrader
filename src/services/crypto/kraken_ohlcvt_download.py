@@ -29,15 +29,23 @@ import shutil
 import sys
 import urllib.request
 import zipfile
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Protocol
 
 BASE_URL = "https://assets.kraken.com/marketing/institutions/"
 FULL_PARTS = tuple(f"Kraken_OHLCVT_Full.zip.part{i:02d}" for i in range(5))
-#: The intervals (minutes) the ``kraken-crypto`` catalog holds: 1-MINUTE, 5-MINUTE, 1-HOUR,
-#: 1-DAY. Kraken also ships 15, 240 and 720, which have no catalog coverage field.
-CATALOG_INTERVALS = (1, 5, 60, 1440)
+#: Kraken interval (minutes) -> the catalog timeframe it fills: the one list of what a Kraken
+#: import covers (the importer, ``import --format kraken`` and this download all read it).
+#: Kraken also ships 15, 240 and 720, which have no catalog coverage field.
+INTERVAL_TIMEFRAMES = {
+    1: "1-MINUTE-LAST",
+    5: "5-MINUTE-LAST",
+    60: "1-HOUR-LAST",
+    1440: "1-DAY-LAST",
+}
+CATALOG_INTERVALS = tuple(INTERVAL_TIMEFRAMES)
 MANIFEST = "MANIFEST.json"
 CHECKSUMS = "SHA256SUMS"
 _USER_AGENT = "ntrader-backtester"
@@ -159,6 +167,10 @@ def extract_pairs(
     ]
     if missing:
         raise ValueError(f"Not in the Kraken archive: {', '.join(missing)}")
+    counts = Counter(Path(name).name for name in members)
+    twice = sorted(name for name, n in counts.items() if n > 1)
+    if twice:  # two folders with one file name would overwrite each other
+        raise ValueError(f"The archive holds more than one {', '.join(twice)}; extract by hand")
     targets = [dest / Path(name).name for name in members]
     clashes = [t.name for t in targets if t.exists()]
     if clashes:

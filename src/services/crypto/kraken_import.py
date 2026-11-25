@@ -29,16 +29,10 @@ from pathlib import Path
 import pandas as pd
 
 from src.services.crypto.coin_specs import coin_names, get_coin_spec
+from src.services.crypto.kraken_ohlcvt_download import INTERVAL_TIMEFRAMES
 from src.services.firstrate.crypto_import_service import CryptoImportService, last_timeframe
 from src.services.firstrate.parsers.firstrate_crypto_parser import FirstRateCryptoParser
 
-#: Kraken interval (minutes) -> the catalog timeframe it fills.
-INTERVAL_TIMEFRAMES = {
-    1: "1-MINUTE-LAST",
-    5: "5-MINUTE-LAST",
-    60: "1-HOUR-LAST",
-    1440: "1-DAY-LAST",
-}
 _FILE = re.compile(r"^(?P<alt>[A-Z0-9]+)_(?P<minutes>\d+)\.csv$")
 
 
@@ -61,9 +55,14 @@ def altname_coins() -> dict[str, str]:
 
 
 def discover_kraken_files(source_dir: Path) -> list[tuple[str, str, Path]]:
-    """``(coin, timeframe, path)`` of every importable file in ``source_dir`` or one below."""
+    """``(coin, timeframe, path)`` of every importable file in ``source_dir`` or one below.
+
+    Raises:
+        ValueError: Two files feed one series (say a full and a quarterly extract side by
+            side): each import rewrites or skips the whole series, so one would be lost.
+    """
     coins = altname_coins()
-    found = []
+    found: dict[tuple[str, str], list[Path]] = {}
     for path in sorted([*source_dir.glob("*.csv"), *source_dir.glob("*/*.csv")]):
         match = _FILE.match(path.name)
         if match is None or not path.is_file():
@@ -71,8 +70,12 @@ def discover_kraken_files(source_dir: Path) -> list[tuple[str, str, Path]]:
         coin = coins.get(match["alt"])
         timeframe = INTERVAL_TIMEFRAMES.get(int(match["minutes"]))
         if coin is not None and timeframe is not None:
-            found.append((coin, timeframe, path))
-    return found
+            found.setdefault((coin, timeframe), []).append(path)
+    twice = [paths for paths in found.values() if len(paths) > 1]
+    if twice:
+        names = "; ".join(" and ".join(str(p) for p in paths) for paths in twice)
+        raise ValueError(f"One file per Kraken series, found more: {names}")
+    return [(coin, tf, paths[0]) for (coin, tf), paths in found.items()]
 
 
 def kraken_source_last_date(file_path: Path) -> datetime | None:

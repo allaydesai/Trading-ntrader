@@ -4,7 +4,8 @@
 
 `src/services/data_catalog.py` — central data access layer with lazy initialization.
 
-- Lazy-initializes IBKR and Kraken clients only when first needed
+- Lazy-initializes the IBKR client only when first needed; `fetch_or_load(data_source="kraken")`
+  is refused (crypto M7: Kraken spot data never touches the default catalog)
 - Maintains in-memory `availability_cache` for fast checks (key: `{instrument_id}_{bar_type_spec}`)
 - Rebuilds cache on startup; invalidated if catalog changes
 - `NAUTILUS_PATH` env var controls catalog location (defaults to `./data/catalog`)
@@ -12,7 +13,7 @@
 **Data source routing** (in BacktestOrchestrator):
 - `catalog` (default) — Parquet files on disk
 - `ibkr` — fetch from Interactive Brokers TWS/Gateway
-- `kraken` — fetch from Kraken API
+- `kraken` — Kraken public spot OHLC via `fetch_kraken_spot` (latest 720 candles; not persisted)
 - `mock` — test data
 
 ## Symbol Resolution
@@ -52,8 +53,9 @@
 - Nautilus InstrumentId: BTC/USD.KRAKEN
 
 **Data source**: spot REST `OHLC` (`/0/public/OHLC`), the latest 720 candles of an interval.
-An older range raises `KrakenSpotRangeError` (a `DataNotFoundError`; the CLI exits 2) before any
-request. The Futures Charts API is not used: it lists only futures symbols, and its `spot` tick
+An older range, a pair not in `BASE/QUOTE` form, a non-USD quote or an interval Kraken does
+not publish raises `KrakenSpotRequestError` (a `DataNotFoundError`; the CLI exits 2) before any
+request. The SDK calls run in a worker thread (`asyncio.to_thread`). The Futures Charts API is not used: it lists only futures symbols, and its `spot` tick
 type is an index. Nothing is persisted; `_load_kraken_data` calls `fetch_kraken_spot` directly.
 
 **History**: `src/services/crypto/kraken_ohlcvt_download.py` extracts pairs from Kraken's

@@ -78,7 +78,7 @@ class IBKRConnectionError(CatalogError):
         super().__init__(message)
 
 
-class KrakenSpotRangeError(DataNotFoundError):
+class KrakenSpotRequestError(DataNotFoundError):
     """A ``--data-source kraken`` range older than the spot OHLC endpoint's window (crypto M7).
 
     Raised before any request. The CLI reports it as a usage error (exit 2); the web UI shows

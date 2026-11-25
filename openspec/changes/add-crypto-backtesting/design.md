@@ -580,11 +580,13 @@ long-only; Kraken Pro fee tier N; spread modelled".
   of an interval plus the open one (`last` is its time), whatever `since` asks: at 03:26 UTC
   hourly started 2026-10-26 03:00 and daily 2024-12-05.
 - **The fix.** `--data-source kraken` reads spot `OHLC` (`src/services/crypto/kraken_spot.py`)
-  and refuses, before any request, a range older than that window: exit 2 (`KrakenSpotRangeError`
+  and refuses, before any request, a range older than that window: exit 2 (`KrakenSpotRequestError`
   as a usage error; the web form shows it inline), naming the window's first candle and the
   `kraken-crypto` path below. Trade prices only (`LAST`); Kraken has no 12-hour spot interval.
+  A malformed pair, a non-USD quote or an unpublished interval is refused the same way.
   Nothing fetched is persisted to the default catalog (whose Kraken series, if a user ever
-  fetched one, are perpetual prices). Spot `OHLC` and `AssetPairs` are public, so the API key is
+  fetched one, are perpetual prices): `DataCatalogService` no longer has a Kraken route and
+  refuses `data_source="kraken"`. Spot `OHLC` and `AssetPairs` are public, so the API key is
   optional (a half-set key/secret pair is still refused).
 - The instrument is `build_crypto_pair(get_coin_spec(base))` for a coin with a spec, so the
   venue gets `CryptoCommissionModel` at the run's tier (`--fee-tier`). A USD coin without one
@@ -610,9 +612,11 @@ long-only; Kraken Pro fee tier N; spread modelled".
   before October 2013. Daily-close basis FirstRate vs Kraken, 2021-07 to 2026-05: median
   3.5 bp BTC, 4.0 bp ETH, 6.6 bp SOL (p95 11.8 / 12.5 / 22.8 bp); before 2021 it is much wider
   (ETH p95 392 bp from 2017), so FirstRate's source is a different venue.
-- `KRAKEN_DEFAULT_MAKER_FEE`/`TAKER_FEE` remain (back-compatible env vars); their defaults now
-  come from the schedule's default tier (0.0030 / 0.0060). Backtests charge the schedule, not
-  these values (open question for Allay: drop them, or make them a run override).
+- `KRAKEN_DEFAULT_MAKER_FEE`/`TAKER_FEE` remain (back-compatible env vars); their defaults are
+  the schedule's default tier (0.0030 / 0.0060, literals pinned to `coin_specs.yaml` by a test,
+  so loading settings never reads the spec file). Nothing charges them any more (the client
+  no longer takes fees); backtests charge the schedule. Open question for Allay: drop them, or
+  make them a run override.
 - Code moved out of `kraken_client.py` (145 -> 98 statements) and `_backtest_helpers.py`.
 
 ## 12. Live-trading compatibility notes (not implemented here)

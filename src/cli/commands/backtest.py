@@ -30,7 +30,7 @@ from src.services.exceptions import (
     DataNotFoundError,
     IBKRConnectionError,
     KrakenConnectionError,
-    KrakenSpotRangeError,
+    KrakenSpotRequestError,
     RateLimitExceededError,
     UnknownCatalogError,
 )
@@ -329,7 +329,7 @@ def run_backtest(
             instrument = data_result.instrument
             data_source_used = data_result.data_source_used
 
-        except KrakenSpotRangeError as e:  # crypto M7: names the kraken-crypto history path
+        except KrakenSpotRequestError as e:  # crypto M7: names the kraken-crypto history path
             raise click.UsageError(str(e)) from e
         except DataNotFoundError as e:
             console.print()

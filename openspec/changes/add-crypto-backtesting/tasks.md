@@ -221,8 +221,13 @@ Kraken's public endpoints (no API key) and corrected with sources in `coin_specs
 - [x] 7.3 Implement; move code out of `kraken_client.py`/`_backtest_helpers.py` (no baseline growth).
       `src/services/crypto/kraken_spot.py`; `KrakenHistoricalClient` 145 -> 98 statements
       (baseline entry removed); `_load_kraken_data` no longer builds a fallback pair or
-      persists to the default catalog. `run_backtest` 175 -> 176 (the exit-2 refusal, entry
-      bumped with the reason).
+      persists to the default catalog; `DataCatalogService` drops its Kraken client and route
+      (612 -> 503 statements) and refuses `data_source="kraken"`. `run_backtest` 175 -> 176
+      (the exit-2 refusal, entry bumped with the reason). Review follow-ups: a bad pair form,
+      a non-USD quote and an unpublished interval are `KrakenSpotRequestError` too (exit 2,
+      no request); bar volume follows the pair's size precision; SDK calls run off the
+      event loop; the Kraken intervals live in one constant; two files for one series, or
+      two archive members with one name, are refused.
 - [x] 7.4 Component (failing first): the fetched instrument is spec-built (`BTC/USD.KRAKEN`),
       the venue gets `CryptoCommissionModel` at the run's tier, and a coin without a spec gets
       the fallback instrument with the same schedule.

@@ -12,7 +12,6 @@ optional.
 import asyncio
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 
 import structlog
 from kraken.spot import Market as SpotMarket
@@ -115,14 +114,10 @@ class KrakenHistoricalClient:
         api_key: str = "",
         api_secret: str = "",
         rate_limit: int = 10,
-        default_maker_fee: Decimal = Decimal("0.0030"),
-        default_taker_fee: Decimal = Decimal("0.0060"),
     ):
+        # Fees are not a client concern: runs charge the coin_specs.yaml tier (M3, --fee-tier).
         self._api_key = api_key
         self._api_secret = api_secret
-        # Informational (KrakenSettings): runs charge the coin_specs.yaml tier (M3, --fee-tier).
-        self._default_maker_fee = default_maker_fee
-        self._default_taker_fee = default_taker_fee
         self._spot_market: SpotMarket | None = None
         self._connected = False
         self.rate_limiter = KrakenRateLimiter(requests_per_second=rate_limit)
@@ -187,7 +182,7 @@ class KrakenHistoricalClient:
         rest_pair = KrakenPairMapper.to_kraken_rest(user_pair)
         try:
             await self.rate_limiter.acquire()
-            all_pairs = self._market().get_asset_pairs(pair=rest_pair)
+            all_pairs = await asyncio.to_thread(self._market().get_asset_pairs, pair=rest_pair)
         except KrakenConnectionError:
             raise
         except Exception as e:
@@ -205,7 +200,8 @@ class KrakenHistoricalClient:
         """One spot ``OHLC`` request: ``(rows, last)``; ``last`` is the open candle's time."""
         await self.rate_limiter.acquire()
         try:
-            response = self._market().get_ohlc(
+            response = await asyncio.to_thread(
+                self._market().get_ohlc,
                 pair=KrakenPairMapper.to_kraken_rest(user_pair),
                 interval=interval,
                 since=int(start.timestamp()) - 1,
@@ -228,15 +224,15 @@ class KrakenHistoricalClient:
         """Fetch spot bars and the spot pair for ``BTC/USD.KRAKEN`` over ``[start, end]``.
 
         Raises:
-            KrakenSpotRangeError: ``start`` is older than the endpoint's 720-candle window.
-            ValueError: An interval, price type or quote Kraken spot does not serve.
+            KrakenSpotRequestError: Before any request: ``start`` is older than the endpoint's
+                720-candle window, or the pair, quote, interval or price type is not served.
             KrakenConnectionError: On API failure.
             DataNotFoundError: No committed candle in the range, or an unknown pair.
         """
-        user_pair, _venue = KrakenPairMapper.from_nautilus_id(instrument_id)
-        interval = kraken_spot.spot_interval(bar_type_spec)
         now = now or datetime.now(timezone.utc)
-        kraken_spot.check_spot_range(instrument_id, start, end, interval, now)
+        user_pair, interval = kraken_spot.spot_request(
+            instrument_id, bar_type_spec, start, end, now
+        )
         known = user_pair.split("/")[0] in coin_names()
         pair_info = None if known else await self._fetch_pair_info(user_pair)
         instrument = kraken_spot.spot_instrument(user_pair, pair_info)
@@ -249,6 +245,7 @@ class KrakenHistoricalClient:
             start=start,
             end=end,
             price_precision=instrument.price_precision,
+            size_precision=instrument.size_precision,
         )
         if not bars:
             raise DataNotFoundError(instrument_id, start, end)
@@ -271,8 +268,6 @@ async def fetch_kraken_spot(
         api_key=settings.kraken_api_key,
         api_secret=settings.kraken_api_secret,
         rate_limit=settings.kraken_rate_limit,
-        default_maker_fee=settings.kraken_default_maker_fee,
-        default_taker_fee=settings.kraken_default_taker_fee,
     )
     await client.connect()
     try:

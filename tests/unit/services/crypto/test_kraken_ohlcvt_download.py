@@ -107,3 +107,15 @@ def test_a_pair_missing_from_the_archive_is_an_error(remote, tmp_path: Path):
     archive = SplitArchive(sorted(remote.parts), remote)
     with pytest.raises(ValueError, match="ETHUSD"):
         extract_pairs(archive, tmp_path, ["XBTUSD", "ETHUSD"], [1])
+
+
+def test_two_members_with_one_name_are_refused_before_writing(tmp_path: Path):
+    """Review follow-up: a/XBTUSD_60.csv and b/XBTUSD_60.csv would overwrite each other."""
+    blob = _zip_bytes(
+        {"a/XBTUSD_60.csv": b"1,1,1,1,1,1,1\n", "b/XBTUSD_60.csv": b"2,2,2,2,2,2,2\n"}
+    )
+    remote = _FakeRemote(blob, cuts=[50])
+    archive = SplitArchive(sorted(remote.parts), remote)
+    with pytest.raises(ValueError, match="XBTUSD_60.csv"):
+        extract_pairs(archive, tmp_path, ["XBTUSD"], [60])
+    assert not list(tmp_path.iterdir())

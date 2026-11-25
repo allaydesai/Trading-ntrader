@@ -518,7 +518,7 @@ async def _load_kraken_data(
     """Fetch Kraken spot candles and the coin spec's pair (crypto M7; nothing is persisted).
 
     Raises:
-        KrakenSpotRangeError: The range is older than the spot endpoint's 720-candle window.
+        KrakenSpotRequestError: The range is older than the spot endpoint's 720-candle window.
     """
     from src.services.kraken_client import fetch_kraken_spot
 

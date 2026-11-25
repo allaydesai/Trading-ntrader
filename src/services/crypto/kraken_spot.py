@@ -28,7 +28,7 @@ from nautilus_trader.model.objects import Price, Quantity
 
 from src.services.crypto.coin_specs import QUOTE_CURRENCY, CoinSpec, coin_names, get_coin_spec
 from src.services.crypto.instrument_builder import build_crypto_pair
-from src.services.exceptions import DataNotFoundError, KrakenSpotRangeError
+from src.services.exceptions import DataNotFoundError, KrakenSpotRequestError
 
 #: Bar step -> Kraken OHLC ``interval`` (minutes). Kraken has no 12-hour spot interval.
 SPOT_INTERVALS = {
@@ -78,13 +78,36 @@ def rest_window_start(interval: int, now: datetime) -> datetime:
     return datetime.fromtimestamp(open_now - REST_WINDOW_CANDLES * step, tz=timezone.utc)
 
 
+def spot_request(
+    instrument_id: str, bar_type_spec: str, start: datetime, end: datetime, now: datetime
+) -> tuple[str, int]:
+    """``("BTC/USD", 60)`` for a request Kraken spot can serve, checked before any request.
+
+    Raises:
+        KrakenSpotRequestError: The id is not ``BASE/QUOTE.KRAKEN``, the quote is not USD
+            (decision C6), Kraken publishes no such interval or price type, or ``start`` is
+            older than the endpoint's window.
+    """
+    pair = instrument_id.rpartition(".")[0] or instrument_id
+    try:
+        if pair.count("/") != 1:
+            raise ValueError(f"Kraken pairs are BASE/QUOTE (e.g. BTC/USD), got {pair!r}")
+        if pair.split("/")[1] != QUOTE_CURRENCY:
+            raise ValueError(f"Spot crypto backtests are USD-quoted only (C6); got {pair}")
+        interval = spot_interval(bar_type_spec)
+    except ValueError as e:
+        raise KrakenSpotRequestError(instrument_id, start, end, message=str(e)) from e
+    check_spot_range(instrument_id, start, end, interval, now)
+    return pair, interval
+
+
 def check_spot_range(
     instrument_id: str, start: datetime, end: datetime, interval: int, now: datetime
 ) -> None:
-    """Raise :class:`KrakenSpotRangeError` when ``start`` is older than the REST window."""
+    """Raise :class:`KrakenSpotRequestError` when ``start`` is older than the REST window."""
     first = rest_window_start(interval, now)
     if start < first:
-        raise KrakenSpotRangeError(
+        raise KrakenSpotRequestError(
             instrument_id,
             start,
             end,
@@ -109,6 +132,7 @@ def spot_bars(
     start: datetime,
     end: datetime,
     price_precision: int,
+    size_precision: int = SIZE_PRECISION,
 ) -> list[Bar]:
     """Committed rows ``[time, o, h, l, c, vwap, volume, count]`` inside ``[start, end]``."""
     step = "-".join(bar_type_spec.upper().split("-")[:2])
@@ -120,7 +144,7 @@ def spot_bars(
             continue
         ts = int(t) * 1_000_000_000
         o, h, low, c = (Price.from_str(_quantized(v, price_precision)) for v in (o, h, low, c))
-        size = Quantity.from_str(_quantized(volume, SIZE_PRECISION))
+        size = Quantity.from_str(_quantized(volume, size_precision))
         bars.append(Bar(bar_type, o, h, low, c, size, ts, ts))
     return bars
 

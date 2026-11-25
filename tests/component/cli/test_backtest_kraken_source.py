@@ -105,9 +105,9 @@ def test_a_range_older_than_the_spot_window_is_a_usage_error_naming_the_history_
     from click.testing import CliRunner
 
     from src.cli.commands.backtest import run_backtest
-    from src.services.exceptions import KrakenSpotRangeError
+    from src.services.exceptions import KrakenSpotRequestError
 
-    refusal = KrakenSpotRangeError(
+    refusal = KrakenSpotRequestError(
         "BTC/USD.KRAKEN", START, END, message="only the latest 720 candles; use kraken-crypto"
     )
     with patch("src.services.kraken_client.fetch_kraken_spot", AsyncMock(side_effect=refusal)):

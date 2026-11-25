@@ -161,21 +161,14 @@ class IBKRSettings(BaseSettings):
     }
 
 
-def _kraken_default_fee(side: str) -> Decimal:
-    """The Kraken Pro spot ``side`` rate of the schedule's default tier, as a fraction."""
-    from src.services.crypto.coin_specs import get_fee_schedule
-
-    schedule = get_fee_schedule()
-    return getattr(schedule.tier(schedule.default_tier), f"{side}_pct") / 100
-
-
 class KrakenSettings(BaseSettings):
     """Kraken exchange configuration settings.
 
     The API key is optional: ``--data-source kraken`` reads public spot endpoints (crypto M7).
     The default maker/taker fees are the default tier of the Kraken Pro spot schedule in
-    ``src/services/crypto/coin_specs.yaml`` (tier 2: 0.30% / 0.60%), which is what a crypto
-    backtest charges (``CryptoCommissionModel``; ``backtest run --fee-tier N`` picks another).
+    ``src/services/crypto/coin_specs.yaml`` (tier 2: 0.30% / 0.60%; a unit test pins them to
+    it, so loading settings never depends on that file). A crypto backtest charges the schedule
+    (``CryptoCommissionModel``; ``backtest run --fee-tier N`` picks another tier), not these.
     """
 
     kraken_api_key: str = Field(default="", description="Kraken API key")
@@ -184,16 +177,16 @@ class KrakenSettings(BaseSettings):
         default=10, ge=1, le=20, description="Max requests per second (1-20)"
     )
     kraken_default_maker_fee: Decimal = Field(
-        default_factory=lambda: _kraken_default_fee("maker"),
+        default=Decimal("0.0030"),
         ge=0,
         le=1,
-        description="Maker fee (0-1); default: the fee schedule's default tier",
+        description="Maker fee (0-1); default: the fee schedule's default tier (tier 2)",
     )
     kraken_default_taker_fee: Decimal = Field(
-        default_factory=lambda: _kraken_default_fee("taker"),
+        default=Decimal("0.0060"),
         ge=0,
         le=1,
-        description="Taker fee (0-1); default: the fee schedule's default tier",
+        description="Taker fee (0-1); default: the fee schedule's default tier (tier 2)",
     )
 
     @model_validator(mode="after")
