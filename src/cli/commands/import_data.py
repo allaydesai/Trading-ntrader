@@ -669,9 +669,9 @@ def _run_dry_run(
 @click.option(
     "--format",
     "format_name",
-    type=click.Choice(["firstrate"], case_sensitive=False),
+    type=click.Choice(["firstrate", "kraken"], case_sensitive=False),
     required=True,
-    help="Data source format.",
+    help="Data source format (kraken: Kraken OHLCVT history, spot crypto only).",
 )
 @click.option(
     "--catalog",
@@ -732,6 +732,10 @@ def import_firstrate(
     """
     if dry_run:
         exit_code = _run_dry_run(format_name, catalog, source_path, asset_class)
+    elif format_name.lower() == "kraken":
+        from src.cli.commands.import_crypto import run_kraken_import
+
+        exit_code = run_kraken_import(catalog, source_path, asset_class, timeframe)
     elif (asset_class or "").lower() == "futures":
         from src.cli.commands.import_futures import run_futures_import
 
