@@ -269,3 +269,47 @@ and USDJPY (104) on `configs/*_fx.yaml`; Riptide ES (7) and Bollinger ES (36) 20
   (0.0001) worse. Bar volume must carry precision 8 (the size precision) or the run stops.
 
 Details and the numbers pinned: `design.md` section 1, "Spike result".
+
+## Exact peak exposure (follow-up to M5)
+
+OpenSpec change `add-crypto-exact-exposure`. Crypto runs saved from this change on report
+**exact** peak notional and peak exposure; runs saved before it keep M5's upper bound and its
+note (no backfill, no row changes).
+
+- **Saved**: `config_snapshot.crypto_pairs[<id>].position_series` (no migration), one entry per
+  fill in engine order: `[seq, ts_ns, position_id, position_qty, fill_px, commission_usd]`.
+  `seq` orders fills across pairs; `position_qty` is the fill's position's signed quantity
+  after it (the venue is `HEDGING`, so a pair may hold several positions). The fee model
+  numbers the fills it charges in the run's cache; `position_series` in
+  `src/core/crypto_costs.py` joins the numbers with the orders' fill events when the run is
+  saved, and leaves the series out if they don't match one for one.
+- **Computed**: `src/services/crypto/exposure.py` replays the fills: per position, quantity and
+  average open price; the USD balance is the starting capital plus each fill's realised P&L
+  (in whole cents) less its charge, as the account books it, so the last balance equals the
+  run's final balance. After every fill, notional = sum of `|qty| x average open price` (cost
+  basis, as M5) and exposure = notional / balance. A round trip inside one bar counts while
+  held; fills at one timestamp are applied in engine order.
+- **Shown**: the note reads "Peak notional and exposure are exact, replayed from every fill"
+  (CLI `show`/`report`, MCP, dashboard panel) and `peak_exposure_basis` is `exact` (MCP and
+  report JSON; `crypto_peak_exposure_basis` in the CSV); old runs say `upper_bound` with the
+  M5 note. `backtest show` and the dashboard's parameters list show the series as `N fills
+  (exact peak exposure)` (`display.snapshot_params`).
+- **Old figure vs exact**: M5's notional is an upper bound; its equity (capital plus
+  closed-trade P&L) leaves out the costs of open positions, so its exposure can read slightly
+  *below* the exact one when positions don't scale in (both smokes below).
+
+**Smoke (2026-11-25, real `firstrate-crypto` 1-day bars, USD 100,000, tier 2, saved runs).**
+"Upper bound" is the M5 computation on the same run with the series removed.
+
+| Run | Fills / trades | Peak notional, exact / upper bound | Peak exposure, exact / upper bound | Final balance (replay = saved) |
+|---|---|---|---|---|
+| `sma_crossover` BTC 2023-2024 (`89e3e0af`) | 36 / 18 | 10,000.00 / 10,000.00 | 10.3861% / 10.3795% | 108,230.08 |
+| `configs/riptide_crypto.yaml` BTC 2021-2025 (`7b985ad6`) | 48 / 24 | 10,000.00 / 10,000.00 | 10.3477% / 10.3444% | 96,980.51 |
+
+Both strategies hold one single-entry position at a time, so notional agrees; the scripted
+test (BTC scaling in from 1 to 2 while ETH is held, then both cut back) shows the gap where
+positions scale in: exact 55,000 and 55.0165%, upper bound 62,000 and 62.00%. Same trades and
+final balances as the M5/M6 smokes. Pinned in `tests/unit/services/crypto/test_exposure.py`,
+`tests/component/core/test_crypto_costs.py::TestPositionSeries`,
+`tests/integration/core/test_crypto_venue_engine.py` (forked) and
+`tests/component/api/test_crypto_dashboard.py::TestExactPeakExposure`.
