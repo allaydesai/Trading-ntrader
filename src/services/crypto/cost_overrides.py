@@ -18,8 +18,12 @@ from __future__ import annotations
 
 import math
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from src.models.backtest_request import BacktestRequest
+
+if TYPE_CHECKING:
+    from nautilus_trader.model.instruments import Instrument
 
 
 class CryptoOverrideError(ValueError):
@@ -89,7 +93,9 @@ def apply_crypto_overrides(
     return request
 
 
-def with_crypto_terms(instrument, fee_tier: int | None, spread_bps: Decimal | None = None):
+def with_crypto_terms(
+    instrument: Instrument, fee_tier: int | None, spread_bps: Decimal | None = None
+) -> Instrument:
     """The crypto pair rebuilt to charge ``fee_tier`` and ``spread_bps``; unchanged when both
     are ``None``.
 

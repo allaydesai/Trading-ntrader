@@ -22,7 +22,7 @@
       hash and stores them in the spec; unset leaves `resolved` unchanged; non-crypto and
       tier 18 queue nothing with `invalid_params`; a study run refuses them.
 - [x] 3.2 `submit_backtest`/`validate_config` inputs and docstrings; study refusal.
-- [x] 3.3 Unit: `TestWorker`: the engine gets the pair at tier 4 / 1 bp, unset passes the
+- [x] 3.3 Component: `tests/component/mcp_server/test_crypto_cost_worker.py`: the engine gets the pair at tier 4 / 1 bp, unset passes the
       loaded instrument through, a loaded equity row is refused before the engine.
 - [x] 3.4 Unit: `TestReproduction`: every combination of set/unset rebuilds the stored hash.
 - [x] 3.5 Implement the worker and `reproduce_run` changes.
