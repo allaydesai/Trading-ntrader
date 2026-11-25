@@ -98,7 +98,7 @@
                         </span>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
-                        <span class="font-mono text-sm text-slate-300">{{ item.instrument_symbol }}</span>{% if item.asset_class == "futures" %} <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300" title="Futures run">FUT</span>{% elif item.asset_class == "fx" %} <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300" title="Spot FX run">FX</span>{% endif %}
+                        <span class="font-mono text-sm text-slate-300">{{ item.instrument_symbol }}</span>{% if item.asset_class == "futures" %} <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300" title="Futures run">FUT</span>{% elif item.asset_class == "fx" %} <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300" title="Spot FX run">FX</span>{% elif item.asset_class == "crypto" %} <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300" title="Spot crypto run (Kraken)">CRYPTO</span>{% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <span class="font-mono text-xs text-slate-400">{{ item.date_range }}</span>

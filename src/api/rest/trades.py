@@ -26,6 +26,7 @@ from src.models.trade import (
     TradeListResponse,
     TradeStatistics,
 )
+from src.services.crypto import returns as crypto_returns
 from src.services.futures.returns import TRADE_COLUMNS as FUTURES_TRADE_COLUMNS
 from src.services.futures.returns import terms_from_snapshot, trade_rows
 from src.services.fx import returns as fx_returns
@@ -666,10 +667,11 @@ def _csv_cell(column: str, value):
 
 
 def _export_columns(snapshot) -> list[str]:
-    """The CSV header: the equity columns, plus the futures (or FX, M5) ones for such a run."""
+    """The CSV header: the equity columns, plus the futures (FX, crypto: M5) ones for such a run."""
     futures = list(FUTURES_TRADE_COLUMNS) if terms_from_snapshot(snapshot) else []
     fx = list(fx_returns.TRADE_COLUMNS) if fx_returns.terms_from_snapshot(snapshot) else []
-    return EXPORT_COLUMNS + futures + fx
+    crypto = crypto_returns.TRADE_COLUMNS if crypto_returns.terms_from_snapshot(snapshot) else ()
+    return EXPORT_COLUMNS + futures + fx + list(crypto)
 
 
 def _with_futures_columns(snapshot, trades) -> list[dict]:
@@ -683,6 +685,10 @@ def _with_futures_columns(snapshot, trades) -> list[dict]:
         blank = dict.fromkeys(fx_returns.TRADE_COLUMNS)
         cols = fx_returns.trade_rows(snapshot, trades)
         return [{**row, **blank, **fx} for row, fx in zip(rows, cols)]
+    if crypto_returns.terms_from_snapshot(snapshot):  # crypto (M5): coins, USD notional
+        blank = dict.fromkeys(crypto_returns.TRADE_COLUMNS)
+        cols = crypto_returns.trade_rows(snapshot, trades)
+        return [{**row, **blank, **c} for row, c in zip(rows, cols)]
     if not terms_from_snapshot(snapshot):
         return rows
     blank = dict.fromkeys(FUTURES_TRADE_COLUMNS)

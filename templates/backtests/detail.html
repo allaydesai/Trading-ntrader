@@ -116,7 +116,7 @@
 
     {% if view.is_successful and view.metrics_panel %}
     <!-- Metrics Panel -->{% if view.futures %}{% include "partials/futures_panel.html" %}{% endif %}
-    {% include "partials/metrics_panel.html" %}{% if view.fx %}{% include "partials/fx_panel.html" %}{% endif %}
+    {% include "partials/metrics_panel.html" %}{% if view.fx %}{% include "partials/fx_panel.html" %}{% endif %}{% if view.crypto %}{% include "partials/crypto_panel.html" %}{% endif %}
 
     <!-- Trading Summary -->
     {% if view.trading_summary %}

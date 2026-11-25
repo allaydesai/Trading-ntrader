@@ -1,0 +1,37 @@
+    <!-- Crypto Panel (crypto M5): the account return above stays the headline; these sit beside it -->
+    <div class="bg-slate-900 rounded-lg border border-slate-700 p-6" data-testid="crypto-panel">
+        <div class="flex flex-wrap items-baseline justify-between gap-4 mb-5">
+            <h2 class="text-lg font-semibold">Spot crypto</h2>
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300">CRYPTO</span>
+        </div>
+        <dl class="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-6">
+            <div>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Closed-trade P&amp;L (USD)</dt>
+                <dd class="font-mono text-xl font-semibold mt-1 tabular-nums {{ view.crypto.net_pnl_class }}">{{ view.crypto.net_pnl }}</dd>
+                <p class="text-xs text-slate-400 mt-1">Closed trades, net of commission and modelled spread</p>
+            </div>
+            <div>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Costs{% if view.crypto.fee_tier %} (Kraken Pro tier {{ view.crypto.fee_tier }}){% endif %}</dt>
+                <dd class="mt-1 space-y-1">
+                    <div class="flex justify-between items-baseline gap-4"><span class="text-sm text-slate-400">Maker</span><span class="font-mono text-sm text-slate-200 tabular-nums">{{ view.crypto.maker }}</span></div>
+                    <div class="flex justify-between items-baseline gap-4"><span class="text-sm text-slate-400">Taker</span><span class="font-mono text-sm text-slate-200 tabular-nums">{{ view.crypto.taker }}</span></div>
+                    <div class="flex justify-between items-baseline gap-4"><span class="text-sm text-slate-400">Modelled spread</span><span class="font-mono text-sm text-slate-200 tabular-nums">{{ view.crypto.spread }}</span></div>
+                </dd>
+                <p class="text-xs text-slate-400 mt-1">Maker vs taker commission and half-spread per side, USD</p>
+            </div>
+            <div class="grid grid-cols-1 gap-y-2">
+                {% for label, value in view.crypto.rows %}
+                <div class="flex justify-between items-baseline gap-4">
+                    <dt class="text-sm text-slate-400">{{ label }}</dt>
+                    <dd class="font-mono text-sm text-slate-200 tabular-nums">{{ value }}</dd>
+                </div>
+                {% endfor %}
+            </div>
+        </dl>
+        <div class="border-t border-slate-800 mt-5 pt-4 space-y-1">
+            {% for instrument, terms in view.crypto.pairs %}
+            <p class="font-mono text-xs text-slate-300"><span class="text-slate-100">{{ instrument }}</span> {{ terms }}</p>
+            {% endfor %}
+            <p class="text-xs text-slate-400">{{ view.crypto.note }}</p>
+        </div>
+    </div>

@@ -175,15 +175,18 @@ def dashboard_panel(run: Any) -> dict[str, Any] | None:
 
 
 def trade_table_cells(snapshot: Mapping[str, Any] | None, trades: list[Any]) -> dict[str, Any]:
-    """The trades table's per-trade cells: ``futures_cells`` (M4) and ``fx_cells`` (M5).
+    """The trades table's per-trade cells: ``futures_cells`` (M4), ``fx_cells`` and
+    ``crypto_cells`` (M5).
 
     Each is ``None`` unless the run is of that asset class, so an equity table is unchanged.
     """
+    from src.services.crypto.display import trade_cells as crypto_trade_cells
     from src.services.futures.display import trade_cells as futures_trade_cells
 
     return {
         "futures_cells": futures_trade_cells(snapshot, trades),
         "fx_cells": trade_cells(snapshot, trades),
+        "crypto_cells": crypto_trade_cells(snapshot, trades),
     }
 
 
