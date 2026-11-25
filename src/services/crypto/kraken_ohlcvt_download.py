@@ -29,6 +29,7 @@ import shutil
 import sys
 import urllib.request
 import zipfile
+import zlib
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -157,7 +158,8 @@ def extract_pairs(
 
     Raises:
         ValueError: A pair has no file for one of ``intervals`` in the archive.
-        FileExistsError: A target file already exists (raw data is never overwritten).
+        FileExistsError: A target file exists with other contents (raw data is never
+            overwritten; one equal to the archive member, left by an interrupted run, is kept).
     """
     archive = zipfile.ZipFile(io.BufferedReader(archive_file, buffer_size=_READ_AHEAD))  # type: ignore[arg-type]
     members = wanted_members(archive.namelist(), altnames, intervals)
@@ -172,25 +174,49 @@ def extract_pairs(
     if twice:  # two folders with one file name would overwrite each other
         raise ValueError(f"The archive holds more than one {', '.join(twice)}; extract by hand")
     targets = [dest / Path(name).name for name in members]
-    clashes = [t.name for t in targets if t.exists()]
+    # A file a previous run published (it equals the archive member: an interrupted publish)
+    # counts as done; any other existing file is refused.
+    done = {t for name, t in zip(members, targets) if t.exists() and _same(archive, name, t)}
+    clashes = [t.name for t in targets if t.exists() and t not in done]
     if clashes:
         raise FileExistsError(f"Refusing to overwrite raw files in {dest}: {', '.join(clashes)}")
     dest.mkdir(parents=True, exist_ok=True)
+    todo = [(name, t) for name, t in zip(members, targets) if t not in done]
     # Stage every member before publishing any, so a failed download leaves only .partial
     # files (overwritten by a rerun) and never a published file that blocks the rerun.
-    partials = [t.with_suffix(t.suffix + ".partial") for t in targets]
-    for name, partial in zip(members, partials):
+    partials = [t.with_suffix(t.suffix + ".partial") for _, t in todo]
+    for (name, _), partial in zip(todo, partials):
         with archive.open(name) as source, partial.open("wb") as sink:
             shutil.copyfileobj(source, sink, _COPY_CHUNK)
-    for partial, target in zip(partials, targets):
+    for partial, (_, target) in zip(partials, todo):
         partial.rename(target)
     manifest = next((n for n in archive.namelist() if Path(n).name == MANIFEST), None)
     if manifest is not None and not (dest / MANIFEST).exists():
         (dest / MANIFEST).write_bytes(archive.read(manifest))
-    lines = [f"{_sha256(t)}  {t.name}" for t in targets]
-    with (dest / CHECKSUMS).open("a") as sums:
-        sums.write("".join(f"{line}\n" for line in lines))
+    _record_checksums(dest / CHECKSUMS, targets)
     return targets
+
+
+def _same(archive: zipfile.ZipFile, member: str, path: Path) -> bool:
+    """``path`` holds exactly the archive member (size and CRC-32, read in chunks)."""
+    info = archive.getinfo(member)
+    if path.stat().st_size != info.file_size:
+        return False
+    crc = 0
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(_COPY_CHUNK), b""):
+            crc = zlib.crc32(block, crc)
+    return crc == info.CRC
+
+
+def _record_checksums(sums: Path, targets: Sequence[Path]) -> None:
+    """Append a ``SHA256SUMS`` line for each target the file does not list yet."""
+    listed = (
+        {line.split()[-1] for line in sums.read_text().splitlines()} if sums.exists() else set()
+    )
+    lines = [f"{_sha256(t)}  {t.name}\n" for t in targets if t.name not in listed]
+    with sums.open("a") as handle:
+        handle.write("".join(lines))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

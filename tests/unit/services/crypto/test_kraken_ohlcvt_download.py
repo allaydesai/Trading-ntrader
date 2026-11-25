@@ -146,3 +146,19 @@ def test_an_interrupted_download_publishes_nothing_and_can_be_rerun(remote, tmp_
     )
     assert sorted(p.name for p in written) == ["XBTUSD_1.csv", "XBTUSD_60.csv"]
     assert not list(tmp_path.glob("*.partial"))
+
+
+def test_a_rerun_completes_files_an_interrupted_publish_left_behind(remote, tmp_path):
+    """CodeRabbit #77: a crash between renames leaves some files published. A rerun takes a
+    published file whose bytes match the archive member as done; a different file still blocks."""
+    (tmp_path / "XBTUSD_1.csv").write_bytes(MEMBERS["XBTUSD_1.csv"])  # published, then crash
+    written = extract_pairs(
+        SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [1, 60]
+    )
+    assert sorted(p.name for p in written) == ["XBTUSD_1.csv", "XBTUSD_60.csv"]
+    assert (tmp_path / "XBTUSD_60.csv").read_bytes() == MEMBERS["XBTUSD_60.csv"]
+    sums = (tmp_path / "SHA256SUMS").read_text().splitlines()
+    assert sorted(line.split()[1] for line in sums) == ["XBTUSD_1.csv", "XBTUSD_60.csv"]
+    again = extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [1, 60])
+    assert len(again) == 2
+    assert len((tmp_path / "SHA256SUMS").read_text().splitlines()) == 2  # no duplicate lines
