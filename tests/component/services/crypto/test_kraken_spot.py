@@ -4,8 +4,9 @@ Spike (2026-11-24, public endpoints, no key): the Kraken Futures Charts API that
 lists only futures symbols (``PF_``/``PI_``/``FF_``/``FI_``/``OF_``) under every tick type; its
 ``spot`` tick type is the futures' reference index (volume 0, from 2022-03-22), not Kraken spot
 trades. Kraken's spot REST ``OHLC`` endpoint returns the latest 720 candles of an interval plus
-the still-open one (``last`` is its timestamp). So the path reads spot ``OHLC`` and refuses a
-range that starts before that window, pointing at the ``kraken-crypto`` catalog.
+the still-open one (``last`` is the newest committed candle's timestamp, not the open one's).
+So the path reads spot ``OHLC`` and refuses a range that starts before that window, pointing at
+the ``kraken-crypto`` catalog.
 """
 
 from datetime import datetime, timedelta, timezone
