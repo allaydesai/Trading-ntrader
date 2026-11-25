@@ -102,7 +102,8 @@ SIZE_BASELINE: dict[str, int] = {
     "src/cli/commands/_backtest_helpers.py::_resolve_cli_mode": 59,
     # Crypto M3, 173 -> 174: `--fee-tier` is passed on to resolve_backtest_request.
     # Crypto M5, 174 -> 175: `--spread-bps` is passed on to resolve_backtest_request.
-    "src/cli/commands/backtest.py::run_backtest": 175,
+    # Crypto M7, 175 -> 176: a Kraken range older than the spot window is a usage error (exit 2).
+    "src/cli/commands/backtest.py::run_backtest": 176,
     "src/cli/commands/backtest.py::run_multi_backtest": 93,
     "src/cli/commands/catalog.py::restamp_venues": 63,
     "src/cli/commands/compare.py::_compare_backtests_sync": 60,
@@ -219,7 +220,6 @@ SIZE_BASELINE: dict[str, int] = {
     "src/services/firstrate/import_service.py::ImportService.import_directory": 59,
     "src/services/firstrate/venue_restamp_plan.py::build_restamp_plan": 71,
     "src/services/ibkr_client.py::IBKRHistoricalClient": 122,
-    "src/services/kraken_client.py::KrakenHistoricalClient": 145,
     "src/services/metadata/fmp_client.py::FMPClient": 101,
     "src/services/portfolio.py::PortfolioService": 143,
     "src/services/reports/csv_exporter.py::CSVExporter": 218,
