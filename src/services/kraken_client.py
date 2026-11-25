@@ -197,7 +197,7 @@ class KrakenHistoricalClient:
     async def _fetch_spot_ohlc(
         self, user_pair: str, interval: int, start: datetime
     ) -> tuple[list[list], int]:
-        """One spot ``OHLC`` request: ``(rows, last)``; ``last`` is the open candle's time."""
+        """One spot ``OHLC`` request: ``(rows, last)``; ``last`` is the newest committed time."""
         await self.rate_limiter.acquire()
         try:
             response = await asyncio.to_thread(

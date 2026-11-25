@@ -6,8 +6,8 @@ public endpoints, no API key) found that the Charts API lists only futures symbo
 tick type, and its ``spot`` tick type is the futures' reference index (no volume), not Kraken
 spot trades. Kraken's spot REST ``OHLC`` endpoint
 (<https://docs.kraken.com/api/docs/rest-api/get-ohlc-data>) returns only the latest
-:data:`REST_WINDOW_CANDLES` candles of an interval plus the still-open one (whose timestamp is
-the response's ``last``), whatever ``since`` asks for.
+:data:`REST_WINDOW_CANDLES` candles of an interval plus the still-open one, whatever ``since``
+asks for; the response's ``last`` is the newest committed candle's time (the second-to-last row).
 
 So this path reads spot ``OHLC`` and refuses, before any request, a range that starts before
 that window, pointing at the same-venue history instead (``import --format kraken`` into the
@@ -140,7 +140,7 @@ def spot_bars(
     lo, hi = int(start.timestamp()), int(end.timestamp())
     bars = []
     for t, o, h, low, c, _vwap, volume, _count in rows:
-        if int(t) >= last or not lo <= int(t) <= hi:
+        if int(t) > last or not lo <= int(t) <= hi:  # `last` is the newest committed candle
             continue
         ts = int(t) * 1_000_000_000
         o, h, low, c = (Price.from_str(_quantized(v, price_precision)) for v in (o, h, low, c))

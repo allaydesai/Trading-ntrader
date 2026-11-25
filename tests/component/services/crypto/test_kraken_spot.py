@@ -109,7 +109,7 @@ class TestBars:
         rows = _rows(first, 6)
         bars = spot_bars(
             rows,
-            last=rows[-1][0],  # the open candle is dropped
+            last=rows[-2][0],  # Kraken's `last`: the newest committed candle; rows[-1] is open
             instrument_id="BTC/USD.KRAKEN",
             bar_type_spec="1-HOUR-LAST",
             start=datetime(2026, 11, 24, 1, tzinfo=timezone.utc),
@@ -164,7 +164,7 @@ class TestFetch:
         market = MagicMock()
         first = int(datetime(2026, 11, 24, tzinfo=timezone.utc).timestamp())
         rows = _rows(first, 4)
-        market.get_ohlc.return_value = {"XXBTZUSD": rows, "last": rows[-1][0]}
+        market.get_ohlc.return_value = {"XXBTZUSD": rows, "last": rows[-2][0]}
         client._spot_market = market
         bars, pair = await client.fetch_bars(
             "BTC/USD.KRAKEN",
@@ -222,3 +222,19 @@ def test_bar_volume_uses_the_instruments_size_precision():
         size_precision=6,
     )
     assert str(bars[0].volume) == "1.500000"
+
+
+def test_the_committed_candle_at_last_is_kept_and_the_open_one_dropped():
+    """CodeRabbit #77: Kraken's ``last`` (live, 2026-11-25) is the second-to-last row."""
+    first = int(datetime(2026, 11, 24, tzinfo=timezone.utc).timestamp())
+    rows = _rows(first, 3)  # committed, committed (= last), open
+    bars = spot_bars(
+        rows,
+        last=rows[1][0],
+        instrument_id="BTC/USD.KRAKEN",
+        bar_type_spec="1-HOUR-LAST",
+        start=datetime.fromtimestamp(rows[1][0], tz=timezone.utc),
+        end=NOW,
+        price_precision=4,
+    )
+    assert [b.ts_event // 10**9 for b in bars] == [rows[1][0]]

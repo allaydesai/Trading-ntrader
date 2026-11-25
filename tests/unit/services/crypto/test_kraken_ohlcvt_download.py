@@ -119,3 +119,30 @@ def test_two_members_with_one_name_are_refused_before_writing(tmp_path: Path):
     with pytest.raises(ValueError, match="XBTUSD_60.csv"):
         extract_pairs(archive, tmp_path, ["XBTUSD"], [60])
     assert not list(tmp_path.iterdir())
+
+
+def test_an_interrupted_download_publishes_nothing_and_can_be_rerun(remote, tmp_path, monkeypatch):
+    """CodeRabbit #77: a failure on the second member must not leave the first published."""
+    import shutil
+
+    from src.services.crypto import kraken_ohlcvt_download as download
+
+    real_copy, calls = shutil.copyfileobj, []
+
+    def flaky(source, sink, length=0):
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError("connection reset")
+        return real_copy(source, sink, length)
+
+    monkeypatch.setattr(download.shutil, "copyfileobj", flaky)
+    archive = SplitArchive(sorted(remote.parts), remote)
+    with pytest.raises(OSError, match="connection reset"):
+        extract_pairs(archive, tmp_path, ["XBTUSD"], [1, 60])
+    assert not (tmp_path / "XBTUSD_1.csv").exists() and not (tmp_path / "XBTUSD_60.csv").exists()
+
+    written = extract_pairs(
+        SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [1, 60]
+    )
+    assert sorted(p.name for p in written) == ["XBTUSD_1.csv", "XBTUSD_60.csv"]
+    assert not list(tmp_path.glob("*.partial"))

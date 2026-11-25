@@ -176,10 +176,13 @@ def extract_pairs(
     if clashes:
         raise FileExistsError(f"Refusing to overwrite raw files in {dest}: {', '.join(clashes)}")
     dest.mkdir(parents=True, exist_ok=True)
-    for name, target in zip(members, targets):
-        partial = target.with_suffix(target.suffix + ".partial")
+    # Stage every member before publishing any, so a failed download leaves only .partial
+    # files (overwritten by a rerun) and never a published file that blocks the rerun.
+    partials = [t.with_suffix(t.suffix + ".partial") for t in targets]
+    for name, partial in zip(members, partials):
         with archive.open(name) as source, partial.open("wb") as sink:
             shutil.copyfileobj(source, sink, _COPY_CHUNK)
+    for partial, target in zip(partials, targets):
         partial.rename(target)
     manifest = next((n for n in archive.namelist() if Path(n).name == MANIFEST), None)
     if manifest is not None and not (dest / MANIFEST).exists():

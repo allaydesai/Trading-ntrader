@@ -39,7 +39,7 @@ def _fetched(user_pair: str, pair_info=None):
     rows = [[first + 3600 * i, "1.1", "1.2", "1.0", "1.1", "0", "5", 3] for i in range(4)]
     bars = spot_bars(
         rows,
-        last=first + 3600 * 3,
+        last=first + 3600 * 2,  # the newest committed candle; the 4th row is still open
         instrument_id=str(pair.id),
         bar_type_spec="1-HOUR-LAST",
         start=START,
