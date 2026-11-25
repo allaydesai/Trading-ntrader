@@ -170,7 +170,8 @@ class TestReportFields:
         assert fields["long_only"] is True
         assert "spot, unlevered, long-only" in fields["note"].lower()
         assert "fee tier 2" in fields["note"]
-        assert "upper bound when one scales in" in fields["note"]  # review: peak_qty from open
+        # review: rows keep peak_qty from the open; same-timestamp round trips count as held
+        assert "upper bound when a position scales in or round-trips" in fields["note"]
         pair = fields["pairs"]["BTC/USD.KRAKEN"]
         assert pair["maker_pct"] == "0.30" and pair["taker_pct"] == "0.60"
         assert pair["orders_below_minimum"] == 3

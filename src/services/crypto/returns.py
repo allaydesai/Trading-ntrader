@@ -15,8 +15,9 @@ already USD. The account return on USD equity stays the headline (decision C19);
 annualise on 365 days (C20). Peak exposure is the largest concurrent notional over equity: spot
 is unlevered, so it stays at or under 1 and shows the idle cash. A trade row stores a
 position's largest quantity and its open time, not its fill history, so a position that scales
-in is counted at its largest size from its open: exact for single-entry positions (the core
-strategies), an upper bound otherwise (:func:`note` says so). See section 10 of
+in is counted at its largest size from its open, and a position opened and closed at one
+timestamp counts as held then (:func:`src.services.fx.returns.peaks`): exact for single-entry
+positions that span bars, an upper bound otherwise (:func:`note` says so). See section 10 of
 ``openspec/changes/add-crypto-backtesting/design.md``.
 """
 
@@ -45,7 +46,8 @@ def note(fee_tier: int | None) -> str:
         f"Spot, unlevered, long-only; Kraken Pro {tier}; spread modelled (half per side). "
         "Commission and spread are charged in USD; the spread and Kraken pair terms are "
         "UNVERIFIED working defaults. Peak notional and exposure use each position's largest "
-        "size from its open: exact for single-entry positions, an upper bound when one scales in."
+        "size from its open and count a position opened and closed at one timestamp as held "
+        "then: an upper bound when a position scales in or round-trips within one bar."
     )
 
 

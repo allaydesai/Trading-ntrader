@@ -503,8 +503,9 @@ long-only; Kraken Pro fee tier N; spread modelled".
   should in M6.
 - **Peak exposure caveat (PR review)**: a trade row stores a position's largest quantity and
   its open time, not its fill history, so peak notional/exposure count a position that scales
-  in at its largest size from its open. Exact for single-entry positions (both core
-  strategies); an upper bound otherwise, and the report note says so. An exact figure needs a
+  in at its largest size from its open, and the shared peak walk counts a position opened and
+  closed at one timestamp as held then. Exact for single-entry positions that span bars (the
+  core strategies' usual case); an upper bound otherwise, and the report note says so. An exact figure needs a
   persisted per-position quantity series (a persistence change, not M5).
 - **Symbol forms**: `src/services/crypto/symbols.py` derives the aliases from
   `coin_specs.yaml` (coin, Kraken `pair`, `altname`, `rest`), so `BTC`, `BTCUSD`, `BTC/USD`,

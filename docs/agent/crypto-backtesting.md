@@ -177,8 +177,9 @@ reports 37 dropped orders on stop (final balance 5.00).
   migration). A strategy starts it with `track_orders_below_minimum(cache, instrument_id)` on
   start and adds drops with `count_order_below_minimum(cache, instrument_id)`
   (`src.core.crypto_costs`); an untracked pair and runs before M5 report "not recorded".
-- **Peak exposure** is exact for single-entry positions and an upper bound for a position that
-  scales in (trade rows keep the largest quantity, not the fill history).
+- **Peak exposure** is exact for single-entry positions that span bars and an upper bound for a
+  position that scales in (trade rows keep the largest quantity, not the fill history) or
+  opens and closes within one timestamp (counted as held then).
 - **Symbols**: `src/services/crypto/symbols.crypto_coin` (aliases from `coin_specs.yaml`):
   `BTC`, `BTCUSD`, `BTC/USD`, `BTC-USD`, `XBTUSD`, `XXBTZUSD`, `BTC/USD.KRAKEN` are `BTC`;
   `BTC/EUR`, `BTCUSDT`, `BTC/USD.BINANCE`, `DOGE/USD` are refused (CLI exit 2, MCP
