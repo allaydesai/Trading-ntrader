@@ -257,7 +257,7 @@ Kraken's public endpoints (no API key) and corrected with sources in `coin_specs
       recorded); BTC backtests on `kraken-crypto` vs `firstrate-crypto`; live
       `--data-source kraken` refusal and recent-window runs. Results in
       `docs/agent/crypto-backtesting.md` ("Kraken data (M7)").
-- [ ] 7.6 Archive: `/openspec-archive-change add-crypto-backtesting` once M7 merges, so
+- [x] 7.6 Archive: `/openspec-archive-change add-crypto-backtesting` once M7 merges, so
       `openspec/specs/crypto-*` matches the code.
 
 No task touches the live/paper path (`src/core/live_*`, `src/cli/commands/live*`), so there is
