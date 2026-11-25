@@ -16,6 +16,7 @@ from src.db.session_sync import get_sync_session
 from src.mcp_server.analysis.run_reads import load_run, run_catalog
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs import service
+from src.mcp_server.request import BacktestSpec, resolve
 from src.mcp_server.strategies import resolve_strategy
 from src.mcp_server.studies.candidates import sees_holdout
 from src.mcp_server.studies.lifecycle import load_study
@@ -79,7 +80,7 @@ def prepare_benchmark(
     return job, payload["warnings"]
 
 
-def _reproducible_spec(run: Any) -> Any:
+def _reproducible_spec(run: Any) -> BacktestSpec:
     snapshot = run.config_snapshot or {}
     catalog, bar_type = run_catalog(run), snapshot.get("bar_type")
     problem = None
@@ -95,7 +96,7 @@ def _reproducible_spec(run: Any) -> Any:
             f"Run {run.run_id} cannot be reproduced: {problem or 'its data source is unknown'}.",
             fix="Submit the same parameters as a new run instead.",
         )
-    return build_spec(
+    spec = build_spec(
         strategy=run.strategy_type,
         symbol=run.instrument_symbol,
         # Stored as timestamptz and read back in the session's zone: the run's days are UTC.
@@ -108,6 +109,30 @@ def _reproducible_spec(run: Any) -> Any:
         fill_seed=snapshot.get("fill_seed"),
         cost_multiplier=snapshot.get("cost_multiplier") or 1.0,
     )
+    return _with_crypto_costs(spec, snapshot, run.config_hash)
+
+
+def _with_crypto_costs(spec: BacktestSpec, snapshot: dict, stored_hash: str) -> BacktestSpec:
+    """A crypto run's ``fee_tier``/``spread_bps``, recovered when its hash says they were set.
+
+    The snapshot records the tier and spread charged, not whether the run set them or took
+    the coin spec's defaults; the stored config hash decides, as it does for the whole run.
+    """
+    pairs: dict[str, dict[str, Any]] = snapshot.get("crypto_pairs") or {}
+    terms = next(iter(pairs.values()), {})
+    tier, spread = snapshot.get("fee_tier"), terms.get("typical_spread_bps")
+    if tier is None and spread is None:
+        return spec
+    by_tier: dict[str, Any] = {} if tier is None else {"fee_tier": int(tier)}
+    by_spread: dict[str, Any] = {} if spread is None else {"spread_bps": float(spread)}
+    for update in ({}, by_tier, by_spread, {**by_tier, **by_spread}):
+        candidate = spec.model_copy(update=update)
+        try:
+            if resolve(candidate, default_catalog=spec.catalog or "").config_hash == stored_hash:
+                return candidate
+        except ToolFailure:
+            continue
+    return spec
 
 
 def _require_same_code_for_holdout(run: Any) -> None:

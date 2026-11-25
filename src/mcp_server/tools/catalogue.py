@@ -55,12 +55,15 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         starting_balance: Decimal = Decimal("1000000"),
         units: StrictInt | StrictFloat | None = None,
         contracts: StrictInt | None = None,
+        fee_tier: StrictInt | None = None,
+        spread_bps: StrictInt | StrictFloat | None = None,
     ) -> dict[str, Any]:
         """Resolve a backtest request and check its data without running it.
 
         Returns the resolved run (full parameters, config hash), the data coverage,
         and every error with its fix. Submit only when ok is true. units (FX, crypto) and
-        contracts (futures) are checked as submit_backtest applies them.
+        contracts (futures) are checked as submit_backtest applies them, and so are
+        fee_tier (Kraken Pro spot tier 1-17) and spread_bps (bps, finite >= 0), spot crypto only.
         """
 
         def run() -> dict[str, Any]:
@@ -75,6 +78,8 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
                 starting_balance=starting_balance,
                 units=units,
                 contracts=contracts,
+                fee_tier=fee_tier,
+                spread_bps=spread_bps,
             )
             return validation.validate(
                 spec, default_catalog=ctx.settings.resolved_default_catalog()
