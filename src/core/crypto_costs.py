@@ -40,7 +40,7 @@ from typing import Any, Protocol
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.model.enums import LiquiditySide, OrderSide
 from nautilus_trader.model.events import OrderFilled
-from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId
+from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Money
 
@@ -48,6 +48,7 @@ from src.core.fx_costs import OrderCharges
 from src.core.fx_rates import ACCOUNT_CURRENCY
 from src.core.position_sizing import is_crypto
 from src.services.crypto.coin_specs import get_fee_schedule
+from src.services.crypto.exposure import replay
 
 #: Cache key (Nautilus' general object store) holding the run's per-pair cost totals as JSON.
 CRYPTO_COSTS_KEY = "ntrader.crypto_costs"
@@ -184,7 +185,6 @@ class CryptoCommissionModel(FeeModel):
         self.costs: dict[str, CryptoCosts] = {str(iid): CryptoCosts() for iid in self.terms}
         self._cache = cache
         self._orders: dict[tuple[str, LiquiditySide], OrderCharges] = {}
-        self._fills = 0
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:  # noqa: D102
         terms = self.terms.get(instrument.id)
@@ -209,9 +209,10 @@ class CryptoCommissionModel(FeeModel):
     def _number_fill(self, order) -> None:
         """Record which order this fill belongs to, under the next fill number."""
         if self._cache is not None:
-            self._cache.add(FILL_ORDER_KEY.format(self._fills), str(order.client_order_id).encode())
-            self._fills += 1
-            self._cache.add(FILL_COUNT_KEY, str(self._fills).encode())
+            # The count lives in the cache, so fee models of several venues share one numbering
+            n = int(self._cache.get(FILL_COUNT_KEY) or 0)
+            self._cache.add(FILL_ORDER_KEY.format(n), str(order.client_order_id).encode())
+            self._cache.add(FILL_COUNT_KEY, str(n + 1).encode())
 
     def _publish(self) -> None:
         if self._cache is not None:
@@ -273,15 +274,6 @@ def count_order_below_minimum(cache: _KeyValueCache, instrument_id: object) -> i
     return _bump_orders_below_minimum(cache, instrument_id, 1)
 
 
-def _position_ids(cache) -> dict[tuple[str, str], str]:
-    """``(instrument id, trade id) -> position id`` for every fill a position holds."""
-    return {
-        (str(fill.instrument_id), str(fill.trade_id)): str(position.id)
-        for position in cache.positions()
-        for fill in position.events
-    }
-
-
 def position_series(cache, instrument_ids: Iterable[object]) -> dict[str, list[list]] | None:
     """Each pair's fills in engine order, as :mod:`src.services.crypto.exposure` replays them.
 
@@ -289,29 +281,31 @@ def position_series(cache, instrument_ids: Iterable[object]) -> dict[str, list[l
     the fill number across pairs, its time, its position and that position's signed quantity
     after it, its price and the USD charged (commission plus modelled spread). Built from the
     fill numbers the fee model kept and the orders' fill events. ``None`` when the two don't
-    match one for one (the run then reports the M5 upper bound rather than a wrong figure).
+    match one for one or a fill has no position (the run then reports the M5 upper bound
+    rather than a wrong figure).
     """
     wanted = {str(i) for i in instrument_ids}
+    fills_of = {
+        str(o.client_order_id): [e for e in o.events if isinstance(e, OrderFilled)]
+        for o in cache.orders()
+        if str(o.instrument_id) in wanted
+    }
     count = int(cache.get(FILL_COUNT_KEY) or 0)
-    position_of = _position_ids(cache)
+    if count != sum(len(fills) for fills in fills_of.values()):
+        return None
     taken: dict[str, int] = {}
     held: dict[str, Decimal] = {}
     series: dict[str, list[list]] = {iid: [] for iid in wanted}
     for seq in range(count):
         coid = (cache.get(FILL_ORDER_KEY.format(seq)) or b"").decode()
-        order = cache.order(ClientOrderId(coid)) if coid else None
-        fills = [e for e in order.events if isinstance(e, OrderFilled)] if order else []
-        if taken.get(coid, 0) >= len(fills):
+        fills, k = fills_of.get(coid, []), taken.get(coid, 0)
+        if k >= len(fills) or fills[k].position_id is None:
             return None
-        fill = fills[taken.get(coid, 0)]
-        taken[coid] = taken.get(coid, 0) + 1
-        iid = str(fill.instrument_id)
-        if iid not in wanted:
-            return None
-        pid = str(fill.position_id or position_of.get((iid, str(fill.trade_id)), iid))
+        fill, taken[coid] = fills[k], k + 1
+        pid = str(fill.position_id)
         sign = 1 if fill.order_side == OrderSide.BUY else -1
         held[pid] = held.get(pid, ZERO) + sign * Decimal(str(fill.last_qty))  # keeps precision
-        series[iid].append(
+        series[str(fill.instrument_id)].append(
             [
                 seq,
                 fill.ts_event,
@@ -321,14 +315,29 @@ def position_series(cache, instrument_ids: Iterable[object]) -> dict[str, list[l
                 f"{fill.commission.as_decimal():f}",
             ]
         )
-    filled = sum(
-        1
-        for o in cache.orders()
-        if str(o.instrument_id) in wanted
-        for e in o.events
-        if isinstance(e, OrderFilled)
+    return series
+
+
+def _books_agree(cache, instruments: list[Instrument], series: dict[str, list[list]]) -> bool:
+    """True when the series replays to the run's USD balance, within a cent per fill.
+
+    Nautilus rounds each fill's P&L to the cent from floats; the replay rounds exact decimals,
+    so a fill can land a cent apart. More than that means the series misses something, and the
+    run reports the upper bound. Without an account (a bare cache) there is nothing to check.
+    """
+    accounts = {}
+    for instrument in instruments:
+        account = cache.account_for_venue(instrument.id.venue)
+        if account is None:
+            return True
+        accounts[str(account.id)] = account
+    start = sum(
+        (a.starting_balances()[ACCOUNT_CURRENCY].as_decimal() for a in accounts.values()), ZERO
     )
-    return series if filled == count else None
+    final = sum((a.balance_total(ACCOUNT_CURRENCY).as_decimal() for a in accounts.values()), ZERO)
+    samples = replay(series, start)
+    replayed = samples[-1].balance if samples else start
+    return replayed is not None and abs(replayed - final) <= CENT * max(len(samples), 1)
 
 
 def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, Any]:
@@ -348,6 +357,9 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
     charged = _cached_json(cache, CRYPTO_COSTS_KEY)
     dropped = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
     series = position_series(cache, terms) if cache is not None else None
+    crypto = [i for i in instruments if i.id in terms]
+    if series is not None and not _books_agree(cache, crypto, series):
+        series = None
     pairs = {}
     for instrument in instruments:
         if instrument.id in terms:

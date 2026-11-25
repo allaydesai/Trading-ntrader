@@ -25,7 +25,7 @@ from nautilus_trader.model.identifiers import (
     PositionId,
     TradeId,
 )
-from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.objects import Money, Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
@@ -272,7 +272,7 @@ class TestPositionSeries:
     """
 
     @staticmethod
-    def _filled(cache, model, order, instrument, qty: str, px: str, pid: str, ts: int):
+    def _filled(cache, model, order, instrument, qty: str, px: str, pid: str | None, ts: int):
         last_qty, last_px = instrument.make_qty(Decimal(qty)), instrument.make_price(Decimal(px))
         commission = model.get_commission(order, last_qty, last_px, instrument)
         fill = OrderFilled(
@@ -283,7 +283,7 @@ class TestPositionSeries:
             venue_order_id=order.venue_order_id,
             account_id=AccountId("KRAKEN-001"),
             trade_id=TradeId(f"T-{next(_IDS)}"),
-            position_id=PositionId(pid),
+            position_id=None if pid is None else PositionId(pid),
             order_side=order.side,
             order_type=order.order_type,
             last_qty=last_qty,
@@ -352,3 +352,66 @@ class TestPositionSeries:
 
     def test_without_a_cache_there_is_no_series(self):
         assert "position_series" not in crypto_snapshot([BTC])["crypto_pairs"]["BTC/USD.KRAKEN"]
+
+    def test_fee_models_of_two_venues_share_one_fill_numbering(self):
+        eth = _pair("ETH")
+        cache = Cache()
+        for instrument in (BTC, eth):
+            cache.add_instrument(instrument)
+        btc_model, eth_model = _model(BTC, cache=cache), _model(eth, cache=cache)
+        buy = self._ready(cache, BTC, OrderSide.BUY, "0.1")
+        eth_buy = self._ready(cache, eth, OrderSide.BUY, "1")
+        self._filled(cache, btc_model, buy, BTC, "0.1", "78000", "P-BTC", 1)
+        self._filled(cache, eth_model, eth_buy, eth, "1", "3000", "P-ETH", 2)
+        pairs = crypto_snapshot([BTC, eth], cache)["crypto_pairs"]
+        assert [e[0] for e in pairs["BTC/USD.KRAKEN"]["position_series"]] == [0]
+        assert [e[0] for e in pairs["ETH/USD.KRAKEN"]["position_series"]] == [1]
+
+    def test_a_fill_without_a_position_leaves_the_series_unrecorded(self):
+        cache = Cache()
+        cache.add_instrument(BTC)
+        buy = self._ready(cache, BTC, OrderSide.BUY, "0.1")
+        self._filled(cache, _model(BTC, cache=cache), buy, BTC, "0.1", "78000", None, 1)
+        assert (
+            "position_series" not in crypto_snapshot([BTC], cache)["crypto_pairs"]["BTC/USD.KRAKEN"]
+        )
+
+    @pytest.mark.parametrize(
+        ("final", "kept"),
+        [
+            ("9999.94", True),  # 10,000 less the 0.06 charged: the replay's balance
+            ("9999.93", True),  # a cent apart on one fill: float rounding, kept
+            ("9999.80", False),  # the books disagree by more than a cent a fill
+        ],
+    )
+    def test_the_series_is_kept_only_when_it_replays_to_the_account(self, final, kept):
+        cache = Cache()
+        cache.add_instrument(BTC)
+        buy = self._ready(cache, BTC, OrderSide.BUY, "0.1")
+        fee = self._filled(cache, _model(BTC, cache=cache), buy, BTC, "0.1", "100", "P", 1)
+        assert fee == Decimal("0.06")  # 10 x 0.60% = 0.06 plus a 0.001 spread, in cents
+        account = SimpleNamespace(
+            id="KRAKEN-001",
+            starting_balances=lambda: {USD: _usd_money("10000.00")},
+            balance_total=lambda currency: _usd_money(final),
+        )
+        books = _CacheWithAccount(cache, account)
+        entry = crypto_snapshot([BTC], books)["crypto_pairs"]["BTC/USD.KRAKEN"]
+        assert ("position_series" in entry) is kept
+
+
+class _CacheWithAccount:
+    """A real ``Cache`` seen through a stand-in venue account (the balance check reads it)."""
+
+    def __init__(self, cache, account) -> None:
+        self._cache, self._account = cache, account
+
+    def __getattr__(self, name):
+        return getattr(self._cache, name)
+
+    def account_for_venue(self, venue):
+        return self._account
+
+
+def _usd_money(amount: str) -> Money:
+    return Money(Decimal(amount), USD)

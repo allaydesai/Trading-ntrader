@@ -282,7 +282,10 @@ note (no backfill, no row changes).
   after it (the venue is `HEDGING`, so a pair may hold several positions). The fee model
   numbers the fills it charges in the run's cache; `position_series` in
   `src/core/crypto_costs.py` joins the numbers with the orders' fill events when the run is
-  saved, and leaves the series out if they don't match one for one.
+  saved (the count lives in the cache, so fee models of several venues share one numbering).
+  The series is left out, and the run reports the upper bound, if the numbers and fill events
+  don't match one for one, a fill has no position id, or the replay misses the account's USD
+  balance by more than a cent per fill (Nautilus rounds each fill's P&L from floats).
 - **Computed**: `src/services/crypto/exposure.py` replays the fills: per position, quantity and
   average open price; the USD balance is the starting capital plus each fill's realised P&L
   (in whole cents) less its charge, as the account books it, so the last balance equals the

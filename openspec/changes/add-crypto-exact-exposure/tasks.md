@@ -12,6 +12,9 @@
 - [x] 2.1 Component (failing first): `tests/component/core/test_crypto_costs.py::
       TestPositionSeries` (real orders and `OrderFilled` events in a real `Cache`).
 - [x] 2.2 `CryptoCommissionModel` numbers fills; `position_series`; `crypto_snapshot` saves it.
+- [x] 2.4 Review fixes: fill numbering shared across fee models (cache count); a fill with no
+      position id or a replay off the account balance by more than a cent a fill drops the
+      series; each order's fills are listed once.
 - [x] 2.3 Integration (`--forked`): `test_crypto_venue_engine.py::
       test_the_saved_position_series_replays_to_the_account_balance` (two hedged BTC positions,
       scale-in and partial cut; replay lands on the account balance).

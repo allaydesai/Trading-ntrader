@@ -23,9 +23,11 @@ dashboard's protected files.**
   `crypto_snapshot` saves, per pair, `crypto_pairs[<id>].position_series`: one entry per fill,
   `[seq, ts_ns, position_id, position_qty, fill_px, commission_usd]` (fill number across pairs,
   time, the fill's position and its signed quantity after the fill, price, USD charged). The
-  crypto venue is `HEDGING`, so the series is per position, grouped per pair. If the numbers
-  and the fill events don't match one for one the series is left out (the run reports the
-  upper bound rather than a wrong figure).
+  crypto venue is `HEDGING`, so the series is per position, grouped per pair. The count lives
+  in the cache, so fee models of several venues share one numbering. The series is left out
+  (the run reports the upper bound rather than a wrong figure) if the numbers and the fill
+  events don't match one for one, a fill has no position id, or the replay misses the
+  account's USD balance by more than a cent per fill.
 - **Compute** (`src/services/crypto/exposure.py`, new, pure): replay the fills in `seq` order,
   keeping each position's quantity and average open price (Nautilus' `avg_px_open`) and the
   USD balance (starting capital plus each fill's realised P&L in whole cents, less its charge,
