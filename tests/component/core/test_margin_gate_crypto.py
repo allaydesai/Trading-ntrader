@@ -268,6 +268,21 @@ class TestNoShort:
         reason = gate.denial_reason([_order("0.11", OrderSide.SELL)], LONG)
         assert reason is not None and reason.startswith(NO_SHORT_REASON)
 
+    def test_bracket_siblings_pending_cancel_free_the_long_for_a_reduce_only_close(self):
+        # an exit cancels the OCO pair and closes beside it; one sibling still working blocks
+        parent = ClientOrderId("O-ENTRY")
+        stop, take = (
+            _stop("0.1", OrderStatus.PENDING_CANCEL),
+            _stop("0.1", OrderStatus.PENDING_CANCEL),
+        )
+        stop.parent_order_id = take.parent_order_id = parent
+        close = _order("0.1", OrderSide.SELL, reduce_only=True)
+        gate = _gate("0", position=_long("0.1"), working=[stop, take])
+        assert gate.denial_reason([close], LONG) is None
+        take.status, take.is_open = OrderStatus.ACCEPTED, True
+        reason = gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+
     def test_a_buy_is_never_a_short(self):
         assert _gate(position=_long("0.1")).denial_reason([_order("0.01")], LONG) is None
 
@@ -276,6 +291,80 @@ class TestNoShort:
         gate = MarginGate(_Risk(), _Cache("10000"), msgbus=None, terms=terms)
         sell = _order("1000", OrderSide.SELL, "1.10000", instrument=EURUSD)
         assert NO_SHORT_REASON not in (gate.denial_reason([sell], None) or "")
+
+
+def _stop(qty: str, status: OrderStatus, *, reduce_only: bool = True):
+    """A working hard stop on the long (``PENDING_CANCEL``: the strategy has cancelled it)."""
+    stop = _order(
+        qty,
+        OrderSide.SELL,
+        order_type=OrderType.STOP_MARKET,
+        trigger="70000.0000",
+        reduce_only=reduce_only,
+        status=status,
+    )
+    stop.is_open = True  # Nautilus: a PENDING_CANCEL order is still open
+    return stop
+
+
+class TestExitBesideAStopPendingCancel:
+    """A reduce-only close may take the claim of a reduce-only stop whose cancel is pending.
+
+    Riptide-style exits cancel the hard stop and send the market close in the same bar. Should
+    the cancel fail, both orders are reduce-only, so the venue clamps the second fill to what
+    is left of the long and cancels it once the long is flat: no short either way.
+    """
+
+    def test_a_reduce_only_close_beside_the_stops_cancel_passes(self):
+        gate = _gate("0", position=_long("0.1"), working=[_stop("0.1", OrderStatus.PENDING_CANCEL)])
+        assert gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], LONG) is None
+
+    def test_the_stop_still_claims_the_long_until_it_is_cancelled(self):
+        gate = _gate("0", position=_long("0.1"), working=[_stop("0.1", OrderStatus.ACCEPTED)])
+        reason = gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+
+    def test_the_close_still_cannot_oversell_the_long(self):
+        gate = _gate("0", position=_long("0.1"), working=[_stop("0.1", OrderStatus.PENDING_CANCEL)])
+        reason = gate.denial_reason([_order("0.2", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+        assert "(free to sell: 0.1)" in reason
+
+    def test_a_sell_that_is_not_reduce_only_cannot_take_the_claim(self):
+        # should the cancel fail, the stop fills first and this sell would open a short
+        gate = _gate("0", position=_long("0.1"), working=[_stop("0.1", OrderStatus.PENDING_CANCEL)])
+        reason = gate.denial_reason([_order("0.1", OrderSide.SELL)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+        assert "(free to sell: 0)" in reason
+
+    def test_a_pending_cancel_sell_that_is_not_reduce_only_keeps_its_claim(self):
+        # the venue would not clamp it: if its cancel fails it fills as a short after the close
+        pending = _stop("0.1", OrderStatus.PENDING_CANCEL, reduce_only=False)
+        gate = _gate("0", position=_long("0.1"), working=[pending])
+        reason = gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+
+    def test_a_naked_reduce_only_sell_is_still_denied(self):
+        gate = _gate("0", position=None, working=[_stop("0.1", OrderStatus.PENDING_CANCEL)])
+        reason = gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], None)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+
+    def test_a_second_close_is_denied_once_the_first_is_in_flight(self):
+        first = _order("0.1", OrderSide.SELL, reduce_only=True, status=OrderStatus.SUBMITTED)
+        first.is_inflight = True
+        working = [_stop("0.1", OrderStatus.PENDING_CANCEL), first]
+        gate = _gate("0", position=_long("0.1"), working=working)
+        reason = gate.denial_reason([_order("0.1", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
+
+    def test_only_the_pending_cancel_claim_is_freed(self):
+        # 0.3 long: a 0.1 stop being cancelled and a 0.1 resting take-profit; 0.2 is free to close
+        take = _order("0.1", OrderSide.SELL, "80000.0000", status=OrderStatus.ACCEPTED)
+        working = [_stop("0.1", OrderStatus.PENDING_CANCEL), take]
+        gate = _gate("0", position=_long("0.3"), working=working)
+        assert gate.denial_reason([_order("0.2", OrderSide.SELL, reduce_only=True)], LONG) is None
+        reason = gate.denial_reason([_order("0.21", OrderSide.SELL, reduce_only=True)], LONG)
+        assert reason is not None and reason.startswith(NO_SHORT_REASON)
 
 
 class TestModify:
