@@ -8,6 +8,7 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.request import BacktestSpec, ResolvedRequest, resolve
 from src.mcp_server.strategies import default_sources, resolve_strategy
 from src.services.fx.symbols import conversion_ticker, fx_ticker
+from src.services.sizing_overrides import coin_for_symbol
 
 
 def _day(iso: str | None) -> date | None:
@@ -106,7 +107,8 @@ def _coverage(
     spec: BacktestSpec, catalog: str
 ) -> tuple[dict[str, Any] | None, list[ToolFailure], list[str]]:
     try:
-        coverage = catalog_availability(fx_ticker(spec.symbol) or spec.symbol, catalog)
+        ticker = fx_ticker(spec.symbol) or coin_for_symbol(spec.symbol) or spec.symbol
+        coverage = catalog_availability(ticker, catalog)
     except ToolFailure as failure:
         return None, [failure], []
     if not coverage["backtestable"]:

@@ -21,13 +21,16 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
     async def get_run(run_id: str) -> dict[str, Any]:
         """A persisted run: window, provenance (commit, dirty, config hash), params, metrics.
 
-        Metrics carry units: fraction (0.25 = 25 %), ratio, currency, count, percent.
-        asset_class is "equity", "futures" or "fx"; a futures run adds futures: its headline
-        return_on_margin_pct (P&L / peak initial margin, percent), return_on_underlying_pct,
-        peak margin and contract terms. Its dollar P&L is ratio-adjusted. An FX run keeps
-        total_return (USD equity) as the headline and adds fx: pips, units/lots, USD
-        notional, peak_leverage, commission_usd vs spread_usd, pair terms and a note that
-        financing is not modelled.
+        Metrics carry units: fraction (0.25 = 25 %), ratio, currency, count, percent. asset_class is
+        "equity", "futures", "fx" or "crypto"; a futures run adds futures: its headline
+        return_on_margin_pct (P&L / peak initial margin, percent), return_on_underlying_pct, peak
+        margin and contract terms. Its dollar P&L is ratio-adjusted. An FX run keeps total_return
+        (USD equity) as the headline and adds fx: pips, units/lots, USD notional, peak_leverage,
+        commission_usd vs spread_usd, pair terms and a note that financing is not modelled. A crypto
+        run ("crypto": spot, unlevered, long-only on KRAKEN) keeps total_return as the headline
+        (risk metrics annualise on 365 days) and adds crypto: venue, fee_tier,
+        commission_maker_usd/commission_taker_usd vs spread_usd, coin quantities at full precision,
+        peak exposure and orders_below_minimum.
         """
         return await call(runs.get_run, run_id)
 

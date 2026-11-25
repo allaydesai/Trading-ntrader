@@ -19,6 +19,7 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.strategies import StrategyRef, resolve_params, resolve_strategy
 from src.models.backtest_request import DEFAULT_FILL_SEED, BacktestRequest
+from src.services.crypto.symbols import CryptoSymbolError, crypto_coin
 from src.services.fx.symbols import fx_ticker, resolve_fx_symbol
 from src.services.provenance import compute_config_hash
 from src.services.sizing_overrides import (
@@ -157,6 +158,20 @@ def _sizing(ref: StrategyRef, spec: BacktestSpec, symbol: str, catalog: str, is_
     return sizing
 
 
+def _symbol(given: str) -> str:
+    """The catalog ticker: an FX pair's (``EURUSD``), a crypto coin's (``BTC``, crypto M5)."""
+    try:
+        coin = crypto_coin(given)
+    except CryptoSymbolError as exc:
+        raise ToolFailure(
+            "unknown_crypto_pair",
+            str(exc),
+            fix="Use BTC, ETH or SOL (any spelling: BTC, BTCUSD, BTC/USD, XBTUSD, "
+            "BTC/USD.KRAKEN) with catalog firstrate-crypto.",
+        ) from None
+    return fx_ticker(given) or coin or given.strip().upper()
+
+
 def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
     """Resolve ``spec``; raises ``ToolFailure`` naming the fix when it cannot run."""
     ref = resolve_strategy(spec.strategy)
@@ -169,7 +184,7 @@ def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
             fix="Pass catalog (list_catalogs) or set NTRADER_MCP_DEFAULT_CATALOG.",
         )
     start, end = _window(spec)
-    symbol = fx_ticker(spec.symbol) or spec.symbol.strip().upper()
+    symbol = _symbol(spec.symbol)
     bar_type = timeframe_spec(spec.timeframe)
     # FX (M5): an FX catalog row has MID bars, not the -LAST default
     if fx := resolve_fx_symbol(catalog, symbol, bar_type):

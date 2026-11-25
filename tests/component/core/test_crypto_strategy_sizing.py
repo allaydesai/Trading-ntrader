@@ -7,6 +7,7 @@ format (rounded, not floored) and buy-and-hold floored to whole BTC; both now fl
 coin's 1e-8 increment and drop an order under Kraken's minimum.
 """
 
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -18,6 +19,7 @@ from nautilus_trader.model.objects import Money, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from src.core.benchmarks.buy_and_hold import BuyAndHold
+from src.core.crypto_costs import ORDERS_BELOW_MINIMUM_KEY
 from src.core.strategies.sma_crossover import SMACrossover
 from src.services.crypto.coin_specs import get_coin_spec
 from src.services.crypto.instrument_builder import build_crypto_pair
@@ -67,6 +69,8 @@ class TestSmaCrossover:
         sizing.log.warning.assert_called_once()
         assert "minimum" in sizing.log.warning.call_args.args[0]
         assert sizing._unsized_orders == 2
+        # Crypto M5: counted in the run's cache too, so the saved run reports it
+        assert json.loads(sizing.cache.get(ORDERS_BELOW_MINIMUM_KEY)) == {"BTC/USD.KRAKEN": 2}
 
     def test_fixed_decimal_units_replace_the_budget(self):
         """``--units 0.25``: exactly 0.25 BTC per entry, through ``make_qty`` (8 dp)."""
@@ -90,6 +94,16 @@ class TestSmaCrossover:
             SMACrossover._calculate_position_size(
                 _sma_self(BTC, 78000.0, units=Decimal("0.000000015"))
             )
+
+    def test_on_start_a_crypto_run_counts_drops_from_zero(self):
+        """Crypto M5: an instrumented strategy's run saves 0, not "not recorded"."""
+        from src.core.strategies.sma_crossover import _track_drops
+
+        btc, aapl = _sma_self(BTC, 78000.0), _sma_self(AAPL, 140.0)
+        _track_drops(btc)
+        _track_drops(aapl)
+        assert json.loads(btc.cache.get(ORDERS_BELOW_MINIMUM_KEY)) == {"BTC/USD.KRAKEN": 0}
+        assert aapl.cache.get(ORDERS_BELOW_MINIMUM_KEY) is None  # equity: nothing written
 
     def test_the_drop_count_is_reported_once_on_stop(self):
         from src.core.strategies.sma_crossover import _report_unsized
@@ -135,6 +149,22 @@ class TestBuyAndHold:
     def test_under_the_minimum_holds_cash(self):
         sizing = _buy_and_hold_self(BTC, "3")
         assert BuyAndHold._entry_quantity(sizing, Decimal("78000")) == 0
+
+    def test_on_start_counts_drops_from_zero(self):
+        sizing = _buy_and_hold_self(BTC, "100000")
+        sizing.log, sizing.subscribe_bars, sizing.bar_type = MagicMock(), MagicMock(), "B"
+        BuyAndHold.on_start(sizing)
+        assert json.loads(sizing.cache.get(ORDERS_BELOW_MINIMUM_KEY)) == {"BTC/USD.KRAKEN": 0}
+
+    def test_a_dropped_entry_is_counted_for_the_saved_run(self):
+        """Crypto M5: the one entry buy-and-hold drops under the minimum is counted."""
+        sizing = _buy_and_hold_self(BTC, "3")
+        sizing.log, sizing.submit_order, sizing._bought = MagicMock(), MagicMock(), False
+        sizing.bar_type = "BTC-1-DAY"
+        sizing._entry_quantity = lambda price: BuyAndHold._entry_quantity(sizing, price)
+        BuyAndHold.on_bar(sizing, SimpleNamespace(bar_type="BTC-1-DAY", close=78000.0))
+        sizing.submit_order.assert_not_called()
+        assert json.loads(sizing.cache.get(ORDERS_BELOW_MINIMUM_KEY)) == {"BTC/USD.KRAKEN": 1}
 
     def test_eth_half_allocation(self):
         sizing = _buy_and_hold_self(ETH, "10000", pct="50")

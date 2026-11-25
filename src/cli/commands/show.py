@@ -17,6 +17,7 @@ from rich.text import Text
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.crypto.display import print_crypto
 from src.services.futures.display import print_futures
 from src.services.fx.display import print_fx
 
@@ -117,6 +118,8 @@ def _display_backtest(backtest):
     print_futures(console, backtest)
     # FX runs: pips, lots, USD notional, leverage, costs split, financing note (M5)
     print_fx(console, backtest)
+    # Crypto runs: venue and fee tier, coin quantities, maker/taker and spread, drops (M5)
+    print_crypto(console, backtest)
 
     # Configuration Snapshot
     _display_config_snapshot(backtest.config_snapshot)

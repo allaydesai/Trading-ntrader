@@ -91,6 +91,15 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: ``rate_sources`` to the orchestrator, so an FX cross such as EURGBP runs with its
 #: conversion pair) and ``templates/partials/fx_panel.html`` (the FX panel's "Net P&L (USD)"
 #: label becomes "Closed-trade P&L (USD)"). 61 files; nothing else changed.
+#: **Regenerated 2026-11-24 by PO sign-off (Allay, crypto dashboard, crypto M5)** for exactly
+#: the files section 10 of ``openspec/changes/add-crypto-backtesting/design.md`` lists and M5
+#: touched: the crypto panel (new ``templates/partials/crypto_panel.html``,
+#: ``backtest_detail.py``, ``detail.html``), the trades table (``trades_table.html``; its
+#: cells come from ``src/services/fx/display.trade_table_cells``, so ``ui/backtests.py`` is
+#: unchanged), the export (``rest/trades.py``), the run list (``backtest_list.py``,
+#: ``list_fragment.html``) and the CLI comparison (``compare.py``). Equity, futures and FX
+#: pages render byte for byte as before: ``tests/component/api/test_crypto_dashboard.py`` pins
+#: FX against goldens captured from the pre-M5 tree. 62 files; nothing else changed.
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -105,10 +114,10 @@ FROZEN_VIEWS: dict[str, str] = {
         "24111e8724ac4804fa632c0f7d2bab5b54608e65b389e4d8211ffec07e5e67a5"
     ),
     "src/api/models/backtest_detail.py": (
-        "1fcace818f39863ef4748f4726f0485edf1a56329c52f52fc2bc608696b11988"
+        "c815987b61860b8d86f651447f40af6d93ae357a0ae76a9f22618b2e942fe6ff"
     ),
     "src/api/models/backtest_list.py": (
-        "422a7996db66b50086d52d0baf6a12595c40336afb5d33d4a7d94270708b0705"
+        "e634868a5b2b018f90413225325b56ea2d961c574e68a7b898be9088a085be27"
     ),
     "src/api/models/chart_equity.py": (
         "612c65768abd41994fcd7f6c02abafb939802ca5d13b9132dfb416cb484488b2"
@@ -153,7 +162,7 @@ FROZEN_VIEWS: dict[str, str] = {
     "src/api/rest/timeseries.py": (
         "b038af31a01132ff4b4a878d3cc70a9ce9e9fb4388b014a0427a8cf4228a4a5d"
     ),
-    "src/api/rest/trades.py": "5e5ddcbdfb4d9e66b4a5cc8125fcb515979cb92b10cf12b4b95923eaadd609bd",
+    "src/api/rest/trades.py": "ef68728062f727fd375f46c12280746ea65df4f083bcc6edc0675120d92702b9",
     "src/api/stats_service.py": "aebe188728379366b365c1a12993b3817b5a2cdd8c7aaee09b46712e7cc35fa9",
     "src/api/supplementary_service.py": (
         "4ae532d4155697d67b30fb436635576b3f30385ad6acea87f5139cc9da050f9a"
@@ -164,13 +173,13 @@ FROZEN_VIEWS: dict[str, str] = {
     "src/api/ui/explorer.py": "601685c8c98d90ff3aad21733709a6caebc0cbf7a54e1e6e6ff2a7ab2d141444",
     "src/api/web.py": "881521499c53a6ac85cf2a46e5a94cf6f5a4a0ce4238927c92ab6a5c2fbd7dd0",
     "templates/backtests/detail.html": (
-        "03ee2b00ebe1e3d7ec7f416ac00520cca2359439700c6f7935297b20ea34427b"
+        "f411e721b4064c914302fe92635186e129fc4e03df71b5772adfa8e819768b72"
     ),
     "templates/backtests/list.html": (
         "8088f00de4a8bcd6b28b3f4db93b6773209ea216440003f19253084da0c0fe84"
     ),
     "templates/backtests/list_fragment.html": (
-        "0603eb58ea3bf041b3611ff8e4f0f0dbef3579d686f0be01239dcb610fcb551b"
+        "fb7b87aa2a3593b87dbc679818663a7f3e57b7cfaa69179470b25a2638e2e2da"
     ),
     "templates/backtests/partials/strategy_params.html": (
         "5b4df67383ab929545d6c48777df3bd445d5ec6dde1dbb966a66efd33f8e2a48"
@@ -213,6 +222,9 @@ FROZEN_VIEWS: dict[str, str] = {
     "templates/partials/config_snapshot.html": (
         "a5d8ad73458964fafdb6663465312f99a6e405f7ccbf5aad4c1ac073b2f9d551"
     ),
+    "templates/partials/crypto_panel.html": (
+        "ddea45089cc6d1cc6bd008475fc93b354f0165134133e6d92d0f3a7f4c1e007a"
+    ),
     "templates/partials/footer.html": (
         "5c6153ee9b7e7981776ac769e79150a27806bfe0527055d6f5ba4337b13adbfa"
     ),
@@ -232,7 +244,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "dbc124eb8c2c42947f04708009f2ea971a72e675f2095c1f2c93858a140f44d2"
     ),
     "templates/partials/trades_table.html": (
-        "dbcccc785e04631d83133d909450d90684630b8ee9666e2bfff3186ffacf2187"
+        "a6192cf24d2ae5d9e3e9f8b3a0b63da89513c9d70a43b1c7b74cae3eaaa5a7af"
     ),
     "templates/partials/trading_summary.html": (
         "354c60d895f95c731f917942bb6c50fe4e8a06067cda11d13571bfba3b784a65"
@@ -241,7 +253,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "2d27d4ad648bbb0a8d4dccab913283f0a67c65866308aedbbcc8610022cd0db0"
     ),
     "src/cli/commands/compare.py": (
-        "d47e4009d875cb8d562306be49c3fcf75491bd364d0def54be81bdb0d0af96ed"
+        "275f51360d7d1918172f26d3cc3ce309791ecd0575951095c971223c53bf752c"
     ),
 }
 

@@ -27,6 +27,7 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 from pydantic import BaseModel, Field
 
+from src.core.crypto_costs import count_order_below_minimum, track_orders_below_minimum
 from src.core.fx_rates import fx_units
 from src.core.position_sizing import (
     crypto_units,
@@ -73,6 +74,8 @@ class BuyAndHold(Strategy):
             self.log.error(f"Instrument not found: {self.instrument_id}")
             self.stop()
             return
+        if is_crypto(self.instrument):  # the saved run reports its drop count (crypto M5)
+            track_orders_below_minimum(self.cache, self.instrument_id)
         self.subscribe_bars(self.bar_type)
 
     def on_bar(self, bar: Bar) -> None:
@@ -83,6 +86,8 @@ class BuyAndHold(Strategy):
         quantity = self._entry_quantity(Decimal(str(bar.close)))
         if quantity <= 0:
             self.log.warning("Allocation buys less than one share (or minimum order); holding cash")
+            if is_crypto(self.instrument):  # saved with the run (crypto M5)
+                count_order_below_minimum(self.cache, self.instrument_id)
             return
         order = self.order_factory.market(
             instrument_id=self.instrument_id,

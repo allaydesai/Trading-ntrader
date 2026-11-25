@@ -10,6 +10,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
+from src.core.crypto_costs import count_order_below_minimum, track_orders_below_minimum
 from src.core.fx_rates import fx_units, usd_per_quote
 from src.core.position_sizing import (
     ONE,
@@ -147,12 +148,19 @@ def _unsized(strategy, position_value: Decimal) -> Quantity | None:
         strategy.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
         return None
     strategy._unsized_orders = getattr(strategy, "_unsized_orders", 0) + 1
+    count_order_below_minimum(strategy.cache, instrument.id)  # saved with the run (M5)
     if strategy._unsized_orders == 1:
         strategy.log.warning(
             f"Position sizing: ${position_value:,.2f} is under the {instrument.id} minimum "
             "order; no order (later drops are counted and reported on stop)"
         )
     return None
+
+
+def _track_drops(strategy) -> None:
+    """On a crypto pair, start the run's drop count at 0 so the saved run reports it (M5)."""
+    if is_crypto(strategy.cache.instrument(strategy.instrument_id)):
+        track_orders_below_minimum(strategy.cache, strategy.instrument_id)
 
 
 def _report_unsized(strategy) -> None:
@@ -215,6 +223,7 @@ class SMACrossover(Strategy):
         with nothing, synchronously, so there the callback subscribes before
         this method returns and the strategy behaves exactly as before.
         """
+        _track_drops(self)
         self.register_indicator_for_bars(self.bar_type, self.fast_sma)
         self.register_indicator_for_bars(self.bar_type, self.slow_sma)
         period = max(self.fast_sma.period, self.slow_sma.period)

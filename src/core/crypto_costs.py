@@ -32,7 +32,7 @@ import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
-from typing import Any
+from typing import Any, Protocol
 
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.model.enums import LiquiditySide
@@ -47,6 +47,8 @@ from src.services.crypto.coin_specs import get_fee_schedule
 
 #: Cache key (Nautilus' general object store) holding the run's per-pair cost totals as JSON.
 CRYPTO_COSTS_KEY = "ntrader.crypto_costs"
+#: Cache key holding, per pair, the orders strategies dropped under Kraken's minimum (M5).
+ORDERS_BELOW_MINIMUM_KEY = "ntrader.crypto_orders_below_minimum"
 #: Crypto trades every calendar day: daily returns annualise on 365, not 252 (decision C20).
 CRYPTO_PERIODS_PER_YEAR = 365
 CENT = Decimal("0.01")
@@ -203,23 +205,77 @@ class CryptoCommissionModel(FeeModel):
         return f"CryptoCommissionModel({', '.join(map(str, self.terms))}, scale={self.scale})"
 
 
+def _cached_json(cache, key: str) -> dict[str, Any]:
+    raw = cache.get(key) if cache is not None else None
+    return json.loads(raw) if raw else {}
+
+
+class _KeyValueCache(Protocol):
+    """The slice of Nautilus' ``Cache`` the drop counter uses (its general object store)."""
+
+    def get(self, key: str) -> bytes | None: ...  # noqa: D102
+
+    def add(self, key: str, value: bytes) -> None: ...  # noqa: D102
+
+
+def _bump_orders_below_minimum(cache: _KeyValueCache, instrument_id: object, by: int) -> int:
+    counts = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
+    iid = str(instrument_id)
+    counts[iid] = int(counts.get(iid, 0)) + by
+    cache.add(ORDERS_BELOW_MINIMUM_KEY, json.dumps(counts).encode())
+    return counts[iid]
+
+
+def track_orders_below_minimum(cache: _KeyValueCache, instrument_id: object) -> None:
+    """Start the pair's drop count at 0: the strategy counts drops, so the run reports one.
+
+    A strategy that never calls this (or :func:`count_order_below_minimum`) leaves the pair
+    without a count, which reports as "not recorded" rather than a false 0.
+
+    Args:
+        cache: The run's cache (Nautilus ``Cache``).
+        instrument_id: The crypto pair the strategy sizes.
+    """
+    _bump_orders_below_minimum(cache, instrument_id, 0)
+
+
+def count_order_below_minimum(cache: _KeyValueCache, instrument_id: object) -> int:
+    """Count one order a strategy dropped under the pair's minimum.
+
+    Kept in the run's cache (like the cost totals) so :func:`crypto_snapshot` saves it with the
+    run (``crypto_pairs[<id>].orders_below_minimum``), not only in the strategy log (M5).
+
+    Args:
+        cache: The run's cache (Nautilus ``Cache``).
+        instrument_id: The crypto pair whose order was dropped.
+
+    Returns:
+        The pair's new total of dropped orders.
+    """
+    return _bump_orders_below_minimum(cache, instrument_id, 1)
+
+
 def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, Any]:
     """``config_snapshot`` keys for a run's crypto pairs; ``{}`` when there are none.
 
     The account currency, the run's fee tier (``None`` if pairs ran at different tiers), 365
-    periods a year, and per pair the terms the run used and the USD it was charged.
+    periods a year, and per pair the terms the run used, the USD it was charged and, when its
+    strategy counts them (:func:`track_orders_below_minimum`), the orders dropped under the
+    minimum. A pair no strategy counted has no ``orders_below_minimum`` ("not recorded").
     """
     instruments = list(instruments)
     terms = crypto_terms_by_instrument(instruments)
     if not terms:
         return {}
-    raw = cache.get(CRYPTO_COSTS_KEY) if cache is not None else None
-    charged = json.loads(raw) if raw else {}
+    charged = _cached_json(cache, CRYPTO_COSTS_KEY)
+    dropped = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
     pairs = {}
     for instrument in instruments:
         if instrument.id in terms:
             entry = terms[instrument.id].as_snapshot(instrument)
             entry["costs_usd"] = charged.get(str(instrument.id), CryptoCosts().as_snapshot())
+            if str(instrument.id) in dropped:
+                entry["orders_below_minimum"] = int(dropped[str(instrument.id)])
             pairs[str(instrument.id)] = entry
     tiers = {t.fee_tier for t in terms.values()}
     return {

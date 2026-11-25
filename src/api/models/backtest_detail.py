@@ -12,6 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
 
+from src.services.crypto.display import dashboard_panel as crypto_dashboard_panel
 from src.services.futures.display import dashboard_panel
 from src.services.fx.display import dashboard_panel as fx_dashboard_panel
 
@@ -294,6 +295,9 @@ class BacktestDetailView(BaseModel):
     )
     fx: Optional[dict] = Field(
         default=None, description="FX panel (M5: pips, leverage, costs split); None if not FX"
+    )
+    crypto: Optional[dict] = Field(
+        default=None, description="Crypto panel (M5: tier, maker/taker, spread); None if not"
     )
     breadcrumbs: list[dict[str, str | None]] = Field(
         ...,
@@ -591,6 +595,7 @@ def to_detail_view(run, base_url: str = "") -> BacktestDetailView:
         data_quality_flag=getattr(run, "data_quality_flag", None),
         futures=dashboard_panel(run),
         fx=fx_dashboard_panel(run),
+        crypto=crypto_dashboard_panel(run),
         breadcrumbs=[
             {"label": "Dashboard", "url": f"{base_url}/"},
             {"label": "Backtests", "url": f"{base_url}/backtests"},

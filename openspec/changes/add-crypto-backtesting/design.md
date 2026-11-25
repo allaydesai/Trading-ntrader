@@ -480,6 +480,55 @@ long-only; Kraken Pro fee tier N; spread modelled".
   `templates/backtests/list_fragment.html` (`CRYPTO` badge), `src/cli/commands/compare.py`.
   Equity, futures and FX pages stay byte-identical against goldens captured before the change.
 
+### M5 result (2026-11-24)
+
+- **Figures and words**: `src/services/crypto/returns.py` (pure) and `display.py` feed every
+  renderer. Coin quantities print at the pair's size precision with trailing zeros trimmed
+  (`0.12820512`, `0.25`), never rounded to whole units or 2 dp. Peak exposure reuses the FX
+  peak walk (`src/services/fx/returns.peaks`; unlevered, so margin = notional). Every crypto
+  report shows `BTC/USD (crypto, KRAKEN, fee tier N)`, maker vs taker commission, modelled
+  spread, 365-day annualisation, USD, and the note "Spot, unlevered, long-only; Kraken Pro fee
+  tier N; spread modelled".
+- **Below-minimum drop count (decision M5-D1)**: persisted in the run's existing JSONB
+  `config_snapshot`, as `crypto_pairs[<id>].orders_below_minimum` (an int), beside the per-pair `costs_usd` M3 already stores there. **No DB migration**: the
+  snapshot is where every other per-run crypto term lives (decision C11), and the key is
+  inside the already free-form `crypto_pairs` dict, so `StrategyConfigSnapshot` and equity,
+  futures and FX rows are unchanged. Mechanism: a strategy that counts drops starts the pair's
+  count at 0 on start (`track_orders_below_minimum`) and adds each drop
+  (`count_order_below_minimum`) in the run's Nautilus cache (key
+  `ntrader.crypto_orders_below_minimum`, the same pattern as the cost totals);
+  `crypto_snapshot` writes it when the run is saved. A pair no strategy counted, and every run
+  saved before M5, has no key and reports "not recorded" (`null` in MCP/JSON), never a false
+  0. `sma_crossover` and `buy_and_hold` count; the submodule strategies (Riptide, Bollinger)
+  should in M6.
+- **Peak exposure caveat (PR review)**: a trade row stores a position's largest quantity and
+  its open time, not its fill history, so peak notional/exposure count a position that scales
+  in at its largest size from its open, and the shared peak walk counts a position opened and
+  closed at one timestamp as held then. Exact for single-entry positions that span bars (the
+  core strategies' usual case); an upper bound otherwise, and the report note says so. An exact figure needs a
+  persisted per-position quantity series (a persistence change, not M5).
+- **Symbol forms**: `src/services/crypto/symbols.py` derives the aliases from
+  `coin_specs.yaml` (coin, Kraken `pair`, `altname`, `rest`), so `BTC`, `BTCUSD`, `BTC/USD`,
+  `BTC-USD`, `XBTUSD`, `XBT/USD`, `XXBTZUSD` and `BTC/USD.KRAKEN` are all `BTC` in `backtest
+  run` (named catalogs; `--units`, `--fee-tier` and `--spread-bps` follow), the MCP
+  `submit_backtest`/`validate_config` request and the Run form. A crypto-shaped symbol no spec
+  ships is refused naming the shipped pairs: another quote (`BTC/EUR`, `BTCUSDT`), another
+  venue (`BTC/USD.BINANCE`), an unknown coin (`DOGE/USD`, `DOGEUSD.KRAKEN`) or an alias two
+  coins share (ambiguous); CLI exit 2, MCP `unknown_crypto_pair`. Equity tickers that merely
+  start with a coin (`ETHE`, `ETHA`, `BTCO`) and FX pairs are not crypto and pass through.
+  `--data-source kraken` keeps its own `BTC/USD` form (M7 owns that path).
+- **`--spread-bps X`**: replaces the coin's modelled full spread for the run
+  (`BacktestRequest.crypto_spread_bps`, in the config hash only when set), recorded as
+  `crypto_pairs[<id>].typical_spread_bps`.
+- **Dashboard (C12, Allay's sign-off 2026-11-24)**: changed exactly `backtest_detail.py`,
+  `backtest_list.py`, `rest/trades.py`, `detail.html`, `list_fragment.html`,
+  `trades_table.html`, `compare.py` and the new `crypto_panel.html`; `ui/backtests.py` needed no
+  change (the trades-table cells come from `fx/display.trade_table_cells`, the Run form's
+  symbol from `fx/symbols.run_target`; the form has no units field, so decimal units stay a
+  CLI/MCP option). FX goldens were captured before the edits
+  (`tests/fixtures/fx_dashboard_golden/`); equity, futures and FX pages and the CLI/MCP output
+  of an existing equity, futures and FX run are byte-identical before and after.
+
 ## 11. Kraken data path correction (M7, decision C16)
 
 - `to_kraken_charts` returns the perpetual symbol `PF_XBTUSD`. The Kraken Charts API may also
@@ -543,7 +592,7 @@ defaults.
 | C9 | Funding rates | not applicable to spot; the perps change must source Kraken/other funding history first | pending |
 | C10 | Day / daily bar timestamp | UTC: daily bar at `D 00:00 UTC` (bar open), trade date = UTC date, equity cut at UTC midnight | pending |
 | C11 | Schema | **no migration**: fractional quantities fit `Numeric(20, 8)`; terms in `config_snapshot.crypto_pairs` | pending |
-| C12 | Dashboard | pre-approve a FROZEN_VIEWS regeneration for exactly the section 10 files (FX ruling set plus `crypto_panel.html`) | pending |
+| C12 | Dashboard | pre-approve a FROZEN_VIEWS regeneration for exactly the section 10 files (FX ruling set plus `crypto_panel.html`) | **signed off by Allay for M5, 2026-11-24** (M5 result, section 10) |
 | C13 | Sizing unit | fractional coin units floored to `size_increment`, no minimum of 1, below-minimum orders dropped and counted; decimal `--units` | **accepted by Allay, 2026-11-24** |
 | C14 | Price precision | fixed 4 decimals per coin (the 1h/1d data maximum); 1-minute 5-decimal rows rounded half-even and counted | **accepted by Allay, 2026-11-24** |
 | C15 | Volume | store as-is (coin units, 8 dp); warn on the 2026-03-21 whole-coin rounding; no volume inflation; spike pins fill behaviour | pending |

@@ -13,6 +13,7 @@ from src.db.session_sync import get_sync_session
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.metrics import INSOLVENT_NOTE, METRIC_SPECS, insolvent
+from src.services.crypto import returns as crypto_returns
 from src.services.futures.returns import asset_class, report_fields, summarise_run
 from src.services.fx import returns as fx_returns
 
@@ -56,16 +57,31 @@ FX_NOTE = (
     "leverage and commission vs modelled spread. Financing (rollover) is not modelled."
 )
 
+CRYPTO_NOTE = (
+    "Crypto run: spot, unlevered, long-only on KRAKEN; total_return on USD equity is the "
+    "headline and risk metrics annualise on 365 days. crypto has the fee tier, maker vs taker "
+    "commission, modelled spread, coin quantities and orders dropped under the minimum."
+)
+
 
 def _asset_class(run: Any) -> str:
-    """``fx``, ``futures`` or ``equity``."""
+    """``fx``, ``crypto``, ``futures`` or ``equity``."""
     snapshot = run.config_snapshot or {}
-    return fx_returns.asset_class(snapshot) or asset_class(snapshot)
+    return (
+        fx_returns.asset_class(snapshot)
+        or crypto_returns.asset_class(snapshot)
+        or asset_class(snapshot)
+    )
 
 
 def _fx_summary(run: Any) -> Any:
     trades = getattr(run, "trades", None) or []
     return fx_returns.summarise_run(run.config_snapshot or {}, trades, run.initial_capital)
+
+
+def _crypto_summary(run: Any) -> Any:
+    trades = getattr(run, "trades", None) or []
+    return crypto_returns.summarise_run(run.config_snapshot or {}, trades, run.initial_capital)
 
 
 def _metrics_basis(run: Any) -> str:
@@ -97,6 +113,8 @@ def _run_warnings(run: Any, futures: Any) -> list[str]:
         warnings.append(FUTURES_NOTE)
     if _fx_summary(run) is not None:
         warnings.append(FX_NOTE)
+    if _crypto_summary(run) is not None:
+        warnings.append(CRYPTO_NOTE)
     return warnings
 
 
@@ -104,11 +122,14 @@ def run_view(run: Any) -> dict[str, Any]:
     """One run: identity, window, provenance, parameters and metrics with units.
 
     A futures run adds ``futures`` (return on margin, contract terms; M4) and a warning; an FX
-    run adds ``fx`` (pips, lots, notional, leverage, costs split; M5) and a warning.
+    run adds ``fx`` (pips, lots, notional, leverage, costs split; M5) and a warning; a crypto
+    run adds ``crypto`` (venue, fee tier, maker/taker and spread, coin quantities, drops) and
+    a warning (crypto M5).
     """
     snapshot = run.config_snapshot or {}
     futures = summarise_run(snapshot, getattr(run, "trades", None) or [])
     fx = _fx_summary(run)
+    crypto = _crypto_summary(run)
     warnings = _run_warnings(run, futures)
     metrics = {
         name: {"value": value, "unit": METRIC_SPECS[name].unit}
@@ -142,6 +163,7 @@ def run_view(run: Any) -> dict[str, Any]:
             "asset_class": _asset_class(run),
             **({"futures": report_fields(futures)} if futures else {}),
             **({"fx": fx_returns.report_fields(fx)} if fx else {}),
+            **({"crypto": crypto_returns.report_fields(crypto)} if crypto else {}),
             "warnings": warnings,
         }
     )
