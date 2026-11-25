@@ -44,7 +44,7 @@ from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.trading.strategy import Strategy
 
 from src.core.backtest_venue import add_backtest_venue, cost_snapshot, setup_backtest_venues
-from src.core.crypto_costs import CryptoCommissionModel
+from src.core.crypto_costs import CryptoCommissionModel, position_series
 from src.core.fee_models import IBKRCommissionModel
 from src.core.margin_gate import MarginGate
 from src.services.crypto import exposure
@@ -355,12 +355,13 @@ def test_a_maker_round_trip_matches_the_hand_calculation_at_tier_1(runs):
 # --- exact peak exposure: the saved position series ----------------------------------------
 
 
-def test_the_saved_position_series_replays_to_the_account_balance(runs):
-    """Fills in engine order, per hedged position; the replay lands on the booked balance."""
+def test_the_position_series_replays_to_the_account_balance_and_its_peaks_are_saved(runs):
+    """Fills in engine order, per hedged position; the replay lands on the booked balance, and
+    the snapshot saves the replayed peaks (not the series)."""
     run = _run("scale_in", SCALE_BARS)
     runs.append(run)
     assert run.strategy.denied == []
-    series = cost_snapshot(run.engine.cache)["crypto_pairs"]["BTC/USD.KRAKEN"]["position_series"]
+    series = position_series(run.engine.cache, ["BTC/USD.KRAKEN"])["BTC/USD.KRAKEN"]
     assert [entry[0] for entry in series] == list(range(6))
     p1, p2 = series[0][2], series[1][2]
     assert p1 != p2
@@ -380,6 +381,11 @@ def test_the_saved_position_series_replays_to_the_account_balance(runs):
     notional, peak = exposure.peaks({"BTC/USD.KRAKEN": series}, START_USD)
     assert notional == Decimal("9460") == samples[2].notional
     assert peak == Decimal("9460") / samples[2].balance
+    snapshot = cost_snapshot(run.engine.cache)
+    assert "position_series" not in snapshot["crypto_pairs"]["BTC/USD.KRAKEN"]
+    saved = exposure.stored_peaks(snapshot)
+    assert saved == (notional, peak)
+    assert snapshot["crypto_peaks"]["basis"] == "exact"
 
 
 # --- the spot gate in the real engine ------------------------------------------------------

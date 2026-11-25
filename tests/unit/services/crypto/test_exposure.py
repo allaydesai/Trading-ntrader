@@ -8,6 +8,7 @@ capital plus realised P&L net of costs), so peak notional and peak exposure are 
 saved without the series keep the M5 upper bound.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -196,3 +197,62 @@ class TestSummary:
         assert returns.note(2).endswith(
             "an upper bound when a position scales in or round-trips within one bar."
         )
+
+
+def _stored(snapshot: dict) -> dict:
+    """What a run saves since the storage change: the computed peaks, not the fill series."""
+    notional, peak = exposure.peaks(SERIES, Decimal("100000"))
+    stored = json.loads(json.dumps(snapshot))
+    for pair in stored["crypto_pairs"].values():
+        pair.pop("position_series", None)
+    stored[exposure.PEAKS_KEY] = exposure.peaks_snapshot(notional, peak)
+    return stored
+
+
+class TestStoredPeaks:
+    """Runs save the computed peaks (and their basis), not the per-fill series; old runs with a
+    series and older runs with neither still read."""
+
+    def test_the_snapshot_entry_holds_the_peaks_and_the_basis_as_exact_strings(self):
+        entry = exposure.peaks_snapshot(EXACT_NOTIONAL, EXACT_EXPOSURE)
+        assert entry["basis"] == "exact"
+        assert Decimal(entry["peak_notional_usd"]) == EXACT_NOTIONAL
+        assert Decimal(entry["peak_exposure"]) == EXACT_EXPOSURE
+        assert json.loads(json.dumps(entry)) == entry
+        assert exposure.peaks_snapshot(None, None) == {
+            "basis": "exact",
+            "peak_notional_usd": None,
+            "peak_exposure": None,
+        }
+
+    def test_a_run_with_stored_peaks_reports_them_exactly(self):
+        s = returns.summarise_run(_stored(_snapshot(False)), TRADES, Decimal("100000"))
+        assert s.exposure_exact is True
+        assert s.peak_notional_usd == EXACT_NOTIONAL
+        assert s.peak_exposure == EXACT_EXPOSURE
+        fields = returns.report_fields(s)
+        assert fields["peak_notional_usd"] == "55000.00"
+        assert fields["peak_exposure_pct"] == "55.0165"
+        assert fields["peak_exposure_basis"] == "exact"
+
+    def test_stored_peaks_equal_the_old_series_replay(self):
+        new = returns.summarise_run(_stored(_snapshot(True)), TRADES, Decimal("100000"))
+        old = returns.summarise_run(_snapshot(True), TRADES, Decimal("100000"))
+        assert (new.peak_notional_usd, new.peak_exposure, new.exposure_exact) == (
+            old.peak_notional_usd,
+            old.peak_exposure,
+            old.exposure_exact,
+        )
+
+    def test_a_run_with_neither_keeps_the_upper_bound(self):
+        s = returns.summarise_run(_snapshot(False), TRADES, Decimal("100000"))
+        assert s.exposure_exact is False
+        assert s.peak_notional_usd == Decimal("62000")
+
+    @pytest.mark.parametrize(
+        "entry",
+        [None, {}, {"basis": "upper_bound"}, "exact", {"peak_notional_usd": "1"}],
+    )
+    def test_anything_but_an_exact_entry_is_not_stored_peaks(self, entry):
+        assert exposure.stored_peaks({exposure.PEAKS_KEY: entry}) is None
+        assert exposure.stored_peaks(None) is None

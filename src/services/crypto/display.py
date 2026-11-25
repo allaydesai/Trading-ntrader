@@ -169,8 +169,9 @@ def dashboard_panel(run: Any) -> dict[str, Any] | None:
 def snapshot_params(snapshot: Mapping[str, Any] | None) -> Any:
     """The run's ``config_snapshot`` for display, each pair's fill series cut to a count.
 
-    The series (``crypto_pairs[<id>].position_series``, one entry per fill) is for the exact
-    peak figures, not for reading; ``backtest show`` and the dashboard's parameters list show
+    The series (``crypto_pairs[<id>].position_series``, one entry per fill, saved only by PR
+    #79 runs; later runs save the computed ``crypto_peaks``) is for the exact peak figures, not
+    for reading; ``backtest show`` and the dashboard's parameters list show
     ``"N fills (exact peak exposure)"`` instead. Anything without a series comes back as is.
     """
     pairs = (snapshot or {}).get("crypto_pairs") or {}

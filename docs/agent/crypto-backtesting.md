@@ -132,7 +132,9 @@ discounted-pair rebate and the absence of a minimum fee are VERIFIED against
 - **Snapshot**: `account_currency` `USD`, `fee_tier`, `periods_per_year` 365 and
   `crypto_pairs[id]`: tier rates, spread, precisions, discounted flag, fee-schedule source and
   as-of, UNVERIFIED fields and `costs_usd` (`commission`, `commission_maker`,
-  `commission_taker`, `spread`).
+  `commission_taker`, `spread`). Since the exact-exposure follow-up also `crypto_peaks` (see
+  "Exact peak exposure"); each key is declared on `StrategyConfigSnapshot`, which drops
+  undeclared keys on save.
 
 Pinned in `tests/component/core/test_crypto_costs.py`, `test_margin_gate_crypto.py` and
 `tests/integration/core/test_crypto_venue_engine.py` (forked).
@@ -196,8 +198,9 @@ reports 37 dropped orders on stop (final balance 5.00).
   taker and spread costs, drop count) and `display.py` (the shared wording). `show`,
   `report summary|generate` (text/CSV/JSON, `crypto_` prefixed CSV keys, `crypto` JSON object
   with per-trade `coin_quantity`), `history` (`BTC (crypto)`), `compare` (Asset Class, Fee
-  Tier, Peak Exposure, costs), MCP `get_run`/`compare_runs` (`asset_class: "crypto"`, a
-  `crypto` object, a warning) and `export_results` (crypto trade columns) all read them.
+  Tier, Peak Exposure and its basis, costs), MCP `get_run`/`compare_runs` (`asset_class:
+  "crypto"`, a `crypto` object, a warning) and `export_results` (crypto trade columns) all read
+  them.
   Equity, futures and FX output is byte-identical.
 - **Drop count**: saved as `config_snapshot.crypto_pairs[<id>].orders_below_minimum` (no
   migration). A strategy starts it with `track_orders_below_minimum(cache, instrument_id)` on
@@ -355,16 +358,21 @@ OpenSpec change `add-crypto-exact-exposure`. Crypto runs saved from this change 
 **exact** peak notional and peak exposure; runs saved before it keep M5's upper bound and its
 note (no backfill, no row changes).
 
-- **Saved**: `config_snapshot.crypto_pairs[<id>].position_series` (no migration), one entry per
-  fill in engine order: `[seq, ts_ns, position_id, position_qty, fill_px, commission_usd]`.
-  `seq` orders fills across pairs; `position_qty` is the fill's position's signed quantity
-  after it (the venue is `HEDGING`, so a pair may hold several positions). The fee model
-  numbers the fills it charges in the run's cache; `position_series` in
-  `src/core/crypto_costs.py` joins the numbers with the orders' fill events when the run is
-  saved (the count lives in the cache, so fee models of several venues share one numbering).
-  The series is left out, and the run reports the upper bound, if the numbers and fill events
-  don't match one for one, a fill has no position id, or the replay misses the account's USD
-  balance by more than a cent per fill (Nautilus rounds each fill's P&L from floats).
+- **Saved**: `config_snapshot.crypto_peaks` (no migration): `{"basis": "exact",
+  "peak_notional_usd": "<decimal>", "peak_exposure": "<decimal>"}`, exact decimal strings. When
+  the run is saved, `position_series` in `src/core/crypto_costs.py` builds each pair's fills in
+  engine order, `[seq, ts_ns, position_id, position_qty, fill_px, commission_usd]` (`seq` orders
+  fills across pairs; `position_qty` is the fill's position's signed quantity after it, the
+  venue being `HEDGING`), by joining the fill numbers the fee model kept in the run's cache with
+  the orders' fill events (the count lives in the cache, so fee models of several venues share
+  one numbering). `exact_peaks` replays it from the accounts' starting balance and only the
+  peaks are stored, not the series. Nothing is stored, and the run reports the upper bound, if
+  the numbers and fill events don't match one for one, a fill has no position id, or the replay
+  misses the account's USD balance by more than a cent per fill (Nautilus rounds each fill's
+  P&L from floats).
+- **Read**: `crypto_peaks` when present; else a run saved by PR #79, whose pairs carry the
+  series itself (`crypto_pairs[<id>].position_series`), is replayed from the run's capital;
+  else (older runs) the M5 upper bound and its note.
 - **Computed**: `src/services/crypto/exposure.py` replays the fills: per position, quantity and
   average open price; the USD balance is the starting capital plus each fill's realised P&L
   (in whole cents) less its charge, as the account books it, so the last balance agrees with
@@ -375,8 +383,8 @@ note (no backfill, no row changes).
 - **Shown**: the note reads "Peak notional and exposure are exact, replayed from every fill"
   (CLI `show`/`report`, MCP, dashboard panel) and `peak_exposure_basis` is `exact` (MCP and
   report JSON; `crypto_peak_exposure_basis` in the CSV); old runs say `upper_bound` with the
-  M5 note. `backtest show` and the dashboard's parameters list show the series as `N fills
-  (exact peak exposure)` (`display.snapshot_params`).
+  M5 note. For a PR #79 run, `backtest show` and the dashboard's parameters list show the
+  series as `N fills (exact peak exposure)` (`display.snapshot_params`).
 - **Old figure vs exact**: M5's notional is an upper bound; its equity (capital plus
   closed-trade P&L) leaves out the costs of open positions, so its exposure can read slightly
   *below* the exact one when positions don't scale in (both smokes below).

@@ -3,7 +3,8 @@
 ``BacktestPersistenceService`` stores ``StrategyConfigSnapshot(**snapshot).model_dump()``, so a
 key the model does not declare is silently dropped (the futures lesson). Crypto M3 (task 3.7)
 declares ``fee_tier``, ``crypto_pairs`` and ``periods_per_year`` (``account_currency`` is FX's,
-shared), each omitted while unset so equity, futures and FX rows stay byte-identical.
+shared), each omitted while unset so equity, futures and FX rows stay byte-identical. The exact
+peak exposure follow-up adds ``crypto_peaks`` (the replayed peaks, saved instead of the series).
 """
 
 import pytest
@@ -29,7 +30,7 @@ BTC = {
         },
     }
 }
-CRYPTO_KEYS = ("fee_tier", "crypto_pairs", "periods_per_year")
+CRYPTO_KEYS = ("fee_tier", "crypto_pairs", "periods_per_year", "crypto_peaks")
 
 
 def test_a_non_crypto_snapshot_dumps_no_crypto_keys():
@@ -46,3 +47,15 @@ def test_a_crypto_snapshot_keeps_its_tier_pairs_and_annualisation():
     assert dumped["fee_tier"] == 2
     assert dumped["crypto_pairs"] == BTC
     assert dumped["periods_per_year"] == 365
+
+
+def test_a_crypto_snapshot_keeps_its_saved_peaks():
+    from src.services.crypto.exposure import PEAKS_KEY
+
+    peaks = {"basis": "exact", "peak_notional_usd": "10000.0", "peak_exposure": "0.1038"}
+    dumped = StrategyConfigSnapshot(**BASE, crypto_pairs=BTC, **{PEAKS_KEY: peaks}).model_dump()
+    assert dumped[PEAKS_KEY] == peaks
+
+
+def test_a_crypto_snapshot_without_peaks_dumps_no_peaks_key():
+    assert "crypto_peaks" not in StrategyConfigSnapshot(**BASE, crypto_pairs=BTC).model_dump()

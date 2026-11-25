@@ -44,6 +44,15 @@ dashboard's protected files.**
   (`display.snapshot_params`). This is the only protected-file change
   (`src/api/models/backtest_detail.py`, one call); `FROZEN_VIEWS` is regenerated for that file.
 
+## Follow-up: store the peaks, not the series
+
+Approved by Allay on 2026-11-25 (crypto decision follow-ups). A run no longer saves
+`crypto_pairs[<id>].position_series`: `crypto_snapshot` replays the series when the run is saved
+(from the accounts' starting balance, after the same one-cent-per-fill check) and saves only
+`config_snapshot.crypto_peaks = {"basis": "exact", "peak_notional_usd", "peak_exposure"}` as
+exact decimal strings. Readers use saved peaks first, then a PR #79 run's series (replayed as
+before), then the M5 upper bound. No migration; the figures are identical (smoke below).
+
 ## Impact
 
 - Persistence: no migration. The series lives in the existing JSONB `config_snapshot` (as M5's

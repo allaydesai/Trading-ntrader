@@ -12,7 +12,7 @@ seekable file read with HTTP ``Range`` requests (the host sends ``Accept-Ranges:
 :func:`extract_pairs` pulls only the wanted members: ``{ALTNAME}_{minutes}.csv``. No login, no
 API key. Files are written once: an existing raw file is never overwritten (raw data on the VPS
 is append-only). The archive's own ``MANIFEST.json`` and a ``SHA256SUMS`` of the written files
-sit beside them.
+sit beside them; both are replaced atomically (temp file + ``os.replace``).
 
 Usage::
 
@@ -25,8 +25,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import os
+import re
 import shutil
 import sys
+import tempfile
 import urllib.request
 import zipfile
 import zlib
@@ -192,7 +195,7 @@ def extract_pairs(
         partial.rename(target)
     manifest = next((n for n in archive.namelist() if Path(n).name == MANIFEST), None)
     if manifest is not None and not (dest / MANIFEST).exists():
-        (dest / MANIFEST).write_bytes(archive.read(manifest))
+        _write_atomic(dest / MANIFEST, archive.read(manifest))
     _record_checksums(dest / CHECKSUMS, targets)
     return targets
 
@@ -209,14 +212,40 @@ def _same(archive: zipfile.ZipFile, member: str, path: Path) -> bool:
     return crc == info.CRC
 
 
+_RECORD = re.compile(r"[0-9a-f]{64}  (\S+)")
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Replace ``path`` with ``data`` via a temp file in its directory and ``os.replace``.
+
+    A crash leaves the old file or the new one, never a partial one, and no temp file behind.
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp's 0600 would outlive the replace
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def _record_checksums(sums: Path, targets: Sequence[Path]) -> None:
-    """Append a ``SHA256SUMS`` line for each target the file does not list yet."""
-    listed = (
-        {line.split()[-1] for line in sums.read_text().splitlines()} if sums.exists() else set()
-    )
-    lines = [f"{_sha256(t)}  {t.name}\n" for t in targets if t.name not in listed]
-    with sums.open("a") as handle:
-        handle.write("".join(lines))
+    """Add a ``SHA256SUMS`` line for each target the file does not list yet.
+
+    The whole file is rewritten atomically. Only well-formed records (``<sha256>  <name>``) are
+    kept, so one cut short by a crash before this fix never hides a file or glues onto the next.
+    """
+    old = sums.read_text().splitlines() if sums.exists() else []
+    kept = [line for line in old if _RECORD.fullmatch(line)]
+    listed = {line.split("  ", 1)[1] for line in kept}
+    added = [f"{_sha256(t)}  {t.name}" for t in targets if t.name not in listed]
+    _write_atomic(sums, "".join(f"{line}\n" for line in [*kept, *added]).encode())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

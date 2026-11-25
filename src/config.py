@@ -165,28 +165,15 @@ class KrakenSettings(BaseSettings):
     """Kraken exchange configuration settings.
 
     The API key is optional: ``--data-source kraken`` reads public spot endpoints (crypto M7).
-    The default maker/taker fees are the default tier of the Kraken Pro spot schedule in
-    ``src/services/crypto/coin_specs.yaml`` (tier 2: 0.30% / 0.60%; a unit test pins them to
-    it, so loading settings never depends on that file). A crypto backtest charges the schedule
-    (``CryptoCommissionModel``; ``backtest run --fee-tier N`` picks another tier), not these.
+    There are no fee settings: a crypto backtest charges the Kraken Pro spot schedule in
+    ``src/services/crypto/coin_specs.yaml`` (``CryptoCommissionModel``; ``backtest run
+    --fee-tier N`` picks a tier). Old ``KRAKEN_DEFAULT_*_FEE`` env vars are ignored.
     """
 
     kraken_api_key: str = Field(default="", description="Kraken API key")
     kraken_api_secret: str = Field(default="", description="Kraken API secret (base64)", repr=False)
     kraken_rate_limit: int = Field(
         default=10, ge=1, le=20, description="Max requests per second (1-20)"
-    )
-    kraken_default_maker_fee: Decimal = Field(
-        default=Decimal("0.0030"),
-        ge=0,
-        le=1,
-        description="Maker fee (0-1); default: the fee schedule's default tier (tier 2)",
-    )
-    kraken_default_taker_fee: Decimal = Field(
-        default=Decimal("0.0060"),
-        ge=0,
-        le=1,
-        description="Taker fee (0-1); default: the fee schedule's default tier (tier 2)",
     )
 
     @model_validator(mode="after")

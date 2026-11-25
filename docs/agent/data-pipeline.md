@@ -44,8 +44,7 @@
 **Configuration** via `src/config.py:KrakenSettings`:
 - `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`: optional (public endpoints); both set or both empty
 - `KRAKEN_RATE_LIMIT` (default: 10 req/s)
-- `KRAKEN_DEFAULT_MAKER_FEE` / `KRAKEN_DEFAULT_TAKER_FEE`: default to the Kraken Pro spot
-  schedule's default tier in `coin_specs.yaml` (0.0030 / 0.0060); runs charge the schedule
+- No fee settings: runs charge the Kraken Pro spot schedule in `coin_specs.yaml` (`--fee-tier`)
 
 **Pair mapping** — users specify standard pairs (BTC/USD), internally mapped to:
 - REST API: the coin spec's AssetPairs key (`XXBTZUSD`, `SOLUSD`), else the altname form

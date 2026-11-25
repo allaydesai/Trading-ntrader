@@ -112,6 +112,20 @@ class TestExactPeakExposure:
         assert "4 fills (exact peak exposure)" in text
         assert "78000.0000" not in text.split("Strategy-Specific Parameters")[1]
 
+    def test_a_run_with_saved_peaks_shows_the_exact_note(self):
+        run = crypto_run()
+        snapshot = json.loads(json.dumps(run.config_snapshot))
+        snapshot["crypto_peaks"] = {
+            "basis": "exact",
+            "peak_notional_usd": "20000",
+            "peak_exposure": "0.2",
+        }
+        run.config_snapshot = snapshot
+        text = dash._text(dash.render(run)["detail.html"])
+        assert "Peak notional and exposure are exact" in text
+        assert "an upper bound" not in text
+        assert "20.00%" in text
+
     def test_a_run_saved_before_the_series_keeps_the_upper_bound_note(self):
         text = dash._text(dash.render(crypto_run())["detail.html"])
         assert "an upper bound when a position scales in or round-trips" in text

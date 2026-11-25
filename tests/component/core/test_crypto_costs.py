@@ -37,10 +37,12 @@ from src.core.crypto_costs import (
     count_order_below_minimum,
     crypto_snapshot,
     crypto_terms,
+    position_series,
     track_orders_below_minimum,
 )
 from src.core.fee_models import IBKRCommissionModel
 from src.core.futures_costs import venue_cost_models
+from src.models.config_snapshot import StrategyConfigSnapshot
 from src.services.crypto.coin_specs import CryptoSpecError, get_coin_spec
 from src.services.crypto.instrument_builder import build_crypto_pair
 from src.services.fx.instrument_builder import build_fx_pair
@@ -265,11 +267,17 @@ class TestSnapshot:
 
 
 class TestPositionSeries:
-    """Exact peak exposure: the snapshot saves each pair's fills in engine order.
+    """Exact peak exposure: each pair's fills in engine order, replayed when the run is saved.
 
-    The fee model numbers the fills it charges; the snapshot joins those numbers with the
-    orders' fill events (real Nautilus orders and ``OrderFilled`` events in a real ``Cache``).
+    The fee model numbers the fills it charges; :func:`position_series` joins those numbers with
+    the orders' fill events (real Nautilus orders and ``OrderFilled`` events in a real
+    ``Cache``). The snapshot saves only the computed peaks and their basis, not the series.
     """
+
+    @staticmethod
+    def _saved(snapshot) -> None:
+        """No pair carries a fill series any more."""
+        assert all("position_series" not in p for p in snapshot["crypto_pairs"].values())
 
     @staticmethod
     def _filled(cache, model, order, instrument, qty: str, px: str, pid: str | None, ts: int):
@@ -324,34 +332,46 @@ class TestPositionSeries:
         fee1 = self._filled(cache, model, eth_buy, eth, "1.00000000", "3000.0000", "P-ETH", 1)
         fee2 = self._filled(cache, model, buy, BTC, "0.15", "78100.0000", "P-BTC", 2)
         fee3 = self._filled(cache, model, sell, BTC, "0.15", "79000.0000", "P-BTC", 3)
-        pairs = crypto_snapshot([BTC, eth], cache)["crypto_pairs"]
-        assert pairs["BTC/USD.KRAKEN"]["position_series"] == [
+        series = position_series(cache, [BTC.id, eth.id])
+        assert series["BTC/USD.KRAKEN"] == [
             [0, 1, "P-BTC", "0.05000000", "78000.0000", f"{fee0:f}"],
             [2, 2, "P-BTC", "0.20000000", "78100.0000", f"{fee2:f}"],
             [3, 3, "P-BTC", "0.05000000", "79000.0000", f"{fee3:f}"],
         ]
-        assert pairs["ETH/USD.KRAKEN"]["position_series"] == [
-            [1, 1, "P-ETH", "1.00000000", "3000.0000", f"{fee1:f}"]
-        ]
+        assert series["ETH/USD.KRAKEN"] == [[1, 1, "P-ETH", "1.00000000", "3000.0000", f"{fee1:f}"]]
+        snapshot = crypto_snapshot([BTC, eth], cache)
+        self._saved(snapshot)
+        # 0.2 BTC at an average 78,075 plus 1 ETH at 3,000; no account, so no exposure
+        peaks = snapshot["crypto_peaks"]
+        assert (peaks["basis"], peaks["peak_exposure"]) == ("exact", None)
+        assert Decimal(peaks["peak_notional_usd"]) == Decimal("18615")
 
     def test_a_pair_with_no_fills_records_an_empty_series(self):
         cache = Cache()
         cache.add_instrument(BTC)
-        assert (
-            crypto_snapshot([BTC], cache)["crypto_pairs"]["BTC/USD.KRAKEN"]["position_series"] == []
-        )
+        assert position_series(cache, [BTC.id]) == {"BTC/USD.KRAKEN": []}
+        snapshot = crypto_snapshot([BTC], cache)
+        self._saved(snapshot)
+        assert snapshot["crypto_peaks"] == {
+            "basis": "exact",
+            "peak_notional_usd": None,
+            "peak_exposure": None,
+        }
 
     def test_fills_the_cache_cannot_match_leave_the_series_unrecorded(self):
         # A charge with no fill event behind it: report the M5 upper bound, not a wrong figure
         cache = Cache()
         cache.add_instrument(BTC)
         _charge(_model(BTC, cache=cache), BTC, "0.1", "78000.0000")
-        assert (
-            "position_series" not in crypto_snapshot([BTC], cache)["crypto_pairs"]["BTC/USD.KRAKEN"]
-        )
+        assert position_series(cache, [BTC.id]) is None
+        snapshot = crypto_snapshot([BTC], cache)
+        self._saved(snapshot)
+        assert "crypto_peaks" not in snapshot
 
-    def test_without_a_cache_there_is_no_series(self):
-        assert "position_series" not in crypto_snapshot([BTC])["crypto_pairs"]["BTC/USD.KRAKEN"]
+    def test_without_a_cache_there_are_no_peaks(self):
+        snapshot = crypto_snapshot([BTC])
+        self._saved(snapshot)
+        assert "crypto_peaks" not in snapshot
 
     def test_fee_models_of_two_venues_share_one_fill_numbering(self):
         eth = _pair("ETH")
@@ -363,18 +383,17 @@ class TestPositionSeries:
         eth_buy = self._ready(cache, eth, OrderSide.BUY, "1")
         self._filled(cache, btc_model, buy, BTC, "0.1", "78000", "P-BTC", 1)
         self._filled(cache, eth_model, eth_buy, eth, "1", "3000", "P-ETH", 2)
-        pairs = crypto_snapshot([BTC, eth], cache)["crypto_pairs"]
-        assert [e[0] for e in pairs["BTC/USD.KRAKEN"]["position_series"]] == [0]
-        assert [e[0] for e in pairs["ETH/USD.KRAKEN"]["position_series"]] == [1]
+        series = position_series(cache, [BTC.id, eth.id])
+        assert [e[0] for e in series["BTC/USD.KRAKEN"]] == [0]
+        assert [e[0] for e in series["ETH/USD.KRAKEN"]] == [1]
 
     def test_a_fill_without_a_position_leaves_the_series_unrecorded(self):
         cache = Cache()
         cache.add_instrument(BTC)
         buy = self._ready(cache, BTC, OrderSide.BUY, "0.1")
         self._filled(cache, _model(BTC, cache=cache), buy, BTC, "0.1", "78000", None, 1)
-        assert (
-            "position_series" not in crypto_snapshot([BTC], cache)["crypto_pairs"]["BTC/USD.KRAKEN"]
-        )
+        assert position_series(cache, [BTC.id]) is None
+        assert "crypto_peaks" not in crypto_snapshot([BTC], cache)
 
     @pytest.mark.parametrize(
         ("final", "kept"),
@@ -384,7 +403,7 @@ class TestPositionSeries:
             ("9999.80", False),  # the books disagree by more than a cent a fill
         ],
     )
-    def test_the_series_is_kept_only_when_it_replays_to_the_account(self, final, kept):
+    def test_peaks_are_saved_only_when_the_series_replays_to_the_account(self, final, kept):
         cache = Cache()
         cache.add_instrument(BTC)
         buy = self._ready(cache, BTC, OrderSide.BUY, "0.1")
@@ -396,8 +415,16 @@ class TestPositionSeries:
             balance_total=lambda currency: _usd_money(final),
         )
         books = _CacheWithAccount(cache, account)
-        entry = crypto_snapshot([BTC], books)["crypto_pairs"]["BTC/USD.KRAKEN"]
-        assert ("position_series" in entry) is kept
+        snapshot = crypto_snapshot([BTC], books)
+        self._saved(snapshot)
+        assert ("crypto_peaks" in snapshot) is kept
+        # Every key the snapshot emits survives the model the run is persisted through
+        persisted = StrategyConfigSnapshot(strategy_path="s", config_path="c", **snapshot)
+        assert set(snapshot) <= set(persisted.model_dump())
+        if kept:  # 0.1 BTC at 100 over the 9,999.94 left after the fill (from the start balance)
+            assert Decimal(snapshot["crypto_peaks"]["peak_notional_usd"]) == Decimal("10")
+            peak = Decimal(snapshot["crypto_peaks"]["peak_exposure"])
+            assert peak == Decimal("10") / Decimal("9999.94")
 
 
 class _CacheWithAccount:

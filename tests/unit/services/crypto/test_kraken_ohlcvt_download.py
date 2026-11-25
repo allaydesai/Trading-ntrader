@@ -162,3 +162,96 @@ def test_a_rerun_completes_files_an_interrupted_publish_left_behind(remote, tmp_
     again = extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [1, 60])
     assert len(again) == 2
     assert len((tmp_path / "SHA256SUMS").read_text().splitlines()) == 2  # no duplicate lines
+
+
+def _verifiable(sums: Path) -> dict[str, str]:
+    """Each line is ``<64 hex>  <name>`` and its hash matches the file beside it."""
+    import hashlib
+    import re
+
+    text = sums.read_text()
+    assert text.endswith("\n")
+    records = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (\S+)", line)
+        assert match, f"malformed SHA256SUMS line: {line!r}"
+        digest, name = match.groups()
+        assert hashlib.sha256((sums.parent / name).read_bytes()).hexdigest() == digest
+        records[name] = digest
+    return records
+
+
+def test_a_checksum_record_cut_off_before_its_newline_is_repaired(remote, tmp_path):
+    """CodeRabbit #77: an append interrupted before its newline must not glue the next record
+    onto it; the rerun rewrites the whole file, every line separated and verifiable."""
+    import hashlib
+
+    published = MEMBERS["XBTUSD_1.csv"]
+    (tmp_path / "XBTUSD_1.csv").write_bytes(published)
+    digest = hashlib.sha256(published).hexdigest()
+    (tmp_path / "SHA256SUMS").write_text(f"{digest}  XBTUSD_1.csv")  # no final newline
+    extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [1, 60])
+    assert sorted(_verifiable(tmp_path / "SHA256SUMS")) == ["XBTUSD_1.csv", "XBTUSD_60.csv"]
+
+
+def test_a_truncated_checksum_record_is_replaced_not_trusted(remote, tmp_path):
+    """A half-written record (hash cut short) does not count as listing its file."""
+    (tmp_path / "XBTUSD_1.csv").write_bytes(MEMBERS["XBTUSD_1.csv"])
+    (tmp_path / "SHA256SUMS").write_text("3f2a9c")  # crash mid-hash
+    extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [1, 60])
+    assert sorted(_verifiable(tmp_path / "SHA256SUMS")) == ["XBTUSD_1.csv", "XBTUSD_60.csv"]
+
+
+def test_manifest_and_checksums_are_published_by_atomic_replace(remote, tmp_path, monkeypatch):
+    """Both files are written to a temp file in the same directory, then ``os.replace``d over
+    the target, so a crash leaves the old file or the new one, never a partial one."""
+    from src.services.crypto import kraken_ohlcvt_download as download
+
+    replaced: list[tuple[Path, Path]] = []
+    real_replace = download.os.replace
+
+    def spy(src, dst):
+        replaced.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(download.os, "replace", spy)
+    extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [60])
+    assert sorted(dst.name for _, dst in replaced) == ["MANIFEST.json", "SHA256SUMS"]
+    assert all(src.parent == dst.parent == tmp_path for src, dst in replaced)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "MANIFEST.json",
+        "SHA256SUMS",
+        "XBTUSD_60.csv",
+    ]
+
+
+def test_a_failed_checksum_publish_keeps_the_old_file_and_no_temp(remote, tmp_path, monkeypatch):
+    from src.services.crypto import kraken_ohlcvt_download as download
+
+    (tmp_path / "SHA256SUMS").write_text("old\n")
+    real_replace, attempted = download.os.replace, []
+
+    def boom(src, dst):  # only the checksum publish fails; the manifest goes through
+        attempted.append(Path(dst).name)
+        if Path(dst).name == "SHA256SUMS":
+            raise OSError("disk full")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(download.os, "replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [60])
+    assert attempted == ["MANIFEST.json", "SHA256SUMS"]
+    assert (tmp_path / "SHA256SUMS").read_text() == "old\n"
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_atomically_published_files_keep_the_umask_mode(remote, tmp_path):
+    """A temp file is created 0600; the published files get the usual umask mode, like the CSVs."""
+    import os
+    import stat
+
+    extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [60])
+    umask = os.umask(0)
+    os.umask(umask)
+    for name in ("MANIFEST.json", "SHA256SUMS"):
+        assert stat.S_IMODE((tmp_path / name).stat().st_mode) == 0o666 & ~umask

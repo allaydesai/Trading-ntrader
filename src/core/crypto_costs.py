@@ -17,9 +17,8 @@ Both components are scaled by the run's cost multiplier and rounded to cents onc
 liquidity side from running totals (:class:`~src.core.fx_costs.OrderCharges`, shared with the FX
 model), so split bar fills add no rounding. The totals per pair and liquidity side are kept in
 the cache for ``config_snapshot.crypto_pairs[...]["costs_usd"]``. The model also numbers the
-fills it charges, in engine order, so :func:`crypto_snapshot` can save each pair's position
-series (``crypto_pairs[...]["position_series"]``) for exact peak exposure
-(:mod:`src.services.crypto.exposure`).
+fills it charges, in engine order, so :func:`crypto_snapshot` can replay each pair's position
+series and save the exact peak exposure (``crypto_peaks``, :mod:`src.services.crypto.exposure`).
 
 The tier is one per run (decision C21): ``info["fee_tier"]`` when the run overrides it
 (``--fee-tier``), else the schedule's ``default_tier`` (tier 2). Rates come from the shipped
@@ -48,7 +47,7 @@ from src.core.fx_costs import OrderCharges
 from src.core.fx_rates import ACCOUNT_CURRENCY
 from src.core.position_sizing import is_crypto
 from src.services.crypto.coin_specs import get_fee_schedule
-from src.services.crypto.exposure import replay
+from src.services.crypto.exposure import PEAKS_KEY, peaks_of, peaks_snapshot, replay
 
 #: Cache key (Nautilus' general object store) holding the run's per-pair cost totals as JSON.
 CRYPTO_COSTS_KEY = "ntrader.crypto_costs"
@@ -318,26 +317,40 @@ def position_series(cache, instrument_ids: Iterable[object]) -> dict[str, list[l
     return series
 
 
-def _books_agree(cache, instruments: list[Instrument], series: dict[str, list[list]]) -> bool:
-    """True when the series replays to the run's USD balance, within a cent per fill.
-
-    Nautilus rounds each fill's P&L to the cent from floats; the replay rounds exact decimals,
-    so a fill can land a cent apart. More than that means the series misses something, and the
-    run reports the upper bound. Without an account (a bare cache) there is nothing to check.
-    """
+def _account_balances(cache, instruments: list[Instrument]) -> tuple[Decimal, Decimal] | None:
+    """The pairs' venue accounts' starting and final USD balance; ``None`` without an account."""
     accounts = {}
     for instrument in instruments:
         account = cache.account_for_venue(instrument.id.venue)
         if account is None:
-            return True
+            return None
         accounts[str(account.id)] = account
     start = sum(
         (a.starting_balances()[ACCOUNT_CURRENCY].as_decimal() for a in accounts.values()), ZERO
     )
     final = sum((a.balance_total(ACCOUNT_CURRENCY).as_decimal() for a in accounts.values()), ZERO)
+    return start, final
+
+
+def exact_peaks(
+    cache, instruments: list[Instrument], series: dict[str, list[list]]
+) -> dict[str, Any] | None:
+    """The run's exact peaks as saved (:func:`src.services.crypto.exposure.peaks_snapshot`).
+
+    The series is replayed from the accounts' starting balance. ``None`` (the run reports the
+    upper bound) when the replay misses the final balance by more than a cent per fill:
+    Nautilus rounds each fill's P&L to the cent from floats and the replay rounds exact
+    decimals, so a fill can land a cent apart; more means the series misses something. Without
+    an account (a bare cache) there is nothing to check and no capital, so no exposure.
+    """
+    balances = _account_balances(cache, instruments)
+    start = None if balances is None else balances[0]
     samples = replay(series, start)
-    replayed = samples[-1].balance if samples else start
-    return replayed is not None and abs(replayed - final) <= CENT * max(len(samples), 1)
+    if balances is not None:
+        replayed = samples[-1].balance if samples else start
+        if replayed is None or abs(replayed - balances[1]) > CENT * max(len(samples), 1):
+            return None
+    return peaks_snapshot(*peaks_of(samples))
 
 
 def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, Any]:
@@ -347,8 +360,9 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
     periods a year, and per pair the terms the run used, the USD it was charged and, when its
     strategy counts them (:func:`track_orders_below_minimum`), the orders dropped under the
     minimum. A pair no strategy counted has no ``orders_below_minimum`` ("not recorded").
-    With the run's cache each pair also gets its ``position_series`` (:func:`position_series`),
-    which makes the reported peak notional and exposure exact.
+    With the run's cache the fills (:func:`position_series`) are replayed and only the result is
+    saved, as ``crypto_peaks`` (:func:`exact_peaks`): the reported peak notional and exposure
+    are then exact. The series itself is not saved.
     """
     instruments = list(instruments)
     terms = crypto_terms_by_instrument(instruments)
@@ -358,8 +372,7 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
     dropped = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
     series = position_series(cache, terms) if cache is not None else None
     crypto = [i for i in instruments if i.id in terms]
-    if series is not None and not _books_agree(cache, crypto, series):
-        series = None
+    exact = exact_peaks(cache, crypto, series) if series is not None else None
     pairs = {}
     for instrument in instruments:
         if instrument.id in terms:
@@ -367,13 +380,14 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
             entry["costs_usd"] = charged.get(str(instrument.id), CryptoCosts().as_snapshot())
             if str(instrument.id) in dropped:
                 entry["orders_below_minimum"] = int(dropped[str(instrument.id)])
-            if series is not None:
-                entry["position_series"] = series[str(instrument.id)]
             pairs[str(instrument.id)] = entry
     tiers = {t.fee_tier for t in terms.values()}
-    return {
+    snapshot = {
         "account_currency": ACCOUNT_CURRENCY.code,
         "fee_tier": tiers.pop() if len(tiers) == 1 else None,
         "periods_per_year": CRYPTO_PERIODS_PER_YEAR,
         "crypto_pairs": pairs,
     }
+    if exact is not None:
+        snapshot[PEAKS_KEY] = exact
+    return snapshot
