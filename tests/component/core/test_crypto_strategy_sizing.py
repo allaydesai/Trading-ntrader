@@ -95,6 +95,16 @@ class TestSmaCrossover:
                 _sma_self(BTC, 78000.0, units=Decimal("0.000000015"))
             )
 
+    def test_on_start_a_crypto_run_counts_drops_from_zero(self):
+        """Crypto M5: an instrumented strategy's run saves 0, not "not recorded"."""
+        from src.core.strategies.sma_crossover import _track_drops
+
+        btc, aapl = _sma_self(BTC, 78000.0), _sma_self(AAPL, 140.0)
+        _track_drops(btc)
+        _track_drops(aapl)
+        assert json.loads(btc.cache.get(ORDERS_BELOW_MINIMUM_KEY)) == {"BTC/USD.KRAKEN": 0}
+        assert aapl.cache.get(ORDERS_BELOW_MINIMUM_KEY) is None  # equity: nothing written
+
     def test_the_drop_count_is_reported_once_on_stop(self):
         from src.core.strategies.sma_crossover import _report_unsized
 
@@ -139,6 +149,12 @@ class TestBuyAndHold:
     def test_under_the_minimum_holds_cash(self):
         sizing = _buy_and_hold_self(BTC, "3")
         assert BuyAndHold._entry_quantity(sizing, Decimal("78000")) == 0
+
+    def test_on_start_counts_drops_from_zero(self):
+        sizing = _buy_and_hold_self(BTC, "100000")
+        sizing.log, sizing.subscribe_bars, sizing.bar_type = MagicMock(), MagicMock(), "B"
+        BuyAndHold.on_start(sizing)
+        assert json.loads(sizing.cache.get(ORDERS_BELOW_MINIMUM_KEY)) == {"BTC/USD.KRAKEN": 0}
 
     def test_a_dropped_entry_is_counted_for_the_saved_run(self):
         """Crypto M5: the one entry buy-and-hold drops under the minimum is counted."""

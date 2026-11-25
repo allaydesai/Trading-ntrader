@@ -13,7 +13,10 @@ leave their output exactly as it was.
 Every shipped pair is USD-quoted, so notional is ``quantity x entry`` and ``profit_loss`` is
 already USD. The account return on USD equity stays the headline (decision C19); risk metrics
 annualise on 365 days (C20). Peak exposure is the largest concurrent notional over equity: spot
-is unlevered, so it stays at or under 1 and shows the idle cash. See section 10 of
+is unlevered, so it stays at or under 1 and shows the idle cash. A trade row stores a
+position's largest quantity and its open time, not its fill history, so a position that scales
+in is counted at its largest size from its open: exact for single-entry positions (the core
+strategies), an upper bound otherwise (:func:`note` says so). See section 10 of
 ``openspec/changes/add-crypto-backtesting/design.md``.
 """
 
@@ -41,7 +44,8 @@ def note(fee_tier: int | None) -> str:
     return (
         f"Spot, unlevered, long-only; Kraken Pro {tier}; spread modelled (half per side). "
         "Commission and spread are charged in USD; the spread and Kraken pair terms are "
-        "UNVERIFIED working defaults."
+        "UNVERIFIED working defaults. Peak notional and exposure use each position's largest "
+        "size from its open: exact for single-entry positions, an upper bound when one scales in."
     )
 
 
@@ -187,7 +191,8 @@ def trade_figures(trade: Any, terms: PairTerms) -> TradeFigures:
         size_precision=terms.size_precision,
         notional_usd=quantity * entry,
         return_on_underlying_pct=rou,
-        pnl_usd=_dec(_get(trade, "profit_loss")) if rou is not None else None,
+        # Stored realised P&L, also on a still-open (partly closed) position
+        pnl_usd=_dec(_get(trade, "profit_loss")),
     )
 
 

@@ -93,6 +93,13 @@ class TestTradeFigures:
         fig = returns.trade_figures(_trade("0.1", "78000"), terms)
         assert fig.return_on_underlying_pct is None and fig.pnl_usd is None
 
+    def test_a_partly_closed_trade_keeps_its_realised_pnl(self):
+        terms = returns.terms_from_snapshot(SNAPSHOT)["BTC/USD.KRAKEN"]
+        fig = returns.trade_figures(_trade("0.1", "78000", pnl="400.00"), terms)
+        assert fig.return_on_underlying_pct is None and fig.pnl_usd == Decimal("400.00")
+        s = returns.summarise_run(SNAPSHOT, [_trade("0.1", "78000", pnl="400.00")], 100000)
+        assert s.net_pnl_usd == 0 and s.closed_trades == 0  # closed trades only
+
 
 class TestSummary:
     def test_run_figures(self):
@@ -163,6 +170,7 @@ class TestReportFields:
         assert fields["long_only"] is True
         assert "spot, unlevered, long-only" in fields["note"].lower()
         assert "fee tier 2" in fields["note"]
+        assert "upper bound when one scales in" in fields["note"]  # review: peak_qty from open
         pair = fields["pairs"]["BTC/USD.KRAKEN"]
         assert pair["maker_pct"] == "0.30" and pair["taker_pct"] == "0.60"
         assert pair["orders_below_minimum"] == 3

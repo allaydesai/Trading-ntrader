@@ -118,7 +118,7 @@ def _crypto(text: str, shown: str, *, strict: bool) -> str | None:
     coins = aliases.get(base)
     if not coins:
         fx_pair = base in _fx_currencies() and quote in _fx_currencies()
-        if strict or (quote == QUOTE and not fx_pair and "/" in text):
+        if strict or (quote == QUOTE and not fx_pair and ("/" in text or "-" in text)):
             raise _refuse(shown, f"unknown crypto coin {base}")
         return None
     if len(coins) > 1:

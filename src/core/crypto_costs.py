@@ -32,7 +32,7 @@ import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
-from typing import Any
+from typing import Any, Protocol
 
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.model.enums import LiquiditySide
@@ -210,25 +210,58 @@ def _cached_json(cache, key: str) -> dict[str, Any]:
     return json.loads(raw) if raw else {}
 
 
-def count_order_below_minimum(cache, instrument_id) -> int:
-    """Count one order a strategy dropped under the pair's minimum; returns the pair's total.
+class _KeyValueCache(Protocol):
+    """The slice of Nautilus' ``Cache`` the drop counter uses (its general object store)."""
+
+    def get(self, key: str) -> bytes | None: ...  # noqa: D102
+
+    def add(self, key: str, value: bytes) -> None: ...  # noqa: D102
+
+
+def _bump_orders_below_minimum(cache: _KeyValueCache, instrument_id: object, by: int) -> int:
+    counts = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
+    iid = str(instrument_id)
+    counts[iid] = int(counts.get(iid, 0)) + by
+    cache.add(ORDERS_BELOW_MINIMUM_KEY, json.dumps(counts).encode())
+    return counts[iid]
+
+
+def track_orders_below_minimum(cache: _KeyValueCache, instrument_id: object) -> None:
+    """Start the pair's drop count at 0: the strategy counts drops, so the run reports one.
+
+    A strategy that never calls this (or :func:`count_order_below_minimum`) leaves the pair
+    without a count, which reports as "not recorded" rather than a false 0.
+
+    Args:
+        cache: The run's cache (Nautilus ``Cache``).
+        instrument_id: The crypto pair the strategy sizes.
+    """
+    _bump_orders_below_minimum(cache, instrument_id, 0)
+
+
+def count_order_below_minimum(cache: _KeyValueCache, instrument_id: object) -> int:
+    """Count one order a strategy dropped under the pair's minimum.
 
     Kept in the run's cache (like the cost totals) so :func:`crypto_snapshot` saves it with the
     run (``crypto_pairs[<id>].orders_below_minimum``), not only in the strategy log (M5).
+
+    Args:
+        cache: The run's cache (Nautilus ``Cache``).
+        instrument_id: The crypto pair whose order was dropped.
+
+    Returns:
+        The pair's new total of dropped orders.
     """
-    counts = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
-    iid = str(instrument_id)
-    counts[iid] = int(counts.get(iid, 0)) + 1
-    cache.add(ORDERS_BELOW_MINIMUM_KEY, json.dumps(counts).encode())
-    return counts[iid]
+    return _bump_orders_below_minimum(cache, instrument_id, 1)
 
 
 def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, Any]:
     """``config_snapshot`` keys for a run's crypto pairs; ``{}`` when there are none.
 
     The account currency, the run's fee tier (``None`` if pairs ran at different tiers), 365
-    periods a year, and per pair the terms the run used, the USD it was charged and the orders
-    dropped under the minimum (0 when none were).
+    periods a year, and per pair the terms the run used, the USD it was charged and, when its
+    strategy counts them (:func:`track_orders_below_minimum`), the orders dropped under the
+    minimum. A pair no strategy counted has no ``orders_below_minimum`` ("not recorded").
     """
     instruments = list(instruments)
     terms = crypto_terms_by_instrument(instruments)
@@ -241,7 +274,8 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
         if instrument.id in terms:
             entry = terms[instrument.id].as_snapshot(instrument)
             entry["costs_usd"] = charged.get(str(instrument.id), CryptoCosts().as_snapshot())
-            entry["orders_below_minimum"] = int(dropped.get(str(instrument.id), 0))
+            if str(instrument.id) in dropped:
+                entry["orders_below_minimum"] = int(dropped[str(instrument.id)])
             pairs[str(instrument.id)] = entry
     tiers = {t.fee_tier for t in terms.values()}
     return {

@@ -28,6 +28,7 @@ from src.core.crypto_costs import (
     count_order_below_minimum,
     crypto_snapshot,
     crypto_terms,
+    track_orders_below_minimum,
 )
 from src.core.fee_models import IBKRCommissionModel
 from src.core.futures_costs import venue_cost_models
@@ -217,7 +218,18 @@ class TestSnapshot:
             "commission_taker": "79.87",
             "spread": "1.00",
         }
-        assert entry["orders_below_minimum"] == 0  # M5: always recorded, 0 when none dropped
+        # M5: no strategy counted drops here, so the count is "not recorded", not a false 0
+        assert "orders_below_minimum" not in entry
+
+    def test_a_tracked_pair_with_no_drops_records_zero(self):
+        cache = Cache()
+        cache.add_instrument(BTC)
+        track_orders_below_minimum(cache, BTC.id)
+        track_orders_below_minimum(cache, BTC.id)  # a second strategy: still 0
+        assert (
+            crypto_snapshot([BTC], cache)["crypto_pairs"]["BTC/USD.KRAKEN"]["orders_below_minimum"]
+            == 0
+        )
 
     def test_the_snapshot_records_the_orders_dropped_under_the_minimum_per_pair(self):
         """Crypto M5: the strategies' drop count reaches the saved run, not only the log."""

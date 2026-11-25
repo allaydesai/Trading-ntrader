@@ -174,8 +174,11 @@ reports 37 dropped orders on stop (final balance 5.00).
   `crypto` object, a warning) and `export_results` (crypto trade columns) all read them.
   Equity, futures and FX output is byte-identical.
 - **Drop count**: saved as `config_snapshot.crypto_pairs[<id>].orders_below_minimum` (no
-  migration); runs before M5 report "not recorded". A strategy records a drop with
-  `src.core.crypto_costs.count_order_below_minimum(cache, instrument_id)`.
+  migration). A strategy starts it with `track_orders_below_minimum(cache, instrument_id)` on
+  start and adds drops with `count_order_below_minimum(cache, instrument_id)`
+  (`src.core.crypto_costs`); an untracked pair and runs before M5 report "not recorded".
+- **Peak exposure** is exact for single-entry positions and an upper bound for a position that
+  scales in (trade rows keep the largest quantity, not the fill history).
 - **Symbols**: `src/services/crypto/symbols.crypto_coin` (aliases from `coin_specs.yaml`):
   `BTC`, `BTCUSD`, `BTC/USD`, `BTC-USD`, `XBTUSD`, `XXBTZUSD`, `BTC/USD.KRAKEN` are `BTC`;
   `BTC/EUR`, `BTCUSDT`, `BTC/USD.BINANCE`, `DOGE/USD` are refused (CLI exit 2, MCP

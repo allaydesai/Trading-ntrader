@@ -59,6 +59,7 @@ class TestRefuse:
             ("ETH/BTC", "quote"),
             ("BTC/USD.BINANCE", "venue"),
             ("DOGE/USD", "unknown"),
+            ("DOGE-USD", "unknown"),
             ("DOGEUSD.KRAKEN", "unknown"),
         ],
     )

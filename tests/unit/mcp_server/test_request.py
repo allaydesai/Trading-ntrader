@@ -235,8 +235,10 @@ class TestCryptoSymbols:
         assert len(hashes) == 1
 
     def test_units_take_any_form(self):
-        spec = self._spec("XBTUSD", units=0.25)
-        assert resolve(spec, default_catalog="").request.strategy_config["units"] == Decimal("0.25")
+        units = resolve(
+            self._spec("XBTUSD", units=0.25), default_catalog=""
+        ).request.strategy_config["units"]
+        assert units == Decimal("0.25") and isinstance(units, Decimal)
 
     @pytest.mark.parametrize(
         ("symbol", "why"),

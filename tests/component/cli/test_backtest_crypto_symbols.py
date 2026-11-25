@@ -87,6 +87,11 @@ class TestSpreadBps:
         assert compute_config_hash(plain) != compute_config_hash(wide)
         assert compute_config_hash(plain) == compute_config_hash(_resolve())
 
+    @pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+    def test_a_non_finite_spread_is_a_usage_error(self, bad):
+        with pytest.raises(click.UsageError, match="finite"):
+            _resolve(spread_bps=bad)
+
     def test_a_non_crypto_symbol_is_a_usage_error(self):
         with pytest.raises(click.UsageError, match="--spread-bps is for spot crypto only"):
             _resolve(symbol="AAPL", spread_bps=5.0)

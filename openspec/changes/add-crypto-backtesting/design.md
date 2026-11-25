@@ -490,16 +490,22 @@ long-only; Kraken Pro fee tier N; spread modelled".
   spread, 365-day annualisation, USD, and the note "Spot, unlevered, long-only; Kraken Pro fee
   tier N; spread modelled".
 - **Below-minimum drop count (decision M5-D1)**: persisted in the run's existing JSONB
-  `config_snapshot`, as `crypto_pairs[<id>].orders_below_minimum` (an int, `0` when none
-  dropped), beside the per-pair `costs_usd` M3 already stores there. **No DB migration**: the
+  `config_snapshot`, as `crypto_pairs[<id>].orders_below_minimum` (an int), beside the per-pair `costs_usd` M3 already stores there. **No DB migration**: the
   snapshot is where every other per-run crypto term lives (decision C11), and the key is
   inside the already free-form `crypto_pairs` dict, so `StrategyConfigSnapshot` and equity,
-  futures and FX rows are unchanged. Mechanism: the strategy counts each drop in the run's
-  Nautilus cache (`count_order_below_minimum`, key `ntrader.crypto_orders_below_minimum`, the
-  same pattern as the cost totals) and `crypto_snapshot` writes it when the run is saved. Runs
-  saved before M5 have no key and report "not recorded" (`null` in MCP/JSON), never a false
-  0. Only strategies that call `count_order_below_minimum` report drops: `sma_crossover` and
-  `buy_and_hold` do; the submodule strategies (Riptide, Bollinger) should call it in M6.
+  futures and FX rows are unchanged. Mechanism: a strategy that counts drops starts the pair's
+  count at 0 on start (`track_orders_below_minimum`) and adds each drop
+  (`count_order_below_minimum`) in the run's Nautilus cache (key
+  `ntrader.crypto_orders_below_minimum`, the same pattern as the cost totals);
+  `crypto_snapshot` writes it when the run is saved. A pair no strategy counted, and every run
+  saved before M5, has no key and reports "not recorded" (`null` in MCP/JSON), never a false
+  0. `sma_crossover` and `buy_and_hold` count; the submodule strategies (Riptide, Bollinger)
+  should in M6.
+- **Peak exposure caveat (PR review)**: a trade row stores a position's largest quantity and
+  its open time, not its fill history, so peak notional/exposure count a position that scales
+  in at its largest size from its open. Exact for single-entry positions (both core
+  strategies); an upper bound otherwise, and the report note says so. An exact figure needs a
+  persisted per-position quantity series (a persistence change, not M5).
 - **Symbol forms**: `src/services/crypto/symbols.py` derives the aliases from
   `coin_specs.yaml` (coin, Kraken `pair`, `altname`, `rest`), so `BTC`, `BTCUSD`, `BTC/USD`,
   `BTC-USD`, `XBTUSD`, `XBT/USD`, `XXBTZUSD` and `BTC/USD.KRAKEN` are all `BTC` in `backtest

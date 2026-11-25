@@ -18,6 +18,7 @@ the fee model charges and ``config_snapshot.crypto_pairs`` records.
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 
 import click
@@ -74,6 +75,8 @@ def apply_crypto_options(
         _require_coin(request, "--fee-tier")
         request = request.model_copy(update={"crypto_fee_tier": fee_tier})
     if spread_bps is not None:
+        if not math.isfinite(spread_bps):
+            raise click.UsageError(f"--spread-bps must be a finite number of bps, got {spread_bps}")
         _require_coin(request, "--spread-bps")
         request = request.model_copy(update={"crypto_spread_bps": Decimal(str(spread_bps))})
     return request
