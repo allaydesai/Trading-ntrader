@@ -100,6 +100,12 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: ``list_fragment.html``) and the CLI comparison (``compare.py``). Equity, futures and FX
 #: pages render byte for byte as before: ``tests/component/api/test_crypto_dashboard.py`` pins
 #: FX against goldens captured from the pre-M5 tree. 62 files; nothing else changed.
+#: **Regenerated 2026-11-25 by PO approval (Allay, crypto exact peak exposure follow-up to M5:
+#: "dashboard protected files may be changed if needed, keep it minimal")** for exactly one
+#: file: ``src/api/models/backtest_detail.py`` (the parameters list shows a crypto run's
+#: ``position_series`` as a fill count via ``src.services.crypto.display.snapshot_params``;
+#: a snapshot without one is passed through unchanged). Equity, futures and FX pages render
+#: byte for byte as before (their goldens). 62 files; nothing else changed.
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -114,7 +120,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "24111e8724ac4804fa632c0f7d2bab5b54608e65b389e4d8211ffec07e5e67a5"
     ),
     "src/api/models/backtest_detail.py": (
-        "c815987b61860b8d86f651447f40af6d93ae357a0ae76a9f22618b2e942fe6ff"
+        "43b15f0e502fcd807e2cdee31887dfd0c5a4e8b278e590d5b1474c3bcdea37de"
     ),
     "src/api/models/backtest_list.py": (
         "e634868a5b2b018f90413225325b56ea2d961c574e68a7b898be9088a085be27"

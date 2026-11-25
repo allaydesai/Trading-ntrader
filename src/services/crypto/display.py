@@ -166,6 +166,28 @@ def dashboard_panel(run: Any) -> dict[str, Any] | None:
     }
 
 
+def snapshot_params(snapshot: Mapping[str, Any] | None) -> Any:
+    """The run's ``config_snapshot`` for display, each pair's fill series cut to a count.
+
+    The series (``crypto_pairs[<id>].position_series``, one entry per fill) is for the exact
+    peak figures, not for reading; ``backtest show`` and the dashboard's parameters list show
+    ``"N fills (exact peak exposure)"`` instead. Anything without a series comes back as is.
+    """
+    pairs = (snapshot or {}).get("crypto_pairs") or {}
+    if not any("position_series" in (p or {}) for p in pairs.values()):
+        return snapshot
+    shown = {
+        iid: {
+            **p,
+            "position_series": f"{len(p['position_series'] or [])} fills (exact peak exposure)",
+        }
+        if "position_series" in (p or {})
+        else p
+        for iid, p in pairs.items()
+    }
+    return {**(snapshot or {}), "crypto_pairs": shown}
+
+
 def _price(value: Any, terms: PairTerms) -> str:
     """A price at the pair's price precision (``78,000.0000``)."""
     if value is None:

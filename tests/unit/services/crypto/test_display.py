@@ -158,3 +158,23 @@ class TestExposureBasis:
             display.flat_report_fields(display.run_summary(old))["crypto_peak_exposure_basis"]
             == "upper_bound"
         )
+
+
+class TestSnapshotParams:
+    def test_the_series_is_summarised_as_a_fill_count(self):
+        from tests.unit.services.crypto.test_exposure import _snapshot
+
+        snapshot = _snapshot(True)
+        params = display.snapshot_params(snapshot)
+        assert params["crypto_pairs"]["BTC/USD.KRAKEN"]["position_series"] == (
+            "4 fills (exact peak exposure)"
+        )
+        assert params["crypto_pairs"]["BTC/USD.KRAKEN"]["base"] == "BTC"
+        assert isinstance(snapshot["crypto_pairs"]["BTC/USD.KRAKEN"]["position_series"], list)
+
+    @pytest.mark.parametrize(
+        "snapshot",
+        [None, {}, {"config": {"a": 1}}, {"crypto_pairs": {"BTC/USD.KRAKEN": {"base": "BTC"}}}],
+    )
+    def test_anything_without_a_series_is_returned_as_it_is(self, snapshot):
+        assert display.snapshot_params(snapshot) is snapshot

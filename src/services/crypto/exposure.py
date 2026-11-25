@@ -10,7 +10,8 @@ their sum) and ``commission_usd`` is what the fill was charged (commission plus 
 
 Replaying the fills in ``seq`` order keeps each position's quantity and average open price
 (Nautilus' ``avg_px_open``: adds re-average it, reductions keep it) and the USD balance (the
-starting capital plus realised P&L net of costs, as the single-currency account books it).
+starting capital plus realised P&L net of costs, each fill's P&L in whole cents, as the
+single-currency account books it; the replay lands on the run's final balance to the cent).
 After every fill the run's notional is the sum over open positions of ``|quantity| x average
 open price`` (cost basis, the figure the M5 upper bound uses per trade) and exposure is that
 notional over the balance. A position opened and closed inside one bar counts while it was
@@ -24,12 +25,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 #: The position-series entry fields, in order.
 SERIES_FIELDS = ("seq", "ts_ns", "position_id", "position_qty", "fill_px", "commission_usd")
 _ZERO = Decimal(0)
+_CENT = Decimal("0.01")
 
 
 def has_series(series: Mapping[str, Any]) -> bool:
@@ -94,7 +96,8 @@ def replay(series: Mapping[str, Iterable[Any]], capital: Decimal | None) -> list
     for _, ts, key, qty_after, px, commission in _fills(series):
         holding = holdings.setdefault(key, _Holding())
         notional -= holding.notional
-        realised = holding.fill(qty_after, px)
+        # The account books each fill's realised P&L in whole cents
+        realised = holding.fill(qty_after, px).quantize(_CENT, rounding=ROUND_HALF_EVEN)
         notional += holding.notional
         if balance is not None:
             balance += realised - commission

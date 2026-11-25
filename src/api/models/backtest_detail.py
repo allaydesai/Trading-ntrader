@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, computed_field
 
 from src.services.crypto.display import dashboard_panel as crypto_dashboard_panel
+from src.services.crypto.display import snapshot_params as crypto_snapshot_params
 from src.services.futures.display import dashboard_panel
 from src.services.fx.display import dashboard_panel as fx_dashboard_panel
 
@@ -531,7 +532,7 @@ def build_configuration(run) -> ConfigurationSnapshot:
         strategy_name=run.strategy_name,
         strategy_type=run.strategy_type,
         data_source=run.data_source,
-        additional_params=run.config_snapshot or {},
+        additional_params=crypto_snapshot_params(run.config_snapshot) or {},
     )
 
 

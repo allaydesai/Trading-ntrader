@@ -148,6 +148,16 @@ class TestReplay:
             for b in ("99990", "99985", "99970", "102956", "102949", "104143", "105130", "104523")
         ]
 
+    def test_each_fills_realised_pnl_is_booked_in_whole_cents(self):
+        # 0.12345678 BTC bought at 78,000.0001 and sold at 79,000: P&L 123.456767... -> 123.46
+        series = {
+            BTC: [
+                [0, _ns(1), "P", "0.12345678", "78000.0001", "0"],
+                [1, _ns(2), "P", "0", "79000", "0"],
+            ]
+        }
+        assert exposure.replay(series, Decimal("1000"))[-1].balance == Decimal("1123.46")
+
     def test_has_series_needs_every_pair_to_carry_one(self):
         assert exposure.has_series({BTC: SERIES[BTC], ETH: []})
         assert not exposure.has_series({BTC: SERIES[BTC], ETH: None})
