@@ -900,8 +900,6 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `KRAKEN_API_KEY` | Kraken API key (optional: the backtester reads public endpoints) | - |
 | `KRAKEN_API_SECRET` | Kraken API secret (base64; set with the key or not at all) | - |
 | `KRAKEN_RATE_LIMIT` | Kraken requests/sec | `10` |
-| `KRAKEN_DEFAULT_MAKER_FEE` | Maker fee rate; default: the Kraken Pro spot schedule's default tier in `coin_specs.yaml` (tier 2). Backtests charge the schedule (`--fee-tier`) | `0.0030` |
-| `KRAKEN_DEFAULT_TAKER_FEE` | Taker fee rate; default as above | `0.0060` |
 
 > **Redis.** The engine cache reads `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` only. The
 > `REDIS_URL` still present in `.env.example` predates them and is read by nothing —

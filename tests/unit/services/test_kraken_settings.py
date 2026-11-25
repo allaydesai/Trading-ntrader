@@ -1,6 +1,5 @@
 """Unit tests for KrakenSettings configuration."""
 
-from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
@@ -47,31 +46,11 @@ class TestKrakenSettingsDefaults:
         # Assert
         assert settings.kraken_rate_limit == 10
 
-    def test_default_maker_fee(self):
-        """Default maker fee is Kraken Pro spot tier 2's 0.30% (crypto M7; was 0.16%)."""
-        # Arrange & Act
+    def test_no_default_fee_settings(self):
+        """The unused default fee settings are gone: runs charge the coin_specs.yaml schedule."""
         settings = KrakenSettings()
-
-        # Assert
-        assert settings.kraken_default_maker_fee == Decimal("0.0030")
-
-    def test_default_taker_fee(self):
-        """Default taker fee is Kraken Pro spot tier 2's 0.60% (crypto M7; was 0.26%)."""
-        # Arrange & Act
-        settings = KrakenSettings()
-
-        # Assert
-        assert settings.kraken_default_taker_fee == Decimal("0.0060")
-
-    def test_default_fees_follow_the_schedules_default_tier(self):
-        """The literal defaults equal coin_specs.yaml's default tier (the M3 fee model)."""
-        from src.services.crypto.coin_specs import get_fee_schedule
-
-        schedule = get_fee_schedule()
-        tier = schedule.tier(schedule.default_tier)
-        settings = KrakenSettings()
-        assert settings.kraken_default_maker_fee == tier.maker_pct / 100
-        assert settings.kraken_default_taker_fee == tier.taker_pct / 100
+        assert not hasattr(settings, "kraken_default_maker_fee")
+        assert not hasattr(settings, "kraken_default_taker_fee")
 
 
 class TestKrakenSettingsEnvOverrides:
@@ -112,27 +91,15 @@ class TestKrakenSettingsEnvOverrides:
         # Assert
         assert settings.kraken_rate_limit == 15
 
-    def test_maker_fee_from_env(self, monkeypatch):
-        """Maker fee loads from KRAKEN_DEFAULT_MAKER_FEE env var."""
-        # Arrange
+    def test_leftover_default_fee_env_vars_are_ignored(self, monkeypatch):
+        """An old .env that still sets KRAKEN_DEFAULT_*_FEE loads without error."""
         monkeypatch.setenv("KRAKEN_DEFAULT_MAKER_FEE", "0.001")
-
-        # Act
-        settings = KrakenSettings()
-
-        # Assert
-        assert settings.kraken_default_maker_fee == Decimal("0.001")
-
-    def test_taker_fee_from_env(self, monkeypatch):
-        """Taker fee loads from KRAKEN_DEFAULT_TAKER_FEE env var."""
-        # Arrange
         monkeypatch.setenv("KRAKEN_DEFAULT_TAKER_FEE", "0.002")
 
-        # Act
         settings = KrakenSettings()
 
-        # Assert
-        assert settings.kraken_default_taker_fee == Decimal("0.002")
+        assert not hasattr(settings, "kraken_default_maker_fee")
+        assert not hasattr(settings, "kraken_default_taker_fee")
 
 
 class TestKrakenSettingsKeySecretPairValidation:
@@ -199,50 +166,6 @@ class TestKrakenSettingsRateLimitValidation:
         # Arrange & Act & Assert
         with pytest.raises(ValidationError, match="kraken_rate_limit"):
             KrakenSettings(kraken_rate_limit=21)
-
-
-class TestKrakenSettingsFeeValidation:
-    """Test suite for fee range validation (0-1)."""
-
-    def test_maker_fee_zero_is_valid(self):
-        """Maker fee of 0 is valid."""
-        # Arrange & Act
-        settings = KrakenSettings(kraken_default_maker_fee=Decimal("0"))
-
-        # Assert
-        assert settings.kraken_default_maker_fee == Decimal("0")
-
-    def test_maker_fee_one_is_valid(self):
-        """Maker fee of 1 is valid (100%)."""
-        # Arrange & Act
-        settings = KrakenSettings(kraken_default_maker_fee=Decimal("1"))
-
-        # Assert
-        assert settings.kraken_default_maker_fee == Decimal("1")
-
-    def test_maker_fee_negative_raises_error(self):
-        """Maker fee of -1 raises validation error."""
-        # Arrange & Act & Assert
-        with pytest.raises(ValidationError, match="kraken_default_maker_fee"):
-            KrakenSettings(kraken_default_maker_fee=Decimal("-1"))
-
-    def test_maker_fee_above_one_raises_error(self):
-        """Maker fee above 1 raises validation error."""
-        # Arrange & Act & Assert
-        with pytest.raises(ValidationError, match="kraken_default_maker_fee"):
-            KrakenSettings(kraken_default_maker_fee=Decimal("2"))
-
-    def test_taker_fee_negative_raises_error(self):
-        """Taker fee of -1 raises validation error."""
-        # Arrange & Act & Assert
-        with pytest.raises(ValidationError, match="kraken_default_taker_fee"):
-            KrakenSettings(kraken_default_taker_fee=Decimal("-1"))
-
-    def test_taker_fee_above_one_raises_error(self):
-        """Taker fee above 1 raises validation error."""
-        # Arrange & Act & Assert
-        with pytest.raises(ValidationError, match="kraken_default_taker_fee"):
-            KrakenSettings(kraken_default_taker_fee=Decimal("2"))
 
 
 class TestKrakenCredentialValidationOnConnect:
