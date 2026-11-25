@@ -112,7 +112,7 @@ def crypto_warnings(parser: FirstRateCryptoParser, precision: int, out_of_order:
     if found.whole_volume_from_ns is not None:
         since = from_ns(found.whole_volume_from_ns)
         warnings.append(
-            f"volume is whole-coin from {since:%Y-%m-%d %H:%M} UTC (FirstRate rounding)"
+            f"volume is whole-coin from {since:%Y-%m-%d %H:%M} UTC ({parser.volume_note})"
         )
     return warnings
 
@@ -125,7 +125,14 @@ class CryptoImportService(FuturesImportService):
     """Chunked, coin-spec-driven variant of the futures import for ``AssetClass.CRYPTO``.
 
     Timeframes are ``LAST`` specs (``1-HOUR-LAST``); another price type is mapped to ``LAST``.
+    The Kraken importer (M7) swaps the parser and the source-end probe.
     """
+
+    parser_class: type[FirstRateCryptoParser] = FirstRateCryptoParser
+
+    @staticmethod
+    def _source_last(file_path: Path) -> datetime | None:
+        return compute_source_last_date(file_path, source_tz=timezone.utc)
 
     @staticmethod
     def _matches_timeframe(filename: str, timeframe: str | None) -> bool:
@@ -151,7 +158,7 @@ class CryptoImportService(FuturesImportService):
         end = getattr(row, _date_range_end_field_for_timeframe(timeframe))
         if end is None or recorded <= 0:
             return "new"
-        source_last = compute_source_last_date(file_path, source_tz=timezone.utc)
+        source_last = self._source_last(file_path)
         if source_last is None:  # refuse before write_series deletes the imported series
             raise ValueError(
                 f"{file_path.name} has no readable bars; kept the {recorded} imported "
@@ -204,7 +211,7 @@ class CryptoImportService(FuturesImportService):
         catalog = self._catalog_manager.resolve_catalog(catalog_name)
         timeframe = last_timeframe(timeframe)
         bar_type = BarType.from_str(f"{crypto_instrument_id(spec)}-{timeframe}-EXTERNAL")
-        parser = FirstRateCryptoParser(chunk_rows=self._chunk_rows)
+        parser = self.parser_class(chunk_rows=self._chunk_rows)
         precision = spec.price_precision
         tally = write_series(catalog, parser, file_path, bar_type, precision)
         warnings = crypto_warnings(parser, precision, tally.out_of_order)

@@ -30,7 +30,7 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 - **FirstRate bulk import** — multi-ticker, multi-timeframe CSV bundles into named Parquet catalogs, with dry-run preview and supplementary dividend/split data
 - Single-file CSV import directly to Parquet catalog
 - Interactive Brokers historical data fetching
-- Kraken historical crypto data fetching (BTC/USD, ETH/USD, etc.)
+- Kraken spot crypto data: the full OHLCVT history (`import --format kraken`) and recent spot candles (`--data-source kraken`)
 - Multi-source support: FirstRate, CSV, IBKR, Kraken
 - **Named catalogs** — isolate datasets (e.g. `e2e-test`, `firstrate-stocks`) under one base path
 - **Data explorer** — browse imported tickers, charts, statistics, and supplementary data in the web UI
@@ -69,7 +69,7 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 - Python 3.11+
 - PostgreSQL 16+ (for metadata storage)
 - Interactive Brokers TWS/Gateway (optional, for live data)
-- Kraken account with API keys (optional, for crypto data)
+- No Kraken account needed (crypto data comes from public Kraken endpoints)
 
 ### Installation
 
@@ -253,6 +253,23 @@ uv run python -m src.cli.main import --format firstrate --catalog firstrate-cryp
   --asset-class crypto /srv/market-data/raw/crypto
 ```
 
+**Kraken's own history** (`--format kraken`, crypto M7) is the same-venue source: Kraken
+publishes every spot pair's candles as `{ALTNAME}_{minutes}.csv` (UNIX-second bar opens, UTC,
+`timestamp,open,high,low,close,volume,trades`). `kraken_ohlcvt_download` pulls only the chosen
+pairs out of Kraken's ~9.5 GB split archive with HTTP range requests (no login, no API key; an
+existing raw file is never overwritten), and the import writes the same `BTC/USD.KRAKEN` bars,
+rounding and warnings as the FirstRate import, at 1-minute, 5-minute, 1-hour and 1-day (Kraken
+has no 30-minute file; other pairs and intervals in the directory are ignored):
+
+```bash
+uv run python -m src.services.crypto.kraken_ohlcvt_download \
+  --dest /srv/market-data/raw/kraken/ohlcvt XBTUSD ETHUSD SOLUSD
+uv run python -m src.cli.main import --format kraken --asset-class crypto \
+  --catalog kraken-crypto /srv/market-data/raw/kraken/ohlcvt
+uv run python -m src.cli.main backtest run --symbol BTC --catalog kraken-crypto \
+  --timeframe 1-day --start 2023-01-01 --end 2024-12-31 --starting-balance 100000
+```
+
 **Backtesting futures**: run `backtest run` with `--catalog firstrate-futures` (symbol `ES`,
 `NQ`, `CL`, `GC` or `ZN`). Commission is the spec's per-contract rate per side, margin is the
 spec's dollars per contract and an order over free margin is denied, and `sma_crossover` and
@@ -302,7 +319,7 @@ is 0.12820512 BTC) and place no order under Kraken's minimum; `riptide` and
 `bollinger_reversal` size the same way by USD notional or USD risk, long-only
 (`configs/riptide_crypto.yaml`, `configs/bollinger_crypto.yaml`, both on 1-day bars; other
 strategies are not ported). `--units X` trades exactly X coins
-per entry: a decimal on the increment and at or above the coin's minimum (BTC 0.00005); for
+per entry: a decimal on the increment and at or above the coin's minimum (BTC 0.00006); for
 example `--units 0.25`. Anything else exits 2. `backtest show`, `report`, `history`,
 `compare`, the MCP `get_run`/`compare_runs`/`export_results` and the dashboard show a crypto
 block: venue and fee tier, coin quantities at full precision, USD notional, maker vs taker
@@ -319,7 +336,10 @@ uv run python -m src.cli.main backtest run configs/riptide_crypto.yaml --catalog
 ```
 
 The research MCP's `submit_backtest`/`validate_config` take the same sizes as optional `units`
-(FX whole units; crypto a decimal coin size) and `contracts` (futures). A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
+(FX whole units; crypto a decimal coin size) and `contracts` (futures), and spot crypto's
+`fee_tier` (1-17) and `spread_bps` (finite, >= 0) as `--fee-tier`/`--spread-bps` take them: the
+same checks and the same config hash, refused (`invalid_params`) for any other instrument and,
+for now, on a study run. A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
 the same catalog for the whole window, or the run is refused before it starts. On daily bars a
 USDJPY stop/limit fill (and a gap-aware fill on USDJPY or a cross) converts at the previous
 day's rate (1.2% of one QA trade's P&L; see the FX doc).
@@ -537,13 +557,19 @@ For detailed IBKR setup, see [docs/setup/IBKR_SETUP.md](docs/setup/IBKR_SETUP.md
 
 ### 5. Fetch Crypto Data from Kraken
 
+`--data-source kraken` reads Kraken's public **spot** OHLC endpoint (no API key needed), which
+serves only the latest 720 candles of an interval (30 days of hourly bars, about 2 years of
+daily ones). An older range exits 2 and points at the `kraken-crypto` catalog (section above).
+The pair is the coin spec's `BTC/USD.KRAKEN`, charged the Kraken Pro spot schedule at the run's
+`--fee-tier`. Fetched bars are not saved to a catalog.
+
 ```bash
-# Run a backtest with Kraken crypto data
+# Run a backtest on the last ~4 weeks of Kraken hourly spot candles
 uv run python -m src.cli.main backtest run \
   --strategy sma_crossover \
   --symbol BTC/USD \
-  --start 2026-01-01 \
-  --end 2026-01-31 \
+  --start 2026-10-27 \
+  --end 2026-11-24 \
   --timeframe 1-hour \
   --data-source kraken
 ```
@@ -871,11 +897,11 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `FIRSTRATE_CATALOG_NAME` | Default catalog name for FirstRate imports | `firstrate-etf` |
 | `FMP_API_KEY` | Financial Modeling Prep API key (metadata import + `catalog validate-fmp`) | - |
 | `FMP_RATE_LIMIT` | Max FMP requests/min | `300` |
-| `KRAKEN_API_KEY` | Kraken API key | - |
-| `KRAKEN_API_SECRET` | Kraken API secret (base64) | - |
+| `KRAKEN_API_KEY` | Kraken API key (optional: the backtester reads public endpoints) | - |
+| `KRAKEN_API_SECRET` | Kraken API secret (base64; set with the key or not at all) | - |
 | `KRAKEN_RATE_LIMIT` | Kraken requests/sec | `10` |
-| `KRAKEN_DEFAULT_MAKER_FEE` | Maker fee rate | `0.0016` |
-| `KRAKEN_DEFAULT_TAKER_FEE` | Taker fee rate | `0.0026` |
+| `KRAKEN_DEFAULT_MAKER_FEE` | Maker fee rate; default: the Kraken Pro spot schedule's default tier in `coin_specs.yaml` (tier 2). Backtests charge the schedule (`--fee-tier`) | `0.0030` |
+| `KRAKEN_DEFAULT_TAKER_FEE` | Taker fee rate; default as above | `0.0060` |
 
 > **Redis.** The engine cache reads `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` only. The
 > `REDIS_URL` still present in `.env.example` predates them and is read by nothing —
@@ -1016,10 +1042,11 @@ uv run python -m src.cli.main data check --symbol <SYM> --venue <VENUE>
 
 ### Kraken Data Issues
 
-1. Verify API keys are set: `KRAKEN_API_KEY` and `KRAKEN_API_SECRET`
+1. "serves only the latest 720 ... candles" — the spot OHLC endpoint's window; use the
+   `kraken-crypto` catalog (`import --format kraken`) for older ranges
 2. Check symbol format — use standard pairs like `BTC/USD`, not Kraken-native formats
 3. Rate limit errors — reduce `KRAKEN_RATE_LIMIT` (default: 10 req/s)
-4. Missing data — Kraken Charts API may have gaps for low-volume pairs
+4. Keys are optional; if you set one, set both `KRAKEN_API_KEY` and `KRAKEN_API_SECRET`
 
 ### FirstRate Import Issues
 

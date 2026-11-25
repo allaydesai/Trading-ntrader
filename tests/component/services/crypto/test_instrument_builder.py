@@ -107,7 +107,7 @@ def test_info_records_the_terms():
         "pair": "BTC/USD",
         "rest": "XXBTZUSD",
         "altname": "XBTUSD",
-        "min_order_base": "0.00005",
+        "min_order_base": "0.00006",
         "min_order_usd": "0.5",
         "tick_size": "0.1",
         "discounted_pair": False,
@@ -119,7 +119,7 @@ def test_info_records_the_terms():
         "default_tier": 2,
     }
     assert set(info["unverified"]) == set(spec.unverified_fields())
-    assert "kraken_min_order_base" in info["unverified"]
+    assert info["unverified"] == ["typical_spread_bps", "kraken_discounted_pair"]
     assert "tier" not in info  # the tier is a run parameter, not an instrument property
 
 

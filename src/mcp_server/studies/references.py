@@ -16,13 +16,15 @@ from src.db.session_sync import get_sync_session
 from src.mcp_server.analysis.run_reads import load_run, run_catalog
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs import service
+from src.mcp_server.request import BacktestSpec, resolve
 from src.mcp_server.strategies import resolve_strategy
 from src.mcp_server.studies.candidates import sees_holdout
 from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.split import Split, require_in_sample, require_out_of_sample
 from src.mcp_server.studies.submit import StudyJob, require_status
 from src.mcp_server.tools import build_spec
-from src.services.provenance import git_provenance
+from src.services.crypto.cost_overrides import CryptoOverrideError, apply_crypto_overrides
+from src.services.provenance import compute_config_hash, git_provenance
 
 WINDOWS = ("in_sample", "out_of_sample")
 FROZEN = frozenset({"frozen", "tested", "promoted"})
@@ -79,7 +81,7 @@ def prepare_benchmark(
     return job, payload["warnings"]
 
 
-def _reproducible_spec(run: Any) -> Any:
+def _reproducible_spec(run: Any) -> BacktestSpec:
     snapshot = run.config_snapshot or {}
     catalog, bar_type = run_catalog(run), snapshot.get("bar_type")
     problem = None
@@ -95,7 +97,7 @@ def _reproducible_spec(run: Any) -> Any:
             f"Run {run.run_id} cannot be reproduced: {problem or 'its data source is unknown'}.",
             fix="Submit the same parameters as a new run instead.",
         )
-    return build_spec(
+    spec = build_spec(
         strategy=run.strategy_type,
         symbol=run.instrument_symbol,
         # Stored as timestamptz and read back in the session's zone: the run's days are UTC.
@@ -108,6 +110,34 @@ def _reproducible_spec(run: Any) -> Any:
         fill_seed=snapshot.get("fill_seed"),
         cost_multiplier=snapshot.get("cost_multiplier") or 1.0,
     )
+    return _with_crypto_costs(spec, snapshot, run.config_hash)
+
+
+def _with_crypto_costs(spec: BacktestSpec, snapshot: dict, stored_hash: str) -> BacktestSpec:
+    """A crypto run's ``fee_tier``/``spread_bps``, recovered when its hash says they were set.
+
+    The snapshot records the tier and spread charged, not whether the run set them or took
+    the coin spec's defaults; the stored config hash decides, as it does for the whole run.
+    """
+    pairs: dict[str, dict[str, Any]] = snapshot.get("crypto_pairs") or {}
+    terms = next(iter(pairs.values()), {})
+    tier, spread = snapshot.get("fee_tier"), terms.get("typical_spread_bps")
+    if tier is None and spread is None:
+        return spec
+    by_tier: dict[str, Any] = {} if tier is None else {"fee_tier": int(tier)}
+    by_spread: dict[str, Any] = {} if spread is None else {"spread_bps": float(spread)}
+    try:  # resolve once; each combination then only re-applies the overrides and hashes
+        base = resolve(spec, default_catalog=spec.catalog or "").request
+    except ToolFailure:
+        return spec  # prepare_backtest reports why the stored config no longer resolves
+    for update in ({}, by_tier, by_spread, {**by_tier, **by_spread}):
+        try:
+            request = apply_crypto_overrides(base, update.get("fee_tier"), update.get("spread_bps"))
+        except CryptoOverrideError:
+            continue
+        if compute_config_hash(request) == stored_hash:
+            return spec.model_copy(update=update)
+    return spec
 
 
 def _require_same_code_for_holdout(run: Any) -> None:

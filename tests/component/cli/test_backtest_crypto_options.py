@@ -121,7 +121,7 @@ class TestUnits:
             _resolve(units=Decimal("0.000000001"))
 
     def test_under_the_kraken_minimum_is_a_usage_error(self):
-        with pytest.raises(click.UsageError, match="minimum order 0.00005"):
+        with pytest.raises(click.UsageError, match="minimum order 0.00006"):
             _resolve(units=Decimal("0.00001"))
 
     def test_a_strategy_without_units_is_still_refused(self):

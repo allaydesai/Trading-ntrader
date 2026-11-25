@@ -14,15 +14,23 @@
 # typical_spread_bps: modelled full bid/ask spread on Kraken's USD book, charged as half per
 #                  side (decision C4, M3).
 # kraken:          the Kraken symbols, minimums and tick, kept for sizing (M4) and live orders.
-#                  `rest` is what KrakenPairMapper.to_kraken_rest returns today; `altname` is
-#                  the instrument's raw_symbol.
+#                  `rest` is the pair's key in Kraken's AssetPairs result (KrakenPairMapper
+#                  .to_kraken_rest returns it for these coins); `altname` is the instrument's
+#                  raw_symbol and the name of the pair's files in Kraken's OHLCVT history.
+#                  Verified (M7, 2026-11-24) against the public endpoint
+#                  https://api.kraken.com/0/public/AssetPairs?pair=XBTUSD,ETHUSD,SOLUSD
+#                  (docs: https://docs.kraken.com/api/docs/rest-api/get-tradable-asset-pairs):
+#                  rest = result key, altname = altname, min_order_base = ordermin,
+#                  min_order_usd = costmin, tick_size = tick_size. M1's best-known figures were
+#                  wrong for BTC ordermin (0.00005, live 0.00006), SOL ordermin (0.02, live 0.05)
+#                  and SOL rest (SOLZUSD, which Kraken rejects: "Unknown asset pair"; it is SOLUSD).
 # data:            "firstrate" when bars exist on the VPS, "none" for a spec-only coin.
 #
 # PROVENANCE. Every value in SOURCED_FIELDS has a `sources` entry: status VERIFIED (checked) or
 # UNVERIFIED (a best-known public figure). The fee tier rates are VERIFIED against the Kraken Pro
-# CA fee page (2026-11-24). The Kraken pair terms (altname, minimums, tick, discounted-pair
-# membership) and the spread are UNVERIFIED: Allay confirms them (tasks.md 3.9) before M3, which
-# first charges them, merges. Data precision is measured from the FirstRate files.
+# CA fee page (2026-11-24). The Kraken pair symbols, minimums and tick are VERIFIED against the
+# public AssetPairs endpoint (M7, 2026-11-24). Discounted-pair membership and the spread stay
+# UNVERIFIED (tasks.md 3.9: Allay's answers). Data precision is measured from the FirstRate files.
 #
 # Decimal values are quoted so YAML never turns them into floats.
 schema_version: 1
@@ -96,7 +104,7 @@ coins:
       pair: BTC/USD
       rest: XXBTZUSD
       altname: XBTUSD
-      min_order_base: "0.00005"
+      min_order_base: "0.00006"   # AssetPairs XXBTZUSD ordermin, 2026-11-24 (M1 had 0.00005)
       min_order_usd: "0.5"
       tick_size: "0.1"
       discounted_pair: false
@@ -115,21 +123,18 @@ coins:
         status: UNVERIFIED
         source: Modelled full spread on Kraken's USD book (decision C4); not measured.
         as_of: "2026-11-24"
-      kraken_rest:
-        status: UNVERIFIED
+      kraken_rest: &kraken_assetpairs
+        status: VERIFIED
         source: >-
-          KrakenPairMapper.to_kraken_rest output today (SOL maps to SOLZUSD; Kraken's own name
-          may be SOLUSD). Checked against the AssetPairs API in M7.
+          Kraken public REST AssetPairs
+          (https://api.kraken.com/0/public/AssetPairs?pair=XBTUSD,ETHUSD,SOLUSD; docs
+          https://docs.kraken.com/api/docs/rest-api/get-tradable-asset-pairs), read by M7
+          without an API key: rest = result key, altname, ordermin, costmin, tick_size.
         as_of: "2026-11-24"
-      kraken_altname: &kraken_public
-        status: UNVERIFIED
-        source: >-
-          Best-known public Kraken AssetPairs figure; not checked against the live
-          AssetPairs endpoint.
-        as_of: "2026-11-24"
-      kraken_min_order_base: *kraken_public
-      kraken_min_order_usd: *kraken_public
-      kraken_tick_size: *kraken_public
+      kraken_altname: *kraken_assetpairs
+      kraken_min_order_base: *kraken_assetpairs
+      kraken_min_order_usd: *kraken_assetpairs
+      kraken_tick_size: *kraken_assetpairs
       kraken_discounted_pair:
         status: UNVERIFIED
         source: >-
@@ -163,9 +168,9 @@ coins:
     typical_spread_bps: "5"
     kraken:
       pair: SOL/USD
-      rest: SOLZUSD
+      rest: SOLUSD                # AssetPairs result key, 2026-11-24 (M1 had SOLZUSD, rejected)
       altname: SOLUSD
-      min_order_base: "0.02"
+      min_order_base: "0.05"      # AssetPairs SOLUSD ordermin, 2026-11-24 (M1 had 0.02)
       min_order_usd: "0.5"
       tick_size: "0.01"
       discounted_pair: false

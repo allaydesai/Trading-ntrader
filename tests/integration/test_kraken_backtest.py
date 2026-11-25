@@ -3,14 +3,15 @@ Integration tests for end-to-end Kraken crypto backtest execution.
 
 These tests exercise the full backtest pipeline with Kraken data:
 - BacktestRequest with data_source="kraken"
-- DataCatalogService.fetch_or_load(data_source="kraken")
+- load_backtest_data(data_source="kraken") -> fetch_kraken_spot (crypto M7: spot OHLC, nothing
+  persisted; DataCatalogService refuses the kraken source)
 - BacktestOrchestrator.execute()
 - Result extraction and metrics
 """
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -176,39 +177,28 @@ class TestKrakenBacktestIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_kraken_data_loads_via_catalog_service(self, kraken_bars, kraken_instrument):
-        """DataCatalogService.fetch_or_load routes to Kraken client."""
-        mock_kraken_client = AsyncMock()
-        mock_kraken_client.is_connected = True
-        mock_kraken_client.connect = AsyncMock(return_value={"connected": True})
-        mock_kraken_client.fetch_bars = AsyncMock(return_value=(kraken_bars, kraken_instrument))
+    async def test_kraken_data_loads_via_the_spot_fetch(self, kraken_bars, kraken_instrument):
+        """load_backtest_data(data_source="kraken") calls the spot fetch, not the catalog."""
+        from rich.console import Console
 
-        mock_catalog = MagicMock()
-        mock_catalog.write_data = MagicMock()
+        from src.cli.commands._backtest_helpers import load_backtest_data
 
-        with patch(
-            "src.services.data_catalog.ParquetDataCatalog",
-            return_value=mock_catalog,
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        fetch = AsyncMock(return_value=(kraken_bars, kraken_instrument))
+        with (
+            patch("src.services.kraken_client.fetch_kraken_spot", fetch),
+            patch("src.cli.commands._backtest_helpers.DataCatalogService") as catalog,
         ):
-            from src.services.data_catalog import DataCatalogService
-
-            svc = DataCatalogService(
-                catalog_path="/tmp/test_catalog",
-                kraken_client=mock_kraken_client,
+            result = await load_backtest_data(
+                data_source="kraken",
+                instrument_id="BTC/USD.KRAKEN",
+                bar_type_spec="1-DAY-LAST",
+                start=start,
+                end=end,
+                console=Console(quiet=True),
             )
-            svc.catalog = mock_catalog
 
-            start = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            end = datetime(2024, 1, 31, tzinfo=timezone.utc)
-
-            with patch.object(svc, "_rebuild_availability_cache"):
-                bars = await svc.fetch_or_load(
-                    instrument_id="BTC/USD.KRAKEN",
-                    start=start,
-                    end=end,
-                    bar_type_spec="1-DAY-LAST",
-                    data_source="kraken",
-                )
-
-            assert len(bars) == 30
-            mock_kraken_client.fetch_bars.assert_called_once()
+        assert len(result.bars) == 30 and result.data_source_used == "Kraken"
+        fetch.assert_awaited_once_with("BTC/USD.KRAKEN", start, end, "1-DAY-LAST")
+        catalog.assert_not_called()
