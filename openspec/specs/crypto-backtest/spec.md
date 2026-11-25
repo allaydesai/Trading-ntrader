@@ -1,0 +1,128 @@
+# crypto-backtest Specification
+
+## Purpose
+How spot crypto backtests run on an unlevered, long-only USD account: Kraken Pro spot commission in
+USD, fractional coin sizing, calendar-day risk annualisation, the Kraken data path (no perpetual
+pricing, fallback pairs, old-range refusal) and Kraken settings defaults. Created by archiving
+change `add-crypto-backtesting` (`openspec/changes/archive/2026-11-25-add-crypto-backtesting/`).
+
+## Requirements
+
+### Requirement: Spot crypto runs on an unlevered, long-only USD account
+A backtest venue that lists a crypto `CurrencyPair` SHALL be a USD account in which an order is
+denied `MARGIN_EXCEEDS_FREE_BALANCE` when its notional plus open exposure exceeds free USD, and
+denied `CRYPTO_SPOT_NO_SHORT` when it would leave a net short position. Orders that only reduce
+a long, including bracket exits, SHALL be accepted. Futures and FX deny reasons SHALL be
+unchanged.
+
+#### Scenario: short sale refused
+- **WHEN** a strategy with no BTC position submits a 0.1 BTC SELL
+- **THEN** the order is denied with a reason starting `CRYPTO_SPOT_NO_SHORT`
+
+#### Scenario: bracket exits accepted
+- **WHEN** a 0.1 BTC long carries a resting stop-loss and a take-profit SELL of 0.1 BTC each
+- **THEN** both exits are accepted and the one that fills closes the position
+
+#### Scenario: a close cannot strand a resting sell
+- **WHEN** a 0.1 BTC long has a resting 0.1 BTC limit SELL and the strategy closes the long at
+  market
+- **THEN** the close is denied with a reason starting `CRYPTO_SPOT_NO_SHORT` and the long stays
+  open
+
+#### Scenario: an exit closes beside its stop's cancel
+- **WHEN** a 0.1 BTC long has a reduce-only 0.1 BTC stop SELL, and in one bar the strategy
+  cancels the stop and submits a reduce-only 0.1 BTC market close of the long
+- **THEN** the close is accepted and fills on that bar, and a second close, a 0.2 BTC
+  reduce-only close or a SELL with no position id submitted beside the cancel is denied with a
+  reason starting `CRYPTO_SPOT_NO_SHORT`
+
+#### Scenario: a plain sell keeps the stop's claim
+- **WHEN** a 0.3 BTC long has a reduce-only 0.1 BTC stop SELL pending cancel and a resting
+  plain 0.1 BTC limit SELL, and the strategy submits a reduce-only 0.2 BTC close
+- **THEN** the close is denied with a reason starting `CRYPTO_SPOT_NO_SHORT`
+
+#### Scenario: no leverage
+- **WHEN** an account with USD 10,000 free submits a BUY of 0.2 BTC at 78,000
+- **THEN** the order is denied with a reason starting `MARGIN_EXCEEDS_FREE_BALANCE`
+
+### Requirement: Crypto commission follows the Kraken Pro spot schedule, in USD
+A crypto venue SHALL charge each fill, in USD and scaled by the cost-stress multiplier, the
+run's Kraken Pro fee tier rate times the fill's trade value, using the maker rate for a fill
+that rested on the book and the taker rate otherwise, plus a modelled half-spread per side.
+No minimum fee SHALL apply. Equity, futures and FX venues SHALL keep their models unchanged.
+
+#### Scenario: tier 1 taker
+- **WHEN** 0.128 BTC is bought at 78,000 by a market order at tier 1, with no spread
+- **THEN** the commission is USD 79.87
+
+#### Scenario: tier 1 maker
+- **WHEN** the same quantity fills from a resting limit order at tier 1, with no spread
+- **THEN** the commission is USD 39.94
+
+#### Scenario: default tier
+- **WHEN** the run is started without a fee tier and the market order above fills
+- **THEN** the commission is USD 59.90 (tier 2 taker, the spec's default) and the snapshot
+  records tier 2
+
+#### Scenario: selected tier
+- **WHEN** the run is started with fee tier 4 and the market order above fills
+- **THEN** the commission is USD 34.94 and the snapshot records tier 4
+
+### Requirement: Crypto positions are sized in fractional coin units
+Sizing helpers and strategies SHALL size crypto orders in base-coin units floored to the
+instrument's size increment, with no minimum of one unit, submit them through the instrument's
+quantity factory, and drop (and count once per run) an order below the venue minimum.
+
+#### Scenario: notional budget on BTC
+- **WHEN** a USD 10,000 budget is sized on BTC at 78,000 with increment 0.00000001
+- **THEN** the order quantity is 0.12820512 BTC
+
+### Requirement: Crypto risk metrics annualise on calendar days
+A run whose instruments are crypto SHALL annualise volatility, Sharpe and Sortino on 365
+periods per year and record the value in its config snapshot. Other runs SHALL keep 252.
+
+#### Scenario: snapshot records the basis
+- **WHEN** a BTC run is persisted
+- **THEN** its config snapshot has `periods_per_year` 365 and an equity run's snapshot has no
+  such key
+
+### Requirement: Kraken-fetched data is never priced from perpetuals
+A backtest with `--data-source kraken` SHALL fetch Kraken's spot OHLC series for a spot pair,
+or refuse the request with a message naming the unsupported range, and SHALL build its
+instrument and fees from the coin spec when the coin has a spec. Fetched bars SHALL NOT be
+persisted to the default catalog.
+
+#### Scenario: BTC/USD from Kraken
+- **WHEN** `backtest run --data-source kraken --symbol BTC/USD` fetches bars
+- **THEN** no perpetual (`PF_`) chart symbol is requested and the venue charges the Kraken Pro
+  spot schedule
+
+### Requirement: A coin without a spec gets a fallback Kraken pair
+A USD-quoted coin with no coin spec fetched with `--data-source kraken` SHALL get a fallback
+pair built from Kraken's public pair metadata, every term flagged UNVERIFIED, charged on the
+same Kraken Pro schedule.
+
+#### Scenario: DOGE/USD from Kraken
+- **WHEN** a DOGE/USD run fetches bars from Kraken
+- **THEN** its pair is `DOGE/USD.KRAKEN` with Kraken's minimum order and the venue charges the
+  default Kraken Pro tier
+
+### Requirement: Old Kraken ranges are refused before any request
+A `--data-source kraken` range starting before the spot endpoint's window (the latest 720
+candles of the interval) SHALL be refused before any request, as a usage error that names the
+window's first candle and the Kraken-history catalog path.
+
+#### Scenario: range older than the spot window
+- **WHEN** `backtest run --data-source kraken --symbol BTC/USD --timeframe 1-hour` starts
+  more than 720 hours ago
+- **THEN** the command exits 2 naming the window's first candle and the `kraken-crypto`
+  import, and no Kraken request is made
+
+### Requirement: Kraken settings default to the Kraken Pro schedule
+`KrakenSettings` SHALL default its maker and taker fees to the coin-spec fee schedule's default
+tier (tier 2: 0.30% maker, 0.60% taker), and SHALL NOT require an API key, since the endpoints
+the backtester reads are public. A key without a secret, or the reverse, SHALL still be refused.
+
+#### Scenario: default fees
+- **WHEN** `KrakenSettings()` is built with no fee environment variables
+- **THEN** its maker fee is 0.0030 and its taker fee is 0.0060
