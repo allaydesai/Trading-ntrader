@@ -19,6 +19,7 @@ from src.mcp_server.studies.references import _with_crypto_costs
 from src.mcp_server.tools import build_spec
 from src.models.backtest_request import BacktestRequest
 from src.services.crypto.cost_overrides import CryptoOverrideError, apply_crypto_overrides
+from src.services.provenance import compute_config_hash
 
 pytestmark = pytest.mark.unit
 
@@ -144,6 +145,17 @@ class TestSharedValidator:
             apply_crypto_overrides(self._request(), 18, names=("--fee-tier", "--spread-bps"))
         with pytest.raises(CryptoOverrideError, match=r"^--spread-bps must be a finite"):
             apply_crypto_overrides(self._request(), None, -1, names=("--fee-tier", "--spread-bps"))
+
+    @pytest.mark.parametrize("bad", [10**400, Decimal("sNaN"), Decimal("-1"), "x"])
+    def test_an_unconvertible_spread_is_refused_not_raised(self, bad):
+        with pytest.raises(CryptoOverrideError, match="finite number of bps"):
+            apply_crypto_overrides(self._request(), None, bad)
+
+    def test_negative_zero_is_the_zero_spread(self):
+        zero = apply_crypto_overrides(self._request(), None, 0)
+        negative = apply_crypto_overrides(self._request(), None, -0.0)
+        assert str(negative.crypto_spread_bps) == str(zero.crypto_spread_bps) == "0.0"
+        assert compute_config_hash(negative) == compute_config_hash(zero)
 
     def test_a_bool_is_not_a_tier(self):
         with pytest.raises(CryptoOverrideError, match="Kraken tier"):

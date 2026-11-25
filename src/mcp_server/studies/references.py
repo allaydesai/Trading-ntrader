@@ -23,7 +23,8 @@ from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.split import Split, require_in_sample, require_out_of_sample
 from src.mcp_server.studies.submit import StudyJob, require_status
 from src.mcp_server.tools import build_spec
-from src.services.provenance import git_provenance
+from src.services.crypto.cost_overrides import CryptoOverrideError, apply_crypto_overrides
+from src.services.provenance import compute_config_hash, git_provenance
 
 WINDOWS = ("in_sample", "out_of_sample")
 FROZEN = frozenset({"frozen", "tested", "promoted"})
@@ -125,13 +126,17 @@ def _with_crypto_costs(spec: BacktestSpec, snapshot: dict, stored_hash: str) -> 
         return spec
     by_tier: dict[str, Any] = {} if tier is None else {"fee_tier": int(tier)}
     by_spread: dict[str, Any] = {} if spread is None else {"spread_bps": float(spread)}
+    try:  # resolve once; each combination then only re-applies the overrides and hashes
+        base = resolve(spec, default_catalog=spec.catalog or "").request
+    except ToolFailure:
+        return spec  # prepare_backtest reports why the stored config no longer resolves
     for update in ({}, by_tier, by_spread, {**by_tier, **by_spread}):
-        candidate = spec.model_copy(update=update)
         try:
-            if resolve(candidate, default_catalog=spec.catalog or "").config_hash == stored_hash:
-                return candidate
-        except ToolFailure:
+            request = apply_crypto_overrides(base, update.get("fee_tier"), update.get("spread_bps"))
+        except CryptoOverrideError:
             continue
+        if compute_config_hash(request) == stored_hash:
+            return spec.model_copy(update=update)
     return spec
 
 

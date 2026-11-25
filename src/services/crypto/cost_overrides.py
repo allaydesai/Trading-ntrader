@@ -37,6 +37,19 @@ def _require_coin(request: BacktestRequest, name: str) -> None:
         )
 
 
+def _finite_bps(value: object) -> float | None:
+    """``value`` as a finite, non-negative float (``-0.0`` is ``0.0``), else ``None``."""
+    if isinstance(value, bool):
+        return None
+    try:
+        bps = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):  # a 400-digit int, Decimal("sNaN")
+        return None
+    if not math.isfinite(bps) or bps < 0:
+        return None
+    return bps + 0.0  # -0.0 + 0.0 is 0.0: one zero spread, one config hash
+
+
 def apply_crypto_overrides(
     request: BacktestRequest,
     fee_tier: int | None,
@@ -65,14 +78,14 @@ def apply_crypto_overrides(
         _require_coin(request, tier_name)
         request = request.model_copy(update={"crypto_fee_tier": fee_tier})
     if spread_bps is not None:
-        if isinstance(spread_bps, bool) or not math.isfinite(spread_bps) or spread_bps < 0:
+        bps = _finite_bps(spread_bps)
+        if bps is None:
             raise CryptoOverrideError(
                 f"{spread_name} must be a finite number of bps >= 0, got {spread_bps}"
             )
         _require_coin(request, spread_name)
         # Through float, as click hands the CLI its value: 1 and 1.0 are saved alike ("1.0")
-        spread = Decimal(str(float(spread_bps)))
-        request = request.model_copy(update={"crypto_spread_bps": spread})
+        request = request.model_copy(update={"crypto_spread_bps": Decimal(str(bps))})
     return request
 
 
