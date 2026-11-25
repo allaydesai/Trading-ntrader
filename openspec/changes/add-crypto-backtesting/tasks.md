@@ -196,19 +196,62 @@ Equity and FX results for the existing smoke configs are unchanged.
 
 Acceptance: `--data-source kraken` never builds a spot instrument from perpetual prices; it
 fetches the spot series or refuses with a clear message; its instrument and fees come from
-`coin_specs.yaml`.
+`coin_specs.yaml`. Added by Allay for M7 (2026-11-24): Kraken's own price history is imported
+(not only evaluated) into a new `kraken-crypto` catalog, smoke-tested on BTC/ETH/SOL with a BTC
+comparison against `firstrate-crypto`; `KrakenSettings` default fees move to the Kraken Pro
+tier model (tier 2: 0.30% / 0.60%); the M1 UNVERIFIED Kraken pair terms are checked against
+Kraken's public endpoints (no API key) and corrected with sources in `coin_specs.yaml`.
 
-- [ ] 7.1 Manual/spike: confirm against the live Kraken API whether the Charts API serves spot
+- [x] 7.1 Manual/spike: confirm against the live Kraken API whether the Charts API serves spot
       OHLC (tick type, symbol) and how far back; record the answer (removes the UNVERIFIED in
       design section 11). Also check Kraken's downloadable OHLCVT/trade history as a same-venue
-      source for BTC/ETH/SOL (coverage, format); record a recommendation, no import yet.
-- [ ] 7.2 Unit (failing first): `KrakenPairMapper` spot charts symbol (or the refusal when the
+      source for BTC/ETH/SOL (coverage, format); record a recommendation.
+      Result (2026-11-24, design section 11): no. The Charts API lists only futures symbols
+      under `mark`/`spot`/`trade`; its `spot` tick type is the futures index (volume 0, from
+      2022-03-22). Spot REST `OHLC` serves the latest 720 candles plus the open one. Kraken's
+      OHLCVT archive covers every pair from its first trade to 2026-09-30 (BTC from
+      2013-10-06, ETH 2015-08-07, SOL 2021-06-17); recommendation: `kraken-crypto` is the
+      primary crypto source, FirstRate a cross-check (median close basis 3.5-6.6 bp since
+      2021-07, far wider before).
+- [x] 7.2 Unit (failing first): `KrakenPairMapper` spot charts symbol (or the refusal when the
       range is older than the REST window); the mapper never returns a `PF_` symbol for spot.
-- [ ] 7.3 Implement; move code out of `kraken_client.py`/`_backtest_helpers.py` (no baseline growth).
-- [ ] 7.4 Component (failing first): the fetched instrument is spec-built (`BTC/USD.KRAKEN`),
+      `tests/component/services/crypto/test_kraken_spot.py` (component: it builds Nautilus
+      bars): REST names Kraken accepts (`SOLUSD`, `XDGUSD`), no `to_kraken_charts`, the
+      interval map, the 720-candle window and the refusal before any request.
+- [x] 7.3 Implement; move code out of `kraken_client.py`/`_backtest_helpers.py` (no baseline growth).
+      `src/services/crypto/kraken_spot.py`; `KrakenHistoricalClient` 145 -> 98 statements
+      (baseline entry removed); `_load_kraken_data` no longer builds a fallback pair or
+      persists to the default catalog. `run_backtest` 175 -> 176 (the exit-2 refusal, entry
+      bumped with the reason).
+- [x] 7.4 Component (failing first): the fetched instrument is spec-built (`BTC/USD.KRAKEN`),
       the venue gets `CryptoCommissionModel` at the run's tier, and a coin without a spec gets
       the fallback instrument with the same schedule.
-- [ ] 7.5 Implement; update `KrakenSettings` docs and the README.
+      `tests/component/cli/test_backtest_kraken_source.py`.
+- [x] 7.5 Implement; update `KrakenSettings` docs and the README.
+- [x] 7.7 Unit (failing first): `tests/unit/services/crypto/test_kraken_ohlcvt_download.py`:
+      the split archive reads as one file across part boundaries; only the chosen
+      `{ALTNAME}_{minutes}.csv` members are written, with the archive manifest and a
+      `SHA256SUMS`; an existing raw file is never overwritten; a missing pair is an error.
+      Implemented in `src/services/crypto/kraken_ohlcvt_download.py` (HTTP range reads; ~210 MB
+      of the 9.5 GB archive for three coins).
+- [x] 7.8 Component (failing first): `tests/component/services/crypto/test_kraken_import.py`
+      and `tests/component/cli/commands/test_import_crypto.py`: discovery by spec altname and
+      interval (other pairs and intervals ignored), epoch-second UTC stamps, rounding and
+      warnings, re-run skip, `import --format kraken` routing, its four timeframes and exit 2
+      for 30-minute or another asset class. Implemented in
+      `src/services/crypto/kraken_import.py` on the FirstRate crypto service (two hooks: the
+      stamp reader and the source-end probe).
+- [x] 7.9 Unit: the coin specs' Kraken rest, altname, minimums and tick equal AssetPairs
+      (read 2026-11-24) and are VERIFIED with the endpoint as source; spread and
+      discounted-pair stay UNVERIFIED. Corrected: BTC `min_order_base` 0.00005 -> 0.00006,
+      SOL 0.02 -> 0.05, SOL `rest` SOLZUSD -> SOLUSD.
+- [x] 7.10 Unit (failing first): `KrakenSettings` default fees are the schedule's default
+      tier (0.0030 / 0.0060, read from `coin_specs.yaml`); connecting needs no API key.
+- [x] 7.11 Manual smoke (2026-11-24): download and import BTC/ETH/SOL into
+      `/srv/market-data/catalogs/kraken-crypto` (bar counts equal source lines, ranges
+      recorded); BTC backtests on `kraken-crypto` vs `firstrate-crypto`; live
+      `--data-source kraken` refusal and recent-window runs. Results in
+      `docs/agent/crypto-backtesting.md` ("Kraken data (M7)").
 - [ ] 7.6 Archive: `/openspec-archive-change add-crypto-backtesting` once M7 merges, so
       `openspec/specs/crypto-*` matches the code.
 

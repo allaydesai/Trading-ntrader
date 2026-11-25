@@ -37,28 +37,35 @@
 
 ## Kraken Client
 
-`src/services/kraken_client.py` — `KrakenHistoricalClient` class.
+`src/services/kraken_client.py` — `KrakenHistoricalClient` class; the spot logic lives in
+`src/services/crypto/kraken_spot.py` (crypto M7).
 
 **Configuration** via `src/config.py:KrakenSettings`:
-- `KRAKEN_API_KEY`, `KRAKEN_API_SECRET` (must be paired — both set or both empty)
+- `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`: optional (public endpoints); both set or both empty
 - `KRAKEN_RATE_LIMIT` (default: 10 req/s)
-- `KRAKEN_DEFAULT_MAKER_FEE` / `KRAKEN_DEFAULT_TAKER_FEE`
+- `KRAKEN_DEFAULT_MAKER_FEE` / `KRAKEN_DEFAULT_TAKER_FEE`: default to the Kraken Pro spot
+  schedule's default tier in `coin_specs.yaml` (0.0030 / 0.0060); runs charge the schedule
 
 **Pair mapping** — users specify standard pairs (BTC/USD), internally mapped to:
-- REST API: XXBTZUSD
-- Charts API: XBT/USD
+- REST API: the coin spec's AssetPairs key (`XXBTZUSD`, `SOLUSD`), else the altname form
+  (`XDGUSD`)
 - Nautilus InstrumentId: BTC/USD.KRAKEN
 
-**Data source**: Futures Charts API (`/api/charts/v1/spot/{symbol}/{resolution}`) — supports arbitrary date ranges with pagination (Spot OHLC limited to 720 entries).
+**Data source**: spot REST `OHLC` (`/0/public/OHLC`), the latest 720 candles of an interval.
+An older range raises `KrakenSpotRangeError` (a `DataNotFoundError`; the CLI exits 2) before any
+request. The Futures Charts API is not used: it lists only futures symbols, and its `spot` tick
+type is an index. Nothing is persisted; `_load_kraken_data` calls `fetch_kraken_spot` directly.
 
-Uses both `SpotMarket` and `FuturesMarket` from kraken SDK. Rate limit: sliding window.
+**History**: `src/services/crypto/kraken_ohlcvt_download.py` extracts pairs from Kraken's
+OHLCVT archive by HTTP range reads; `import --format kraken` (`src/services/crypto/kraken_import.py`)
+imports them into a crypto catalog (`kraken-crypto`). See `docs/agent/crypto-backtesting.md`.
 
 ## Parquet Catalog
 
 Market data stored as Parquet files under Nautilus catalog structure.
 - `data_catalog.py` + `data_service.py` handle reads/writes
 - CSV → `csv_loader.py` → `nautilus_converter.py` → Parquet
-- Kraken → `kraken_client.py` → same Parquet structure
+- Kraken OHLCVT history → `import --format kraken` → same Parquet structure (`kraken-crypto`)
 - Parquet catalog is the **single source of truth** for market data
 
 ## Exceptions

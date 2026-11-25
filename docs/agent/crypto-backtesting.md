@@ -1,12 +1,13 @@
 # Crypto backtesting: coins, instruments, account model
 
 Spot crypto on Kraken, planned in `openspec/changes/add-crypto-backtesting/` (milestones
-M1-M7; decisions C1-C25 in `design.md` section 13). **Status: M1-M6 implemented** (coin
+M1-M7; decisions C1-C25 in `design.md` section 13). **Status: M1-M7 implemented** (coin
 specs, instruments, catalog dispatch, engine spike; the FirstRate importer and the
 `firstrate-crypto` catalog; the account, Kraken fees and the spot gate; fractional sizing;
-reporting, symbols and the dashboard; the `riptide` and `bollinger_reversal` ports, below).
-Crypto backtests run (`backtest run --symbol BTC --catalog firstrate-crypto`), charged at the
-Kraken Pro tier and held to spot rules. Not yet: the Kraken data path (M7).
+reporting, symbols and the dashboard; the `riptide` and `bollinger_reversal` ports; the Kraken
+data path and the `kraken-crypto` catalog from Kraken's own history, below). Crypto backtests
+run (`backtest run --symbol BTC --catalog kraken-crypto`, or `firstrate-crypto`), charged at
+the Kraken Pro tier and held to spot rules.
 
 ## Ids and instruments
 
@@ -53,18 +54,28 @@ Warnings worth knowing before a backtest: every series has whole-coin volume fro
 than 10 bars are mostly in 2013-2016 (BTC 1-minute 8,604, longest 429 minutes; ETH 1-minute
 7,537, longest 11,303 minutes; ETH hourly 6, longest 376 hours, early 2016).
 
-## UNVERIFIED values (to confirm before M3 merges)
+## UNVERIFIED values
 
 | Value | Where | Default |
 |---|---|---|
-| Kraken altname (raw symbol) | `coins.*.kraken.altname` | XBTUSD / ETHUSD / SOLUSD |
-| Kraken REST symbol | `coins.*.kraken.rest` | mapper output; SOL gives `SOLZUSD`, Kraken may say `SOLUSD` |
-| Order minimum (base) | `coins.*.kraken.min_order_base` | 0.00005 BTC / 0.002 ETH / 0.02 SOL |
-| Order minimum (USD) | `coins.*.kraken.min_order_usd` | 0.5 |
-| Tick size (live only) | `coins.*.kraken.tick_size` | 0.1 / 0.01 / 0.01 |
 | Discounted pair (C23) | `coins.*.kraken.discounted_pair` | false |
 | Spread (C4) | `coins.*.typical_spread_bps` | 2 / 3 / 5 bp |
 | Fee currency | `fee_schedule.fee_currency` | USD (the page does not say) |
+
+VERIFIED in M7 (2026-11-24) against Kraken's public AssetPairs endpoint
+(`https://api.kraken.com/0/public/AssetPairs?pair=XBTUSD,ETHUSD,SOLUSD`, no API key):
+
+| Value | Where | BTC / ETH / SOL |
+|---|---|---|
+| REST name (AssetPairs key) | `coins.*.kraken.rest` | XXBTZUSD / XETHZUSD / **SOLUSD** (M1 had SOLZUSD, which Kraken rejects) |
+| Altname (raw symbol, history file name) | `coins.*.kraken.altname` | XBTUSD / ETHUSD / SOLUSD |
+| Order minimum (base, `ordermin`) | `coins.*.kraken.min_order_base` | **0.00006** (M1: 0.00005) / 0.002 / **0.05** (M1: 0.02) |
+| Order minimum (USD, `costmin`) | `coins.*.kraken.min_order_usd` | 0.5 |
+| Tick size (live only) | `coins.*.kraken.tick_size` | 0.1 / 0.01 / 0.01 |
+
+For the spread decision: Kraken's Ticker at 2026-11-25 03:36 UTC quoted BTC 0.02 bp, ETH
+0.06 bp and SOL 1.4 bp full spread, inside the 2 / 3 / 5 bp defaults (one snapshot, not a
+measurement over time).
 
 The tier rates (tier 1 0.40% maker / 0.80% taker down to tier 17 0.00% / 0.05%), the 0.02%
 discounted-pair rebate and the absence of a minimum fee are VERIFIED against
@@ -146,7 +157,7 @@ filled as maker (91.40 + 3.05 spread at tier 2; 60.93 at tier 4), the market clo
   a decimal that is a positive multiple of its increment and at or above `min_order_base`, kept
   as an exact `Decimal` in the strategy config (and config hash; `0.25` and `0.250` hash alike).
   Else exit 2 (`--units: units 0.000000001 is not a multiple of the BTC size increment
-  0.00000001`, `... under the Kraken BTC minimum order 0.00005`) or MCP `invalid_params`. FX still
+  0.00000001`, `... under the Kraken BTC minimum order 0.00006`) or MCP `invalid_params`. FX still
   takes whole units only (an `int`, so FX configs and hashes are unchanged; `--units 1.5` on
   EURUSD exits 2). The MCP `units` argument takes a JSON integer or number (not a string).
 
@@ -248,6 +259,63 @@ before and after the pin bump and gate fix): Riptide AAPL 2019-2024 (20 trades) 
 default `configs/riptide.yaml`; Riptide EURUSD (16) and USDJPY (24) and Bollinger EURUSD (92)
 and USDJPY (104) on `configs/*_fx.yaml`; Riptide ES (7) and Bollinger ES (36) 2019-2024 with
 `--contracts 1`; Bollinger AAPL 2019-2024 (one entry, still open at the end).
+
+## Kraken data (M7)
+
+**The fix.** `--data-source kraken` used to page the Futures Charts API with the perpetual
+`PF_XBTUSD` and wrap those prices in a spot pair with no `info` (so the equity per-share fee
+model charged it). The Charts API has no spot series (its `spot` tick type is the futures index),
+so the path now reads Kraken's public spot `OHLC` (latest 720 candles of the interval) and
+refuses an older range with exit 2 before any request; the pair is the coin spec's
+`BTC/USD.KRAKEN` (or an UNVERIFIED fallback from AssetPairs for a USD coin with no spec),
+charged by `CryptoCommissionModel` at the run's tier; nothing is persisted. No API key needed.
+See `design.md` section 11.
+
+**History: the `kraken-crypto` catalog.** Kraken's OHLCVT archive (every pair from its first
+trade to 2026-09-30) is fetched selectively and imported:
+
+```bash
+uv run python -m src.services.crypto.kraken_ohlcvt_download \
+  --dest /srv/market-data/raw/kraken/ohlcvt XBTUSD ETHUSD SOLUSD   # 18 s, 858 MB of CSV
+uv run python -m src.cli.main import --format kraken --asset-class crypto \
+  --catalog kraken-crypto /srv/market-data/raw/kraken/ohlcvt         # 2 min 46 s, peak RSS 826 MB
+```
+
+Imported 2026-11-24 into `/srv/market-data/catalogs/kraken-crypto` (753 MB, 14,875,543 bars);
+every series' bar count, first bar and last bar equal its source file:
+
+| Coin | First bar (UTC) | Last bar (UTC) | 1min / 5min / 1h / 1d |
+|---|---|---|---|
+| BTC | 2013-10-06 21:34 | 2026-09-30 23:59 | 5,029,226 / 1,108,599 / 102,936 / 4,731 |
+| ETH | 2015-08-07 14:03 | 2026-09-30 23:59 | 4,521,632 / 1,053,329 / 94,244 / 4,067 |
+| SOL | 2021-06-17 15:32 | 2026-09-30 23:59 | 2,361,011 / 547,515 / 46,321 / 1,932 |
+
+Warnings: prices with a 5th+ decimal rounded to 4 (BTC 30,047 1-minute rows, ETH 224,253, SOL
+0; e.g. ETH's 2015 `3.00001`), gaps longer than 10 bars (BTC 1-minute 21,627,
+longest 3,446 minutes; ETH 15,522; SOL 1,423), no zero-volume or whole-coin-volume warnings.
+Kraken has no 30-minute file. Volumes carry float noise (`2715.909247550632`), cut at 8 decimals.
+The raw files sit with the archive's `MANIFEST.json` and a `SHA256SUMS`.
+
+**Smoke (2026-11-24, USD 100,000, tier 2, `--no-persist`).** Same command, both catalogs:
+
+| Run | Catalog | Trades | Commission + spread (USD) | Final balance |
+|---|---|---|---|---|
+| `sma_crossover` BTC 1d 2023-2024 | `firstrate-crypto` | 18 | 2,260.00 | 108,230.08 (= the M3 smoke) |
+| `sma_crossover` BTC 1d 2023-2024 | `kraken-crypto` | 18 (same dates) | 2,259.88 | 108,211.56 |
+| `riptide_crypto.yaml` BTC 1d 2021-2025 | `firstrate-crypto` | 24 | 2,203.02 | 96,980.51 (= the M6 smoke) |
+| `riptide_crypto.yaml` BTC 1d 2021-2025 | `kraken-crypto` | 23 | 2,109.90 | 96,884.39 |
+
+No order was denied in the Riptide runs. Daily-close basis FirstRate vs Kraken, 2021-07 to
+2026-05: median 3.5 bp (BTC), 4.0 (ETH), 6.6 (SOL), p95 11.8 / 12.5 / 22.8 bp; since 2017 BTC
+p95 is 79.5 bp and ETH 391.9 bp, so FirstRate's source is not Kraken. **Recommendation:**
+`kraken-crypto` is the primary crypto catalog (same venue as the fees and any live trading);
+FirstRate is a cross-check, and the only source for BTC before 2013-10-06.
+
+Live `--data-source kraken` (2026-11-25 03:49 UTC): BTC/USD 1-hour 2024-01-01 to 2024-03-01
+exits 2 ("serves only the latest 720 60-minute candles ... from 2026-10-26 03:00 UTC"); BTC/USD
+1-hour 2026-10-27 to 2026-11-24 loads 696 spot bars, 19 trades, every taker fill on USD 10,000
+charged 61.00 (0.60% + 1 bp half-spread); SOL/USD and ETH/USD 1-day 2025-01-01 to 2026-11-20
+load 689 bars each (the corrected `SOLUSD` name works).
 
 ## Account model: the M1 spike (decision C8)
 

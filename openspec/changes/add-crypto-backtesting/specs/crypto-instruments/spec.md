@@ -11,6 +11,12 @@ and taker rate) and the default tier.
 - **THEN** BTC, ETH and SOL are returned with quote USD, size precision 8 and size increment
   0.00000001, and the fee schedule has 17 tiers with tier 1 at 0.40% maker and 0.80% taker
 
+#### Scenario: Kraken pair terms match Kraken's AssetPairs
+- **WHEN** the shipped spec file is loaded
+- **THEN** each coin's Kraken REST name, altname, minimum order (base and USD) and tick size
+  equal Kraken's public AssetPairs values (SOL's REST name is `SOLUSD`, BTC's minimum order is
+  0.00006 BTC), each with a VERIFIED source naming that endpoint
+
 ### Requirement: Invalid coin specs are rejected
 Loading SHALL reject an invalid spec file with `CryptoSpecError` naming the file and the dotted
 field path, including any quote currency other than USD and a fee schedule whose tiers are not
