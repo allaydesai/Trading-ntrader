@@ -136,6 +136,11 @@ class RunSummary:
     exposure_exact: bool = False
 
     @property
+    def peak_exposure_basis(self) -> str:
+        """``"exact"`` (replayed from the fills) or ``"upper_bound"`` (the M5 trade-row bound)."""
+        return "exact" if self.exposure_exact else "upper_bound"
+
+    @property
     def commission_usd(self) -> Decimal:
         return self.commission_maker_usd + self.commission_taker_usd
 
@@ -347,7 +352,7 @@ def report_fields(summary: RunSummary) -> dict[str, Any]:
         "peak_exposure_pct": _fmt(
             None if summary.peak_exposure is None else summary.peak_exposure * _HUNDRED, _PCT
         ),
-        "peak_exposure_basis": "exact" if summary.exposure_exact else "upper_bound",
+        "peak_exposure_basis": summary.peak_exposure_basis,
         "commission_usd": _fmt(summary.commission_usd, _USD),
         "commission_maker_usd": _fmt(summary.commission_maker_usd, _USD),
         "commission_taker_usd": _fmt(summary.commission_taker_usd, _USD),

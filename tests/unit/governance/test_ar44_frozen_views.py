@@ -106,6 +106,10 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: ``position_series`` as a fill count via ``src.services.crypto.display.snapshot_params``;
 #: a snapshot without one is passed through unchanged). Equity, futures and FX pages render
 #: byte for byte as before (their goldens). 62 files; nothing else changed.
+#: **Refreshed 2026-11-25 by PO approval (Allay, crypto decision follow-ups: "one-line
+#: protected-file change" allowed)** for exactly one file: ``src/cli/commands/compare.py`` gains
+#: one row, "Peak Exposure Basis" (``exact`` or ``upper_bound``), under a crypto run's "Peak
+#: Exposure". 62 files; nothing else changed.
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -259,7 +263,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "2d27d4ad648bbb0a8d4dccab913283f0a67c65866308aedbbcc8610022cd0db0"
     ),
     "src/cli/commands/compare.py": (
-        "275f51360d7d1918172f26d3cc3ce309791ecd0575951095c971223c53bf752c"
+        "4d3ab5ce135a0d6d29c6af4a220aa5f69ded6ade8d071a9e4c7aa2b18c9afcdf"
     ),
 }
 

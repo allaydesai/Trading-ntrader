@@ -296,6 +296,7 @@ def _crypto_rows(backtests: List) -> list[list[str]]:
     return rows + [
         ["Fee Tier", *tier],
         ["Peak Exposure", *(crypto_display.pct(s.peak_exposure) if s else "-" for s in summaries)],
+        ["Peak Exposure Basis", *(s.peak_exposure_basis if s else "-" for s in summaries)],
         [costs, *(crypto_display.usd(s.costs_usd) if s else "-" for s in summaries)],
     ]
 

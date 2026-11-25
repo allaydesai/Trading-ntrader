@@ -196,8 +196,9 @@ reports 37 dropped orders on stop (final balance 5.00).
   taker and spread costs, drop count) and `display.py` (the shared wording). `show`,
   `report summary|generate` (text/CSV/JSON, `crypto_` prefixed CSV keys, `crypto` JSON object
   with per-trade `coin_quantity`), `history` (`BTC (crypto)`), `compare` (Asset Class, Fee
-  Tier, Peak Exposure, costs), MCP `get_run`/`compare_runs` (`asset_class: "crypto"`, a
-  `crypto` object, a warning) and `export_results` (crypto trade columns) all read them.
+  Tier, Peak Exposure and its basis, costs), MCP `get_run`/`compare_runs` (`asset_class:
+  "crypto"`, a `crypto` object, a warning) and `export_results` (crypto trade columns) all read
+  them.
   Equity, futures and FX output is byte-identical.
 - **Drop count**: saved as `config_snapshot.crypto_pairs[<id>].orders_below_minimum` (no
   migration). A strategy starts it with `track_orders_below_minimum(cache, instrument_id)` on

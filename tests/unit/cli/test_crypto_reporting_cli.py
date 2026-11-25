@@ -132,3 +132,15 @@ class TestCompare:
     def test_equity_only_comparison_has_no_crypto_rows(self):
         text = self._compare([_run(EQUITY_SNAPSHOT, symbol="AAPL")] * 2)
         assert "Asset Class" not in text and "Fee Tier" not in text
+
+    def test_crypto_comparison_shows_the_peak_exposure_basis(self):
+        from tests.unit.services.crypto import test_exposure as exact
+
+        exact_run = _base_run(exact._snapshot(True), symbol="BTC", trades=exact.TRADES)
+        exact_run.initial_capital = Decimal("100000")
+        text = self._compare([_run(), exact_run])
+        assert "Peak Exposure Basis" in text
+        assert "upper_bound" in text and "exact" in text
+        lines = text.splitlines()
+        peak = next(i for i, line in enumerate(lines) if "Peak Exposure " in line)
+        assert "Peak Exposure Basis" in lines[peak + 1] or "Peak Exposure Basis" in lines[peak + 2]
