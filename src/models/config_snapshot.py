@@ -19,6 +19,7 @@ _OMITTED_WHEN_UNSET = (
     "fee_tier",
     "crypto_pairs",
     "periods_per_year",
+    "crypto_peaks",
 )
 
 
@@ -141,6 +142,11 @@ class StrategyConfigSnapshot(BaseModel):
     )
     periods_per_year: int | None = Field(
         default=None, description="Crypto: days a year the risk metrics annualise on (365)"
+    )
+    crypto_peaks: dict[str, Any] | None = Field(
+        default=None,
+        description="Crypto: the exact peak notional and exposure replayed from the run's fills "
+        "('basis': 'exact'); omitted when they could not be replayed (upper bound)",
     )
 
     metrics_basis: str | None = Field(

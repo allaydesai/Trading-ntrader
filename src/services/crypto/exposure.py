@@ -1,8 +1,12 @@
 """Exact peak notional and exposure for a spot crypto run, replayed from its fill series.
 
-Pure and framework-free. A crypto run saved since this change carries, per pair,
-``config_snapshot.crypto_pairs[<id>].position_series`` (written by
-:func:`src.core.crypto_costs.crypto_snapshot`): every fill on the pair in engine order as
+Pure and framework-free. When a crypto run is saved, :func:`src.core.crypto_costs.crypto_snapshot`
+builds each pair's fill series, replays it here and stores only the result:
+``config_snapshot.crypto_peaks`` (:data:`PEAKS_KEY`, :func:`peaks_snapshot`), the peak notional
+and peak exposure as exact decimal strings with ``"basis": "exact"``. Runs saved by the first
+version of this change (PR #79) carry the series itself, per pair, as
+``config_snapshot.crypto_pairs[<id>].position_series``, and are replayed when read. A series
+holds every fill on the pair in engine order as
 ``[seq, ts_ns, position_id, position_qty, fill_px, commission_usd]``. ``seq`` orders fills
 across pairs, ``position_qty`` is the signed quantity of the fill's position after it (the
 crypto venue is ``HEDGING``, so a pair can hold several positions; the pair's quantity is
@@ -18,7 +22,7 @@ open price`` (cost basis, the figure the M5 upper bound uses per trade) and expo
 notional over the balance. A position opened and closed inside one bar counts while it was
 held, because it was.
 
-Runs saved without the series fall back to the M5 upper bound
+Runs saved with neither fall back to the M5 upper bound
 (:func:`src.services.crypto.returns.summarise_run`); there is no backfill.
 """
 
@@ -31,8 +35,38 @@ from typing import Any
 
 #: The position-series entry fields, in order.
 SERIES_FIELDS = ("seq", "ts_ns", "position_id", "position_qty", "fill_px", "commission_usd")
+#: The ``config_snapshot`` key holding a run's computed peaks (:func:`peaks_snapshot`).
+PEAKS_KEY = "crypto_peaks"
+EXACT = "exact"
 _ZERO = Decimal(0)
 _CENT = Decimal("0.01")
+
+
+def _text(value: Decimal | None) -> str | None:
+    return None if value is None else f"{value:f}"
+
+
+def peaks_snapshot(notional: Decimal | None, exposure: Decimal | None) -> dict[str, Any]:
+    """The saved form of :func:`peaks`: exact decimal strings (``None`` stays ``None``)."""
+    return {
+        "basis": EXACT,
+        "peak_notional_usd": _text(notional),
+        "peak_exposure": _text(exposure),
+    }
+
+
+def stored_peaks(
+    snapshot: Mapping[str, Any] | None,
+) -> tuple[Decimal | None, Decimal | None] | None:
+    """A run's saved peak notional and exposure; ``None`` when it saved none (older runs)."""
+    entry = (snapshot or {}).get(PEAKS_KEY)
+    if not isinstance(entry, Mapping) or entry.get("basis") != EXACT:
+        return None
+    notional, exposure = entry.get("peak_notional_usd"), entry.get("peak_exposure")
+    return (
+        None if notional is None else Decimal(str(notional)),
+        None if exposure is None else Decimal(str(exposure)),
+    )
 
 
 def has_series(series: Mapping[str, Any]) -> bool:

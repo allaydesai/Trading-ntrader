@@ -18,9 +18,10 @@ position's largest quantity and its open time, not its fill history, so a positi
 in is counted at its largest size from its open, and a position opened and closed at one
 timestamp counts as held then (:func:`src.services.fx.returns.peaks`): exact for single-entry
 positions that span bars, an upper bound otherwise (:func:`note` says so). See section 10 of
-``openspec/changes/add-crypto-backtesting/design.md``. Runs saved with a fill series
-(``crypto_pairs[<id>].position_series``) get exact figures instead
-(:mod:`src.services.crypto.exposure`, ``openspec/changes/add-crypto-exact-exposure``).
+``openspec/changes/add-crypto-backtesting/design.md``. Runs saved with their computed peaks
+(``crypto_peaks``) or, from PR #79, a fill series (``crypto_pairs[<id>].position_series``) get
+exact figures instead (:mod:`src.services.crypto.exposure`,
+``openspec/changes/add-crypto-exact-exposure``).
 """
 
 from __future__ import annotations
@@ -240,6 +241,24 @@ def _dropped(terms: dict[str, PairTerms]) -> int | None:
     return sum(counts) if counts else None
 
 
+def _peaks(
+    snapshot: Mapping[str, Any], terms: dict[str, PairTerms], rows: list, capital: Decimal | None
+) -> tuple[Decimal | None, Decimal | None, bool]:
+    """Peak notional, peak exposure and whether they are exact.
+
+    The peaks the run saved (:func:`exact_exposure.stored_peaks`), else a replay of the fill
+    series a PR #79 run saved per pair, else the M5 upper bound from the trade rows.
+    """
+    if (stored := exact_exposure.stored_peaks(snapshot)) is not None:
+        return *stored, True
+    series = {iid: t.raw.get("position_series") for iid, t in terms.items()}
+    if exact_exposure.has_series(series):
+        replayed = {iid: s or [] for iid, s in series.items()}
+        return *exact_exposure.peaks(replayed, capital), True
+    peak_notional, _, exposure = peaks(rows, capital) if rows else (None, None, None)
+    return peak_notional, exposure, False
+
+
 def summarise_run(
     snapshot: Mapping[str, Any] | None, trades: Iterable[Any], capital: Any = None
 ) -> RunSummary | None:
@@ -264,14 +283,7 @@ def summarise_run(
         )
         if f.return_on_underlying_pct is not None
     ]
-    series = {iid: t.raw.get("position_series") for iid, t in terms.items()}
-    exact = exact_exposure.has_series(series)
-    if exact:
-        peak_notional, exposure = exact_exposure.peaks(
-            {iid: s or [] for iid, s in series.items()}, _dec(capital)
-        )
-    else:
-        peak_notional, _, exposure = peaks(rows, _dec(capital)) if rows else (None, None, None)
+    peak_notional, exposure, exact = _peaks(snapshot, terms, rows, _dec(capital))
     return RunSummary(
         asset_class=CRYPTO,
         venue=next(iter(terms.values())).venue,

@@ -26,3 +26,18 @@
 ## 4. Check
 - [x] 4.1 Smoke (real runs, see `docs/agent/crypto-backtesting.md`, "Exact peak exposure").
 - [x] 4.2 Docs.
+
+## 5. Store the computed peaks, not the series (follow-up, approved by Allay 2026-11-25)
+- [x] 5.1 Unit (failing first): `test_exposure.py::TestStoredPeaks` (saved form, read back
+      exactly, equal to the PR #79 series replay, neither keeps the upper bound).
+- [x] 5.2 Component (failing first): `test_crypto_costs.py::TestPositionSeries` asserts no pair
+      carries `position_series` and `crypto_peaks` holds the replayed peaks (only when the
+      replay meets the account); `test_crypto_dashboard.py` shows saved peaks as exact.
+- [x] 5.3 `crypto_costs.exact_peaks` + `crypto_snapshot` save `crypto_peaks`, declared on
+      `StrategyConfigSnapshot` (undeclared keys are dropped on save; a component test pins
+      every key `crypto_snapshot` emits against the model);
+      `exposure.peaks_snapshot`/`stored_peaks`; `returns.summarise_run` reads saved peaks,
+      else a PR #79 series, else the upper bound. No migration.
+- [x] 5.4 Integration (`--forked`): the scale-in run saves the replayed peaks, no series.
+- [x] 5.5 Smoke: SMA BTC 2023-2024 exact 10.3861% and the scripted scale-in 55,000 / 55.0165%
+      unchanged.
