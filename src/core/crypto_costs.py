@@ -47,7 +47,7 @@ from src.core.fx_costs import OrderCharges
 from src.core.fx_rates import ACCOUNT_CURRENCY
 from src.core.position_sizing import is_crypto
 from src.services.crypto.coin_specs import get_fee_schedule
-from src.services.crypto.exposure import PEAKS_KEY, peaks, peaks_snapshot, replay
+from src.services.crypto.exposure import PEAKS_KEY, peaks_of, peaks_snapshot, replay
 
 #: Cache key (Nautilus' general object store) holding the run's per-pair cost totals as JSON.
 CRYPTO_COSTS_KEY = "ntrader.crypto_costs"
@@ -345,12 +345,12 @@ def exact_peaks(
     """
     balances = _account_balances(cache, instruments)
     start = None if balances is None else balances[0]
+    samples = replay(series, start)
     if balances is not None:
-        samples = replay(series, start)
         replayed = samples[-1].balance if samples else start
         if replayed is None or abs(replayed - balances[1]) > CENT * max(len(samples), 1):
             return None
-    return peaks_snapshot(*peaks(series, start))
+    return peaks_snapshot(*peaks_of(samples))
 
 
 def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, Any]:

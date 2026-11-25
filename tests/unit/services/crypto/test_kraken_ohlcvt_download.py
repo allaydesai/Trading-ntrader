@@ -238,3 +238,15 @@ def test_a_failed_checksum_publish_keeps_the_old_file_and_no_temp(remote, tmp_pa
         extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [60])
     assert (tmp_path / "SHA256SUMS").read_text() == "old\n"
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_atomically_published_files_keep_the_umask_mode(remote, tmp_path):
+    """A temp file is created 0600; the published files get the usual umask mode, like the CSVs."""
+    import os
+    import stat
+
+    extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [60])
+    umask = os.umask(0)
+    os.umask(umask)
+    for name in ("MANIFEST.json", "SHA256SUMS"):
+        assert stat.S_IMODE((tmp_path / name).stat().st_mode) == 0o666 & ~umask

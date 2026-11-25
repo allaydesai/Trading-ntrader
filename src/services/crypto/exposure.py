@@ -147,7 +147,11 @@ def peaks(
 
     ``(None, None)`` for a run with no fills; the exposure is ``None`` without ``capital``.
     """
-    samples = replay(series, capital)
+    return peaks_of(replay(series, capital))
+
+
+def peaks_of(samples: list[Sample]) -> tuple[Decimal | None, Decimal | None]:
+    """:func:`peaks` from samples already replayed (so a caller replays once)."""
     if not samples:
         return None, None
     ratios = [s.notional / s.balance for s in samples if s.balance is not None and s.balance > 0]

@@ -222,6 +222,9 @@ def _write_atomic(path: Path, data: bytes) -> None:
     """
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp's 0600 would outlive the replace
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
             handle.flush()
