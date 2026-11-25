@@ -88,6 +88,17 @@ discounted-pair rebate and the absence of a minimum fee are VERIFIED against
   `backtest run --fee-tier N` (1-17, else exit 2; refused for a symbol with no coin spec). The
   tier rides on the pair as `info["fee_tier"]` and is part of the run's config hash only when
   set.
+- **MCP** (`fee_tier`, `spread_bps` on `submit_backtest`/`validate_config`): the CLI's
+  `--fee-tier`/`--spread-bps`, through the same `src/services/crypto/cost_overrides.py`
+  (`apply_crypto_overrides` on the request, `with_crypto_terms` on the loaded pair in the
+  worker), so a value is refused with the same message (`fee_tier must be a Kraken tier
+  1..17, got 18`, `spread_bps is for spot crypto only; 'QQQ' is not a coin with a spec ...`)
+  as MCP `invalid_params`, and the run has the CLI run's config hash. `fee_tier` is a JSON
+  integer, `spread_bps` a JSON number; unset, the request and its hash are unchanged. A study
+  run (`submit_backtest(study=...)`) refuses both for now: a frozen candidate records no tier
+  or spread, so its out-of-sample run could not carry them. `reproduce_run` recovers them from
+  the stored `fee_tier` and `crypto_pairs` terms, keeping whichever combination matches the
+  stored config hash.
 - **Gate** (`src/core/margin_gate.py`, `CryptoSpotRequirement`): an entry needs its full USD
   notional free (limit or trigger price, else the last price), else
   `MARGIN_EXCEEDS_FREE_BALANCE: 2 BTC/USD.KRAKEN coin(s) need 156000.00 USD initial margin,
