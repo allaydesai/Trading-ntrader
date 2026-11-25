@@ -229,13 +229,18 @@ def test_a_failed_checksum_publish_keeps_the_old_file_and_no_temp(remote, tmp_pa
     from src.services.crypto import kraken_ohlcvt_download as download
 
     (tmp_path / "SHA256SUMS").write_text("old\n")
+    real_replace, attempted = download.os.replace, []
 
-    def boom(src, dst):
-        raise OSError("disk full")
+    def boom(src, dst):  # only the checksum publish fails; the manifest goes through
+        attempted.append(Path(dst).name)
+        if Path(dst).name == "SHA256SUMS":
+            raise OSError("disk full")
+        return real_replace(src, dst)
 
     monkeypatch.setattr(download.os, "replace", boom)
     with pytest.raises(OSError, match="disk full"):
         extract_pairs(SplitArchive(sorted(remote.parts), remote), tmp_path, ["XBTUSD"], [60])
+    assert attempted == ["MANIFEST.json", "SHA256SUMS"]
     assert (tmp_path / "SHA256SUMS").read_text() == "old\n"
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
 
