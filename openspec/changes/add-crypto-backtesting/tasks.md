@@ -154,19 +154,25 @@ Acceptance: `show`/`report`/`history`, MCP and the dashboard show a crypto block
 quantities, USD notional, underlying return and the costs split. Equity, futures and FX output
 byte-identical (goldens captured before the change).
 
-- [ ] 5.1 Unit (failing first): `src/services/crypto/returns.py` figures (design section 10).
-- [ ] 5.2 Implement `returns.py` and `display.py`.
-- [ ] 5.3 Unit/component (failing first): CLI blocks and `--symbol BTC|BTCUSD|BTC/USD`
+- [x] 5.1 Unit (failing first): `src/services/crypto/returns.py` figures (design section 10).
+- [x] 5.2 Implement `returns.py` and `display.py`.
+- [x] 5.3 Unit/component (failing first): CLI blocks and `--symbol BTC|BTCUSD|BTC/USD`
       resolution, `--timeframe` to `-LAST`, `--spread-bps` (`--fee-tier N` landed in M3, 3.10).
-- [ ] 5.4 Implement the CLI changes and `price_type_for(CRYPTO)`.
-- [ ] 5.5 Component (failing first): MCP `get_run`/`compare_runs`/`export_results` crypto object
+- [x] 5.4 Implement the CLI changes and `price_type_for(CRYPTO)`.
+- [x] 5.5 Component (failing first): MCP `get_run`/`compare_runs`/`export_results` crypto object
       (additive; existing payloads unchanged).
-- [ ] 5.6 Implement the MCP changes.
-- [ ] 5.7 Capture FX goldens if missing; then component (failing first): dashboard crypto panel,
+- [x] 5.6 Implement the MCP changes.
+- [x] 5.7 Capture FX goldens if missing; then component (failing first): dashboard crypto panel,
       badge and trades-table columns; equity/futures/FX goldens unchanged.
-- [ ] 5.8 Implement the dashboard files listed in design section 10 and regenerate
+- [x] 5.8 Implement the dashboard files listed in design section 10 and regenerate
       `FROZEN_VIEWS` for exactly those files under decision C12. Browser check via the
       `e2e-ui-testing` skill.
+      Result (2026-11-24): see design section 10 "M5 result". The below-minimum drop count is
+      saved as `config_snapshot.crypto_pairs[<id>].orders_below_minimum` (no migration).
+      Symbol forms also cover `XBTUSD`, `XXBTZUSD` and `BTC/USD.KRAKEN`, in the MCP request
+      and the Run form too. Browser check on 127.0.0.1:3000 (headless Chromium) against real
+      runs: BTC tier 3 (18 trades, 0.14-0.40 BTC), a USD 5 BTC run (37 drops recorded), an FX
+      run (no crypto panel) and the run list (CRYPTO badge); no console errors.
 
 ## M6. Strategies (submodule PR + pointer bump)
 

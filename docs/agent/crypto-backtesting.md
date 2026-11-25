@@ -163,6 +163,31 @@ Too small: `--units 0.00001` and `--units 0.000000001` exit 2 naming the minimum
 increment; a USD 5 balance (a USD 0.50 budget, 0.00002 BTC) places no order, warns once and
 reports 37 dropped orders on stop (final balance 5.00).
 
+## Reporting, symbols and the dashboard (M5)
+
+- **Figures**: `src/services/crypto/returns.py` (pure: quantity, USD notional, side-aware
+  underlying return, USD P&L; run peak notional, peak exposure = notional / equity, maker,
+  taker and spread costs, drop count) and `display.py` (the shared wording). `show`,
+  `report summary|generate` (text/CSV/JSON, `crypto_` prefixed CSV keys, `crypto` JSON object
+  with per-trade `coin_quantity`), `history` (`BTC (crypto)`), `compare` (Asset Class, Fee
+  Tier, Peak Exposure, costs), MCP `get_run`/`compare_runs` (`asset_class: "crypto"`, a
+  `crypto` object, a warning) and `export_results` (crypto trade columns) all read them.
+  Equity, futures and FX output is byte-identical.
+- **Drop count**: saved as `config_snapshot.crypto_pairs[<id>].orders_below_minimum` (no
+  migration); runs before M5 report "not recorded". A strategy records a drop with
+  `src.core.crypto_costs.count_order_below_minimum(cache, instrument_id)`.
+- **Symbols**: `src/services/crypto/symbols.crypto_coin` (aliases from `coin_specs.yaml`):
+  `BTC`, `BTCUSD`, `BTC/USD`, `BTC-USD`, `XBTUSD`, `XXBTZUSD`, `BTC/USD.KRAKEN` are `BTC`;
+  `BTC/EUR`, `BTCUSDT`, `BTC/USD.BINANCE`, `DOGE/USD` are refused (CLI exit 2, MCP
+  `unknown_crypto_pair`). `--spread-bps X` overrides the modelled spread.
+- **Dashboard**: `templates/partials/crypto_panel.html` on the run page, a crypto branch in the
+  trades table (`Quantity (coin)` at full precision, entry/exit at price precision, Notional $,
+  Underlying %, P&L $), crypto export columns and a `CRYPTO` list badge.
+
+**Check (2026-11-24, real runs)**: `--symbol BTC/USD.KRAKEN --fee-tier 3 --starting-balance
+100000` 1-day 2023-2024: 18 trades, 0.14020419 to 0.4023753 BTC, taker 1,407.85 + spread 37.05,
+final 109,045.18; `--symbol XBTUSD --starting-balance 5`: no trades, 37 drops saved and shown.
+
 ## Account model: the M1 spike (decision C8)
 
 `tests/integration/core/test_crypto_engine_acceptance.py` (run `--forked`) settled it:
