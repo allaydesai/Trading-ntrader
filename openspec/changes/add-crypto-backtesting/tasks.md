@@ -190,7 +190,7 @@ Equity and FX results for the existing smoke configs are unchanged.
       1-day bars, C25).
 - [x] 6.4 Bump the submodule pointer (no `.gitmodules` change); smoke runs BTC/ETH/SOL 1-day
       2021-2025 and BTC 1-hour 2024, results recorded in `docs/agent/crypto-backtesting.md`.
-      (Pinned to #6's merge; bump again to #7's merge once it lands.)
+      (Pinned to #7's merge `67ebddb`, which includes #6.)
 
 ## M7. Kraken data path correction
 

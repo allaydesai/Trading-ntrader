@@ -196,7 +196,8 @@ final 109,045.18; `--symbol XBTUSD --starting-balance 5`: no trades, 37 drops sa
 
 ## Strategies: `riptide` and `bollinger_reversal` (M6)
 
-The strategies submodule (`Trading-ntrader-strategies` PR #6, merge `32c8322`) sizes both in
+The strategies submodule (`Trading-ntrader-strategies` PR #6, merge `32c8322`, and the
+exit-timing follow-up #7, merge `67ebddb`, the pinned commit) sizes both in
 fractional coins through the M4 helpers, rounds limit, stop and bracket prices at the pair's
 precision (4 dp), counts orders under Kraken's minimum (M5) and runs long-only: Bollinger
 skips bearish setups (warns once, logs the count on stop) and caps its risk size at what the
@@ -216,8 +217,7 @@ long and denied the close (`CRYPTO_SPOT_NO_SHORT`), so the long never closed. PR
 around it by sending the close once the cancel landed, which fills one bar late under
 `gap_aware`. NTrader now lets a reduce-only close take a reduce-only stop's claim while its
 cancel is pending (above); strategies PR #7 (`fix/crypto-exit-timing`) removes the
-workaround, so crypto exits fill at the next bar's open, as on equities. Until #7 is merged
-and pinned, the pinned #6 still waits for the cancel (correct, one bar late).
+workaround (pinned), so crypto exits fill at the next bar's open, as on equities.
 
 **Smoke (2026-11-24, real `firstrate-crypto` bars, USD 100,000, tier 2, `--no-persist`).**
 Riptide 1-day and Bollinger 1-day: 2021-01-01 to 2025-12-31 (SOL data starts 2021-03-01).
@@ -225,23 +225,23 @@ Riptide 1-hour: BTC 2024 with `min_adv_dollars` 40,000 and `max_hold_days` 10 (b
 lag is market-exit fill bar minus signal bar. No order was denied in any run and no position
 was left open.
 
-| Run | Strategy commit | Trades (stop / other exits) | Coin sizes | Fees incl. spread (USD) | Exit lag (bars) | Final balance |
-|---|---|---|---|---|---|---|
-| Riptide BTC 1d | #6 `32c8322` (pinned) | 21 (4 / 17) | 0.08814773 to 0.45953774 | 1,922.82 | 1-2 | 96,571.00 |
-| Riptide ETH 1d | #6 | 23 (3 / 20) | 2.42285156 to 6.60056770 | 2,132.92 | 1-2 | 96,876.00 |
-| Riptide SOL 1d | #6 | 32 (2 / 30) | 45.14680839 to 505.15255607 | 3,089.38 | 2 | 104,811.85 |
-| Riptide BTC 1h 2024 | #6 | 10 (2 / 8) | 0.09927447 to 0.22444903 | 923.50 | 2 | 99,649.29 |
-| Riptide BTC 1d | #7 `163122b` | 24 (4 / 20) | 0.08814773 to 0.45953774 | 2,203.02 | 1 | 96,980.51 |
-| Riptide ETH 1d | #7 | 25 (3 / 22) | 2.42285156 to 6.60056770 | 2,324.85 | 1 | 97,648.64 |
-| Riptide SOL 1d | #7 | 33 (2 / 31) | 45.14680839 to 505.15255607 | 3,173.39 | 1 | 102,966.60 |
-| Riptide BTC 1h 2024 | #7 | 11 (2 / 9) | 0.09927447 to 0.22444903 | 1,015.99 | 1 | 99,634.99 |
-| Bollinger BTC 1d | #6 and #7 (identical) | 8 (4 stops) | 0.12932707 to 0.64617253 | 1,141.21 | - | 102,858.79 |
-| Bollinger ETH 1d | #6 and #7 | 12 (7 stops) | 1.33009802 to 16.88333614 | 1,382.12 | - | 101,617.88 |
-| Bollinger SOL 1d | #6 and #7 | 8 (7 stops) | 23.17573831 to 380.10425716 | 568.43 | - | 94,431.55 |
+| Run | Trades (stop / other exits) | Coin sizes | Fees incl. spread (USD) | Exit lag (bars) | Final balance |
+|---|---|---|---|---|---|
+| Riptide BTC 1d | 24 (4 / 20) | 0.08814773 to 0.45953774 | 2,203.02 | 1 | 96,980.51 |
+| Riptide ETH 1d | 25 (3 / 22) | 2.42285156 to 6.60056770 | 2,324.85 | 1 | 97,648.64 |
+| Riptide SOL 1d | 33 (2 / 31) | 45.14680839 to 505.15255607 | 3,173.39 | 1 | 102,966.60 |
+| Riptide BTC 1h 2024 | 11 (2 / 9) | 0.09927447 to 0.22444903 | 1,015.99 | 1 | 99,634.99 |
+| Bollinger BTC 1d | 8 (4 stops) | 0.12932707 to 0.64617253 | 1,141.21 | - | 102,858.79 |
+| Bollinger ETH 1d | 12 (7 stops) | 1.33009802 to 16.88333614 | 1,382.12 | - | 101,617.88 |
+| Bollinger SOL 1d | 8 (7 stops) | 23.17573831 to 380.10425716 | 568.43 | - | 94,431.55 |
 
-Bollinger skipped 30 (BTC), 21 (ETH) and 20 (SOL) bearish setups as long-only. With #7 every
-Riptide exit fills one bar after its signal (the equity next-open rule); a few more trades
-fit in because each long closes a bar sooner and Riptide holds one position at a time. Unchanged by M6 (fill events identical
+Runs on `163122b`, the head of #7, whose tree is identical to the pinned merge `67ebddb`.
+Bollinger skipped 30 (BTC), 21 (ETH) and 20 (SOL) bearish setups as long-only. Every Riptide
+exit fills one bar after its signal (the equity next-open rule). On #6 alone (the
+wait-for-cancel workaround) the same runs filled exits 2 bars after the signal and traded
+21 / 23 / 32 / 10 times (final 96,571.00 / 96,876.00 / 104,811.85 / 99,649.29); #7 fits in a
+few more trades because each long closes a bar sooner and Riptide holds one position at a
+time. Bollinger is identical on both. Unchanged by M6 (fill events identical
 before and after the pin bump and gate fix): Riptide AAPL 2019-2024 (20 trades) and the
 default `configs/riptide.yaml`; Riptide EURUSD (16) and USDJPY (24) and Bollinger EURUSD (92)
 and USDJPY (104) on `configs/*_fx.yaml`; Riptide ES (7) and Bollinger ES (36) 2019-2024 with

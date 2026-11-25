@@ -462,7 +462,8 @@ Implemented in `src/core/margin_gate.py` (`_spot_free_to_sell` returns the free 
 free size for a reduce-only sell); pinned in `tests/component/core/test_margin_gate_crypto.py`
 (`TestExitBesideAStopPendingCancel`) and `tests/integration/core/test_crypto_venue_engine.py`
 (a real engine: the exit fills on the signal bar; a second close, an oversell and a naked sell
-beside the cancel are denied). Strategies PR #7 removes the workaround; with it every Riptide
+beside the cancel are denied). Strategies PR #7 (merge `67ebddb`, pinned) removes the
+workaround; with it every Riptide
 crypto exit in the smoke runs fills one bar after its signal, as on equities
 (`docs/agent/crypto-backtesting.md`, M6). Bollinger's crypto config defaults to 1-day bars
 (decision C25).
@@ -635,5 +636,5 @@ defaults.
 | C21 | Fee tier | one fixed tier per run, **default tier 2** (Allay's Kraken Pro spot tier: 0.30% maker / 0.60% taker); `--fee-tier N` overrides; no re-tiering inside a run | **confirmed by Allay, 2026-11-24** (source: Allay's Kraken fee screen; `coin_specs.yaml` `default_tier: 2`, VERIFIED) |
 | C22 | Trading currency on Kraken | **USD pairs**, to match the data. If Allay will trade BTC/CAD etc., the account and reports need CAD (FX conversion via the FX rate machinery), which is a scope change | provisional default (USD pairs), pending Allay's confirmation: which currency will you trade in? |
 | C23 | Discounted pairs | assume BTC/ETH/SOL are **not** on the 0.02%-off list (conservative) until confirmed | provisional default (`discounted_pair: false` per coin), pending Allay's confirmation |
-| C24 | Exit beside a stop's cancel | the gate lets a reduce-only close take the claim of a reduce-only sell pending cancel, so exits fill on the same bar as equities (section 8, M6 result); the strategy-side wait in strategies #6 is removed by #7 | **decided by Allay, 2026-11-24** |
+| C24 | Exit beside a stop's cancel | the gate lets a reduce-only close take the claim of a reduce-only sell pending cancel, so exits fill on the same bar as equities (section 8, M6 result); the strategy-side wait in strategies #6 is removed by #7 (pinned `67ebddb`) | **decided by Allay, 2026-11-24** |
 | C25 | Bollinger crypto bar size | `configs/bollinger_crypto.yaml` defaults to 1-day bars | **decided by Allay, 2026-11-24** |
