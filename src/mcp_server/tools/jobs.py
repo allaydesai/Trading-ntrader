@@ -40,6 +40,8 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         over_budget_reason: str | None = None,
         units: StrictInt | StrictFloat | None = None,
         contracts: StrictInt | None = None,
+        fee_tier: StrictInt | None = None,
+        spread_bps: StrictInt | StrictFloat | None = None,
     ) -> dict[str, Any]:
         """Validate and queue one backtest; returns a job id at once. Poll get_job.
 
@@ -54,6 +56,10 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         contracts (futures roots) trade that fixed size per entry instead of sizing by
         notional, like the CLI's --units/--contracts; only for
         strategies whose config has that setting (describe_strategy).
+        Spot crypto only, like the CLI's --fee-tier/--spread-bps: fee_tier (Kraken Pro spot
+        tier 1-17; default 2) and spread_bps (the coin's modelled full spread, finite >= 0)
+        set the run's costs and are part of its config hash only when given; refused for any
+        other instrument and, for now, in a study.
         """
         fields = dict(
             strategy=strategy,
@@ -66,6 +72,8 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             starting_balance=starting_balance,
             units=units,
             contracts=contracts,
+            fee_tier=fee_tier,
+            spread_bps=spread_bps,
         )
         if study is not None:
             return await _submit_in_study(runner(), study, fields, over_budget_reason)
@@ -134,7 +142,20 @@ async def _submit_unattributed(
     }
 
 
+#: Per-run cost overrides a study cannot carry yet: its frozen candidate (and so its
+#: out-of-sample run and candidate hash) records no fee tier or spread.
+STUDY_UNSUPPORTED = ("fee_tier", "spread_bps")
+
+
 def _in_study(study: str, fields: dict[str, Any], reason: str | None) -> dict[str, Any]:
+    given = [name for name in STUDY_UNSUPPORTED if fields.pop(name, None) is not None]
+    if given:
+        raise ToolFailure(
+            "invalid_request",
+            f"{', '.join(given)} cannot be set on a study run: the study's frozen candidate "
+            "and its out-of-sample run would not carry it.",
+            fix="Drop it, or submit without study for an unattributed run.",
+        )
     job, warnings = prepare_in_sample(study, **fields, over_budget_reason=reason)
     return {"job": job, "warnings": warnings}
 

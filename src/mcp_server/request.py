@@ -19,6 +19,7 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.strategies import StrategyRef, resolve_params, resolve_strategy
 from src.models.backtest_request import DEFAULT_FILL_SEED, BacktestRequest
+from src.services.crypto.cost_overrides import CryptoOverrideError, apply_crypto_overrides
 from src.services.crypto.symbols import CryptoSymbolError, crypto_coin
 from src.services.fx.symbols import fx_ticker, resolve_fx_symbol
 from src.services.provenance import compute_config_hash
@@ -63,6 +64,15 @@ class BacktestSpec(BaseModel):
     contracts: StrictInt | None = Field(
         default=None, gt=0, description="Futures only: whole contracts per entry"
     )
+    # Spot crypto only, like backtest run --fee-tier/--spread-bps: range and instrument checks
+    # are the CLI's own (``cost_overrides``), so both refuse the same values with one message.
+    fee_tier: StrictInt | None = Field(
+        default=None, description="Spot crypto only: Kraken Pro spot fee tier 1-17 (default 2)"
+    )
+    spread_bps: StrictInt | StrictFloat | None = Field(
+        default=None,
+        description="Spot crypto only: the coin's modelled full spread in bps, finite >= 0",
+    )
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,8 @@ class ResolvedRequest:
                 "starting_balance": r.starting_balance,
                 "config_hash": self.config_hash,
                 **({"cost_multiplier": r.cost_multiplier} if r.cost_multiplier != 1 else {}),
+                **({"fee_tier": r.crypto_fee_tier} if r.crypto_fee_tier is not None else {}),
+                **({"spread_bps": r.crypto_spread_bps} if r.crypto_spread_bps is not None else {}),
             }
         )
 
@@ -172,6 +184,19 @@ def _symbol(given: str) -> str:
     return fx_ticker(given) or coin or given.strip().upper()
 
 
+def _crypto_costs(request: BacktestRequest, spec: BacktestSpec) -> BacktestRequest:
+    """``fee_tier``/``spread_bps`` applied exactly as ``backtest run --fee-tier/--spread-bps``."""
+    try:
+        return apply_crypto_overrides(request, spec.fee_tier, spec.spread_bps)
+    except CryptoOverrideError as exc:
+        raise ToolFailure(
+            "invalid_params",
+            str(exc),
+            fix="Drop fee_tier/spread_bps, or use them on a spot crypto symbol (BTC, ETH or SOL "
+            "in catalog firstrate-crypto) with fee_tier 1-17 and a spread_bps >= 0.",
+        ) from None
+
+
 def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
     """Resolve ``spec``; raises ``ToolFailure`` naming the fix when it cannot run."""
     ref = resolve_strategy(spec.strategy)
@@ -214,4 +239,5 @@ def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
         raise ToolFailure(
             "invalid_request", str(exc.errors()[0]["msg"]), fix="Correct the request fields."
         ) from None
+    request = _crypto_costs(request, spec)
     return ResolvedRequest(spec, ref.kind, request, compute_config_hash(request))

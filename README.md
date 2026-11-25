@@ -336,7 +336,10 @@ uv run python -m src.cli.main backtest run configs/riptide_crypto.yaml --catalog
 ```
 
 The research MCP's `submit_backtest`/`validate_config` take the same sizes as optional `units`
-(FX whole units; crypto a decimal coin size) and `contracts` (futures). A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
+(FX whole units; crypto a decimal coin size) and `contracts` (futures), and spot crypto's
+`fee_tier` (1-17) and `spread_bps` (finite, >= 0) as `--fee-tier`/`--spread-bps` take them: the
+same checks and the same config hash, refused (`invalid_params`) for any other instrument and,
+for now, on a study run. A cross (EURGBP) also needs its USD conversion pair (GBPUSD) in
 the same catalog for the whole window, or the run is refused before it starts. On daily bars a
 USDJPY stop/limit fill (and a gap-aware fill on USDJPY or a cross) converts at the previous
 day's rate (1.2% of one QA trade's P&L; see the FX doc).
