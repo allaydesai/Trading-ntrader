@@ -15,11 +15,20 @@ from types import SimpleNamespace
 
 import pytest
 from nautilus_trader.cache.cache import Cache
+from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import LiquiditySide, OrderSide
-from nautilus_trader.model.identifiers import ClientOrderId
+from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.identifiers import (
+    AccountId,
+    ClientOrderId,
+    PositionId,
+    TradeId,
+)
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
+from nautilus_trader.test_kit.stubs.events import TestEventStubs
+from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 
 from src.core.backtest_venue import cost_snapshot
 from src.core.crypto_costs import (
@@ -253,3 +262,93 @@ class TestSnapshot:
         snapshot = cost_snapshot(cache)
         assert {"account_currency", "fee_tier", "periods_per_year", "crypto_pairs"} <= set(snapshot)
         assert snapshot["crypto_pairs"]["BTC/USD.KRAKEN"]["costs_usd"]["commission"] == "0.00"
+
+
+class TestPositionSeries:
+    """Exact peak exposure: the snapshot saves each pair's fills in engine order.
+
+    The fee model numbers the fills it charges; the snapshot joins those numbers with the
+    orders' fill events (real Nautilus orders and ``OrderFilled`` events in a real ``Cache``).
+    """
+
+    @staticmethod
+    def _filled(cache, model, order, instrument, qty: str, px: str, pid: str, ts: int):
+        last_qty, last_px = instrument.make_qty(Decimal(qty)), instrument.make_price(Decimal(px))
+        commission = model.get_commission(order, last_qty, last_px, instrument)
+        fill = OrderFilled(
+            trader_id=order.trader_id,
+            strategy_id=order.strategy_id,
+            instrument_id=instrument.id,
+            client_order_id=order.client_order_id,
+            venue_order_id=order.venue_order_id,
+            account_id=AccountId("KRAKEN-001"),
+            trade_id=TradeId(f"T-{next(_IDS)}"),
+            position_id=PositionId(pid),
+            order_side=order.side,
+            order_type=order.order_type,
+            last_qty=last_qty,
+            last_px=last_px,
+            currency=USD,
+            commission=commission,
+            liquidity_side=TAKER,
+            event_id=UUID4(),
+            ts_event=ts,
+            ts_init=ts,
+        )
+        order.apply(fill)
+        return commission.as_decimal()
+
+    def _ready(self, cache, instrument, side, qty: str):
+        order = TestExecStubs.market_order(
+            instrument,
+            side,
+            instrument.make_qty(Decimal(qty)),
+            client_order_id=ClientOrderId(f"O-{next(_IDS)}"),
+        )
+        order.apply(TestEventStubs.order_submitted(order))
+        order.apply(TestEventStubs.order_accepted(order))
+        cache.add_order(order)
+        return order
+
+    def test_each_pair_gets_its_fills_in_engine_order_with_signed_position_quantity(self):
+        eth = _pair("ETH")
+        cache = Cache()
+        for instrument in (BTC, eth):
+            cache.add_instrument(instrument)
+        model = _model(BTC, eth, cache=cache)
+        buy = self._ready(cache, BTC, OrderSide.BUY, "0.2")
+        eth_buy = self._ready(cache, eth, OrderSide.BUY, "1")
+        sell = self._ready(cache, BTC, OrderSide.SELL, "0.15")
+        # the BTC buy fills in two parts around the ETH buy; the sell is partial (0.15 of 0.2)
+        fee0 = self._filled(cache, model, buy, BTC, "0.05", "78000.0000", "P-BTC", 1)
+        fee1 = self._filled(cache, model, eth_buy, eth, "1.00000000", "3000.0000", "P-ETH", 1)
+        fee2 = self._filled(cache, model, buy, BTC, "0.15", "78100.0000", "P-BTC", 2)
+        fee3 = self._filled(cache, model, sell, BTC, "0.15", "79000.0000", "P-BTC", 3)
+        pairs = crypto_snapshot([BTC, eth], cache)["crypto_pairs"]
+        assert pairs["BTC/USD.KRAKEN"]["position_series"] == [
+            [0, 1, "P-BTC", "0.05000000", "78000.0000", f"{fee0:f}"],
+            [2, 2, "P-BTC", "0.20000000", "78100.0000", f"{fee2:f}"],
+            [3, 3, "P-BTC", "0.05000000", "79000.0000", f"{fee3:f}"],
+        ]
+        assert pairs["ETH/USD.KRAKEN"]["position_series"] == [
+            [1, 1, "P-ETH", "1.00000000", "3000.0000", f"{fee1:f}"]
+        ]
+
+    def test_a_pair_with_no_fills_records_an_empty_series(self):
+        cache = Cache()
+        cache.add_instrument(BTC)
+        assert (
+            crypto_snapshot([BTC], cache)["crypto_pairs"]["BTC/USD.KRAKEN"]["position_series"] == []
+        )
+
+    def test_fills_the_cache_cannot_match_leave_the_series_unrecorded(self):
+        # A charge with no fill event behind it: report the M5 upper bound, not a wrong figure
+        cache = Cache()
+        cache.add_instrument(BTC)
+        _charge(_model(BTC, cache=cache), BTC, "0.1", "78000.0000")
+        assert (
+            "position_series" not in crypto_snapshot([BTC], cache)["crypto_pairs"]["BTC/USD.KRAKEN"]
+        )
+
+    def test_without_a_cache_there_is_no_series(self):
+        assert "position_series" not in crypto_snapshot([BTC])["crypto_pairs"]["BTC/USD.KRAKEN"]

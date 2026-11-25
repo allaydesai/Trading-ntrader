@@ -16,7 +16,10 @@ section 4, decisions C3, C4 and C21):
 Both components are scaled by the run's cost multiplier and rounded to cents once per order and
 liquidity side from running totals (:class:`~src.core.fx_costs.OrderCharges`, shared with the FX
 model), so split bar fills add no rounding. The totals per pair and liquidity side are kept in
-the cache for ``config_snapshot.crypto_pairs[...]["costs_usd"]``.
+the cache for ``config_snapshot.crypto_pairs[...]["costs_usd"]``. The model also numbers the
+fills it charges, in engine order, so :func:`crypto_snapshot` can save each pair's position
+series (``crypto_pairs[...]["position_series"]``) for exact peak exposure
+(:mod:`src.services.crypto.exposure`).
 
 The tier is one per run (decision C21): ``info["fee_tier"]`` when the run overrides it
 (``--fee-tier``), else the schedule's ``default_tier`` (tier 2). Rates come from the shipped
@@ -35,8 +38,9 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any, Protocol
 
 from nautilus_trader.backtest.models import FeeModel
-from nautilus_trader.model.enums import LiquiditySide
-from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.enums import LiquiditySide, OrderSide
+from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Money
 
@@ -49,6 +53,11 @@ from src.services.crypto.coin_specs import get_fee_schedule
 CRYPTO_COSTS_KEY = "ntrader.crypto_costs"
 #: Cache key holding, per pair, the orders strategies dropped under Kraken's minimum (M5).
 ORDERS_BELOW_MINIMUM_KEY = "ntrader.crypto_orders_below_minimum"
+#: Cache keys numbering the fills the fee model charged, in engine order: the count, and per
+#: fill (from 0) the client order id. The fee model is asked once per fill, just before
+#: Nautilus emits it, so this is the only record of the order of fills across pairs.
+FILL_COUNT_KEY = "ntrader.crypto_fill_count"
+FILL_ORDER_KEY = "ntrader.crypto_fill.{}"
 #: Crypto trades every calendar day: daily returns annualise on 365, not 252 (decision C20).
 CRYPTO_PERIODS_PER_YEAR = 365
 CENT = Decimal("0.01")
@@ -175,6 +184,7 @@ class CryptoCommissionModel(FeeModel):
         self.costs: dict[str, CryptoCosts] = {str(iid): CryptoCosts() for iid in self.terms}
         self._cache = cache
         self._orders: dict[tuple[str, LiquiditySide], OrderCharges] = {}
+        self._fills = 0
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:  # noqa: D102
         terms = self.terms.get(instrument.id)
@@ -193,7 +203,15 @@ class CryptoCommissionModel(FeeModel):
             costs.taker += commission
         costs.spread += spread
         self._publish()
+        self._number_fill(order)
         return Money(commission + spread, ACCOUNT_CURRENCY)
+
+    def _number_fill(self, order) -> None:
+        """Record which order this fill belongs to, under the next fill number."""
+        if self._cache is not None:
+            self._cache.add(FILL_ORDER_KEY.format(self._fills), str(order.client_order_id).encode())
+            self._fills += 1
+            self._cache.add(FILL_COUNT_KEY, str(self._fills).encode())
 
     def _publish(self) -> None:
         if self._cache is not None:
@@ -255,6 +273,64 @@ def count_order_below_minimum(cache: _KeyValueCache, instrument_id: object) -> i
     return _bump_orders_below_minimum(cache, instrument_id, 1)
 
 
+def _position_ids(cache) -> dict[tuple[str, str], str]:
+    """``(instrument id, trade id) -> position id`` for every fill a position holds."""
+    return {
+        (str(fill.instrument_id), str(fill.trade_id)): str(position.id)
+        for position in cache.positions()
+        for fill in position.events
+    }
+
+
+def position_series(cache, instrument_ids: Iterable[object]) -> dict[str, list[list]] | None:
+    """Each pair's fills in engine order, as :mod:`src.services.crypto.exposure` replays them.
+
+    Per pair, ``[seq, ts_ns, position_id, position_qty, fill_px, commission_usd]`` per fill:
+    the fill number across pairs, its time, its position and that position's signed quantity
+    after it, its price and the USD charged (commission plus modelled spread). Built from the
+    fill numbers the fee model kept and the orders' fill events. ``None`` when the two don't
+    match one for one (the run then reports the M5 upper bound rather than a wrong figure).
+    """
+    wanted = {str(i) for i in instrument_ids}
+    count = int(cache.get(FILL_COUNT_KEY) or 0)
+    position_of = _position_ids(cache)
+    taken: dict[str, int] = {}
+    held: dict[str, Decimal] = {}
+    series: dict[str, list[list]] = {iid: [] for iid in wanted}
+    for seq in range(count):
+        coid = (cache.get(FILL_ORDER_KEY.format(seq)) or b"").decode()
+        order = cache.order(ClientOrderId(coid)) if coid else None
+        fills = [e for e in order.events if isinstance(e, OrderFilled)] if order else []
+        if taken.get(coid, 0) >= len(fills):
+            return None
+        fill = fills[taken.get(coid, 0)]
+        taken[coid] = taken.get(coid, 0) + 1
+        iid = str(fill.instrument_id)
+        if iid not in wanted:
+            return None
+        pid = str(fill.position_id or position_of.get((iid, str(fill.trade_id)), iid))
+        sign = 1 if fill.order_side == OrderSide.BUY else -1
+        held[pid] = held.get(pid, ZERO) + sign * Decimal(str(fill.last_qty))  # keeps precision
+        series[iid].append(
+            [
+                seq,
+                fill.ts_event,
+                pid,
+                f"{held[pid]:f}",
+                str(fill.last_px),
+                f"{fill.commission.as_decimal():f}",
+            ]
+        )
+    filled = sum(
+        1
+        for o in cache.orders()
+        if str(o.instrument_id) in wanted
+        for e in o.events
+        if isinstance(e, OrderFilled)
+    )
+    return series if filled == count else None
+
+
 def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, Any]:
     """``config_snapshot`` keys for a run's crypto pairs; ``{}`` when there are none.
 
@@ -262,6 +338,8 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
     periods a year, and per pair the terms the run used, the USD it was charged and, when its
     strategy counts them (:func:`track_orders_below_minimum`), the orders dropped under the
     minimum. A pair no strategy counted has no ``orders_below_minimum`` ("not recorded").
+    With the run's cache each pair also gets its ``position_series`` (:func:`position_series`),
+    which makes the reported peak notional and exposure exact.
     """
     instruments = list(instruments)
     terms = crypto_terms_by_instrument(instruments)
@@ -269,6 +347,7 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
         return {}
     charged = _cached_json(cache, CRYPTO_COSTS_KEY)
     dropped = _cached_json(cache, ORDERS_BELOW_MINIMUM_KEY)
+    series = position_series(cache, terms) if cache is not None else None
     pairs = {}
     for instrument in instruments:
         if instrument.id in terms:
@@ -276,6 +355,8 @@ def crypto_snapshot(instruments: Iterable[Instrument], cache=None) -> dict[str, 
             entry["costs_usd"] = charged.get(str(instrument.id), CryptoCosts().as_snapshot())
             if str(instrument.id) in dropped:
                 entry["orders_below_minimum"] = int(dropped[str(instrument.id)])
+            if series is not None:
+                entry["position_series"] = series[str(instrument.id)]
             pairs[str(instrument.id)] = entry
     tiers = {t.fee_tier for t in terms.values()}
     return {
