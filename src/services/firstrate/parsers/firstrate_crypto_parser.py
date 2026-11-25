@@ -21,7 +21,7 @@ bar from which every volume is a whole number (FirstRate rounds volume to whole 
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -120,8 +120,9 @@ def _process_crypto_chunk(
     after_ns: int | None,
     errors_left: int,
     anomalies: CryptoAnomalies,
+    to_utc: Callable[[pd.Series], pd.Series] = utc_stamps,
 ) -> CryptoChunk:
-    frame, valid = _clean(raw, precision, utc_stamps)
+    frame, valid = _clean(raw, precision, to_utc)
     errors = _errors_for(raw, ~valid, errors_left) if errors_left > 0 else []
     good, behind = ordered_rows(frame, valid, after_ns)
     for col in _PRICES:
@@ -142,6 +143,11 @@ def _process_crypto_chunk(
 class FirstRateCryptoParser(FirstRateFuturesParser):
     """Chunked parser for FirstRate crypto files (``BTC_full_1hour.txt``)."""
 
+    #: Reads the stamp column as UTC datetimes; the Kraken parser reads epoch seconds (M7).
+    to_utc: Callable[[pd.Series], pd.Series] = staticmethod(utc_stamps)
+    #: Names the source in the whole-coin volume warning.
+    volume_note = "FirstRate rounding"
+
     def __init__(self, chunk_rows: int = DEFAULT_CHUNK_ROWS) -> None:
         super().__init__(chunk_rows)
         self.anomalies = CryptoAnomalies()
@@ -160,7 +166,14 @@ class FirstRateCryptoParser(FirstRateFuturesParser):
         for raw in _read_csv_chunks(file_path, self.chunk_rows):
             room = MAX_ERRORS - len(totals.errors)
             chunk = _process_crypto_chunk(
-                raw, bar_type, precision, spec.size_precision, last_ns, room, anomalies
+                raw,
+                bar_type,
+                precision,
+                spec.size_precision,
+                last_ns,
+                room,
+                anomalies,
+                self.to_utc,
             )
             totals.row_count += chunk.row_count
             totals.invalid_rows += chunk.invalid_rows

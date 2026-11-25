@@ -79,11 +79,42 @@ periods per year and record the value in its config snapshot. Other runs SHALL k
   such key
 
 ### Requirement: Kraken-fetched data is never priced from perpetuals
-A backtest with `--data-source kraken` SHALL fetch a spot price series for a spot pair, or
-refuse the request with a message naming the unsupported range, and SHALL build its instrument
-and fees from the coin spec when the coin has a spec.
+A backtest with `--data-source kraken` SHALL fetch Kraken's spot OHLC series for a spot pair,
+or refuse the request with a message naming the unsupported range, and SHALL build its
+instrument and fees from the coin spec when the coin has a spec. Fetched bars SHALL NOT be
+persisted to the default catalog.
 
 #### Scenario: BTC/USD from Kraken
 - **WHEN** `backtest run --data-source kraken --symbol BTC/USD` fetches bars
 - **THEN** no perpetual (`PF_`) chart symbol is requested and the venue charges the Kraken Pro
   spot schedule
+
+### Requirement: A coin without a spec gets a fallback Kraken pair
+A USD-quoted coin with no coin spec fetched with `--data-source kraken` SHALL get a fallback
+pair built from Kraken's public pair metadata, every term flagged UNVERIFIED, charged on the
+same Kraken Pro schedule.
+
+#### Scenario: DOGE/USD from Kraken
+- **WHEN** a DOGE/USD run fetches bars from Kraken
+- **THEN** its pair is `DOGE/USD.KRAKEN` with Kraken's minimum order and the venue charges the
+  default Kraken Pro tier
+
+### Requirement: Old Kraken ranges are refused before any request
+A `--data-source kraken` range starting before the spot endpoint's window (the latest 720
+candles of the interval) SHALL be refused before any request, as a usage error that names the
+window's first candle and the Kraken-history catalog path.
+
+#### Scenario: range older than the spot window
+- **WHEN** `backtest run --data-source kraken --symbol BTC/USD --timeframe 1-hour` starts
+  more than 720 hours ago
+- **THEN** the command exits 2 naming the window's first candle and the `kraken-crypto`
+  import, and no Kraken request is made
+
+### Requirement: Kraken settings default to the Kraken Pro schedule
+`KrakenSettings` SHALL default its maker and taker fees to the coin-spec fee schedule's default
+tier (tier 2: 0.30% maker, 0.60% taker), and SHALL NOT require an API key, since the endpoints
+the backtester reads are public. A key without a secret, or the reverse, SHALL still be refused.
+
+#### Scenario: default fees
+- **WHEN** `KrakenSettings()` is built with no fee environment variables
+- **THEN** its maker fee is 0.0030 and its taker fee is 0.0060

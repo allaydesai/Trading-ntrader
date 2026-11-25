@@ -23,10 +23,16 @@ pytestmark = pytest.mark.unit
 FEE_SOURCE_URL = "https://www.kraken.com/ca/pro/fees"
 
 EXPECTED = {
-    # coin: (kraken pair, rest, altname, spread bps)
+    # coin: (kraken pair, rest, altname, spread bps). rest/altname: Kraken AssetPairs (M7)
     "BTC": ("BTC/USD", "XXBTZUSD", "XBTUSD", Decimal("2")),
     "ETH": ("ETH/USD", "XETHZUSD", "ETHUSD", Decimal("3")),
-    "SOL": ("SOL/USD", "SOLZUSD", "SOLUSD", Decimal("5")),
+    "SOL": ("SOL/USD", "SOLUSD", "SOLUSD", Decimal("5")),
+}
+#: Kraken public AssetPairs, read 2026-11-24 (crypto M7): ordermin, costmin, tick_size.
+ASSET_PAIRS = {
+    "BTC": (Decimal("0.00006"), Decimal("0.5"), Decimal("0.1")),
+    "ETH": (Decimal("0.002"), Decimal("0.5"), Decimal("0.01")),
+    "SOL": (Decimal("0.05"), Decimal("0.5"), Decimal("0.01")),
 }
 
 # (tier, maker %, taker %) as published on the Kraken Pro CA fee page, 2026-11-24.
@@ -88,9 +94,7 @@ class TestShippedSpecFile:
         assert kraken.pair == pair
         assert kraken.rest == rest
         assert kraken.altname == altname
-        assert kraken.min_order_base > 0
-        assert kraken.min_order_usd > 0
-        assert kraken.tick_size > 0
+        assert (kraken.min_order_base, kraken.min_order_usd, kraken.tick_size) == ASSET_PAIRS[coin]
         assert kraken.discounted_pair is False  # decision C23: assume not discounted
 
     @pytest.mark.parametrize("coin", sorted(EXPECTED))
@@ -103,17 +107,24 @@ class TestShippedSpecFile:
             assert source.as_of <= date.today()
 
     @pytest.mark.parametrize("coin", sorted(EXPECTED))
-    def test_kraken_venue_terms_are_flagged_unverified(self, coin):
-        unverified = set(get_coin_spec(coin).unverified_fields())
-        assert {
-            "typical_spread_bps",
+    def test_kraken_pair_terms_are_verified_against_asset_pairs(self, coin):
+        """M7 checked symbols, minimums and tick against Kraken's public AssetPairs."""
+        spec = get_coin_spec(coin)
+        for field in (
             "kraken_rest",
             "kraken_altname",
             "kraken_min_order_base",
             "kraken_min_order_usd",
             "kraken_tick_size",
-            "kraken_discounted_pair",
-        } <= unverified
+        ):
+            assert spec.sources[field].status == "VERIFIED", field
+            assert "AssetPairs" in spec.sources[field].source
+
+    @pytest.mark.parametrize("coin", sorted(EXPECTED))
+    def test_spread_and_discounted_pair_stay_unverified(self, coin):
+        """Allay's answers (tasks.md 3.9, decisions C4 and C23) are still open."""
+        unverified = set(get_coin_spec(coin).unverified_fields())
+        assert unverified == {"typical_spread_bps", "kraken_discounted_pair"}
 
     def test_data_backed_precision_is_verified(self):
         for coin in EXPECTED:

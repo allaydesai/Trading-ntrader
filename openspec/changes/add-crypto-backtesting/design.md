@@ -108,11 +108,11 @@ BTC:
   data: firstrate               # or none (spec-only)
   kraken:
     pair: BTC/USD               # KrakenPairMapper user pair; id BTC/USD.KRAKEN
-    rest: XXBTZUSD              # as KrakenPairMapper.to_kraken_rest maps it today
-    altname: XBTUSD             # UNVERIFIED (AssetPairs altname); raw_symbol
-    min_order_base: "0.00005"   # UNVERIFIED (AssetPairs ordermin)
-    min_order_usd: "0.5"        # UNVERIFIED (AssetPairs costmin)
-    tick_size: "0.1"            # UNVERIFIED (AssetPairs tick_size); live rounding only
+    rest: XXBTZUSD              # AssetPairs result key (VERIFIED in M7)
+    altname: XBTUSD             # AssetPairs altname; raw_symbol (VERIFIED in M7)
+    min_order_base: "0.00006"   # AssetPairs ordermin (VERIFIED in M7; M1 guessed 0.00005)
+    min_order_usd: "0.5"        # AssetPairs costmin (VERIFIED in M7)
+    tick_size: "0.1"            # AssetPairs tick_size; live rounding only (VERIFIED in M7)
     discounted_pair: false      # UNVERIFIED: on the 0.02% "selected spot pairs" list?
 fee_schedule:                   # Kraken Pro spot ("Spot & Futures" tiers), CA page
   source: https://www.kraken.com/ca/pro/fees
@@ -145,13 +145,15 @@ the same page on 2026-11-24; tiers 1-2 have no assets threshold).
 
 As shipped in M1 the coins sit under a `coins:` map (like `pairs:` in `pair_specs.yaml`) and
 every per-coin value carries a `sources` entry (`status`, `source`, `as_of`):
-`price_precision` and `size_increment` are VERIFIED; `typical_spread_bps` and the Kraken
-`rest`, `altname`, minimums, tick and `discounted_pair` are UNVERIFIED. The fee schedule's
+`price_precision` and `size_increment` are VERIFIED; `typical_spread_bps` and
+`discounted_pair` are UNVERIFIED. The Kraken `rest`, `altname`, minimums and tick were
+UNVERIFIED at M1 and are VERIFIED since M7 against Kraken's public `AssetPairs` endpoint
+(2026-11-24), which corrected BTC's minimum (0.00006), SOL's (0.05) and SOL's `rest` (`SOLUSD`). The fee schedule's
 rates carry the page as their source (VERIFIED); its defaults carry their own entries:
 `fee_currency` UNVERIFIED, `discounted_pair_bps_off` and `min_fee_usd: 0` VERIFIED from the
 page, and `default_tier` (C21) VERIFIED as tier 2 from Allay's Kraken fee screen
-(2026-11-24; it was a provisional tier 1 at M1). `rest` is `KrakenPairMapper.to_kraken_rest`'s output
-(SOL gives `SOLZUSD`; Kraken's own name may be `SOLUSD`; M7 checks it against `AssetPairs`). The spot
+(2026-11-24; it was a provisional tier 1 at M1). `rest` is the pair's `AssetPairs` key
+(M1 had SOL's as `SOLZUSD`, which Kraken rejects; M7 set it to `SOLUSD`). The spot
 thresholds are informational: a run uses one fixed tier (decision C21), it does not re-tier as
 simulated volume accumulates.
 
@@ -407,7 +409,7 @@ takes a JSON integer or number; FX still requires an integer.
 
 ## 6. Ticks and fills
 
-The price increment is the data grid (10^-4). Kraken's `tick_size` (UNVERIFIED) are stored for live. `GapAwareFillModel` is unchanged; with 24/7 data,
+The price increment is the data grid (10^-4). Kraken's `tick_size` (VERIFIED in M7 against AssetPairs) are stored for live. `GapAwareFillModel` is unchanged; with 24/7 data,
 gaps are rare (exchange outages, sparse early years). Fill size against bar volume is pinned by
 the spike (section 1, spike result item 4): orders always fill in full, the part beyond the
 bar's volume one increment worse; the importer does not inflate volume.
@@ -566,21 +568,56 @@ long-only; Kraken Pro fee tier N; spread modelled".
 
 ## 11. Kraken data path correction (M7, decision C16)
 
-- `to_kraken_charts` returns the perpetual symbol `PF_XBTUSD`. The Kraken Charts API may also
-  serve spot series (**UNVERIFIED**: tick type and symbol format to be confirmed against the
-  live API in M7's first task); Kraken's spot REST `OHLC` endpoint returns only the most recent
-  720 candles per interval. M7 switches to the spot series if the Charts API has it; otherwise
-  `--data-source kraken` refuses a range older than the REST window with a clear message.
-  It never again wraps perpetual prices in a spot instrument.
-- The fetched instrument is built by `build_crypto_pair(get_coin_spec(base))` when the coin has a
-  spec (precision from the bars), else the current fallback with the same fee schedule, and the
-  venue gets `CryptoCommissionModel` at the run's tier.
-- **Same-venue history (UNVERIFIED)**: Kraken publishes downloadable historical OHLCVT/trade
-  files. M7's first task checks coverage and format for BTC/ETH/SOL and recommends whether a
-  `kraken-crypto` catalog should replace FirstRate as the primary source or serve as a basis
-  check. Importing it would be a follow-up (it is a different file layout).
-- `KRAKEN_DEFAULT_MAKER_FEE`/`TAKER_FEE` remain as overrides; their defaults move to the spec.
-- Code moves out of `kraken_client.py` and `_backtest_helpers.py` so neither grows.
+- `to_kraken_charts` returned the perpetual symbol `PF_XBTUSD`, and the fetched prices were
+  wrapped in a spot `CurrencyPair` built from spot `AssetPairs` metadata, with no `info`, so the
+  venue charged the equity per-share model.
+- **Spike (2026-11-24, public endpoints, no API key).** The Futures Charts API
+  (`https://futures.kraken.com/api/charts/v1/`) has tick types `mark`, `spot` and `trade`;
+  every one lists only futures symbols (`PF_`, `PI_`, `FF_`, `FI_`, `OF_`). Its `spot` tick
+  type is the futures' reference index (`spot/PF_XBTUSD/1d`: 1,710 candles from 2022-03-22,
+  volume 0), not Kraken spot trades. So the Charts API has **no** spot series. Kraken's spot
+  REST `OHLC` (`https://api.kraken.com/0/public/OHLC`) returns the latest 720 committed candles
+  of an interval plus the open one (`last` is its time), whatever `since` asks: at 03:26 UTC
+  hourly started 2026-10-26 03:00 and daily 2024-12-05.
+- **The fix.** `--data-source kraken` reads spot `OHLC` (`src/services/crypto/kraken_spot.py`)
+  and refuses, before any request, a range older than that window: exit 2 (`KrakenSpotRequestError`
+  as a usage error; the web form shows it inline), naming the window's first candle and the
+  `kraken-crypto` path below. Trade prices only (`LAST`); Kraken has no 12-hour spot interval.
+  A malformed pair, a non-USD quote or an unpublished interval is refused the same way.
+  Nothing fetched is persisted to the default catalog (whose Kraken series, if a user ever
+  fetched one, are perpetual prices): `DataCatalogService` no longer has a Kraken route and
+  refuses `data_source="kraken"`. Spot `OHLC` and `AssetPairs` are public, so the API key is
+  optional (a half-set key/secret pair is still refused).
+- The instrument is `build_crypto_pair(get_coin_spec(base))` for a coin with a spec, so the
+  venue gets `CryptoCommissionModel` at the run's tier (`--fee-tier`). A USD coin without one
+  gets a fallback spec from `AssetPairs` (`pair_decimals`/`tick_size`, `ordermin`, `costmin`;
+  spread 5 bp; every field UNVERIFIED) on the same schedule. A non-USD quote is refused (C6).
+- **Pair names.** `KrakenPairMapper.to_kraken_rest` returns the coin spec's `AssetPairs` key
+  (`XXBTZUSD`, `XETHZUSD`, `SOLUSD`); for other coins the altname form Kraken resolves
+  (`XDGUSD`, `LTCEUR`). The old prefix rule gave `SOLZUSD` and `XXDGZUSD`, which Kraken
+  rejects ("Unknown asset pair").
+- **Same-venue history: the `kraken-crypto` catalog.** Kraken's downloadable OHLCVT data
+  (support article 360047124832) is one ~9.5 GB ZIP split into five `.zip.partNN` files
+  (`assets.kraken.com/marketing/institutions/Kraken_OHLCVT_Full.zip.part00`..`04`), every pair
+  from its first trade to 2026-09-30, plus quarterly increments (`Kraken_OHLCVT_2026Q3.zip`).
+  Files are `{ALTNAME}_{minutes}.csv` (1, 5, 15, 60, 240, 720, 1440), headerless
+  `timestamp,open,high,low,close,volume,trades`, UNIX seconds at the bar open, no zero-filled
+  gaps; the archive carries a `MANIFEST.json`. `kraken_ohlcvt_download` reads the ZIP with
+  HTTP range requests and extracts only the wanted members (~210 MB compressed for three
+  coins, 18 s); `import --format kraken --asset-class crypto --catalog kraken-crypto` imports
+  the 1, 5, 60 and 1440-minute files through the FirstRate crypto service (same id, rounding,
+  warnings, verification and re-run rules; epoch stamps). Kraken has no 30-minute file.
+- **Recommendation.** `kraken-crypto` is the primary crypto source (same venue as the fee model
+  and any live trading; BTC from 2013-10-06). FirstRate stays as a cross-check and for BTC
+  before October 2013. Daily-close basis FirstRate vs Kraken, 2021-07 to 2026-05: median
+  3.5 bp BTC, 4.0 bp ETH, 6.6 bp SOL (p95 11.8 / 12.5 / 22.8 bp); before 2021 it is much wider
+  (ETH p95 392 bp from 2017), so FirstRate's source is a different venue.
+- `KRAKEN_DEFAULT_MAKER_FEE`/`TAKER_FEE` remain (back-compatible env vars); their defaults are
+  the schedule's default tier (0.0030 / 0.0060, literals pinned to `coin_specs.yaml` by a test,
+  so loading settings never reads the spec file). Nothing charges them any more (the client
+  no longer takes fees); backtests charge the schedule. Open question for Allay: drop them, or
+  make them a run override.
+- Code moved out of `kraken_client.py` (145 -> 98 statements) and `_backtest_helpers.py`.
 
 ## 12. Live-trading compatibility notes (not implemented here)
 
@@ -592,7 +629,7 @@ long-only; Kraken Pro fee tier N; spread modelled".
   symbology must be mapped to it (or the catalog rows renamed) so backtest configs run live
   unchanged.
 - **Orders**: round to Kraken `tick_size` and `lot_decimals`, respect `ordermin`/`costmin`
-  (section 6, UNVERIFIED values). Check that Kraken spot accepts the strategies' order kinds
+  (section 6; VERIFIED against AssetPairs in M7). Check that Kraken spot accepts the strategies' order kinds
   (stop-loss, take-profit, OCO brackets) before going live; Kraken's conditional-order model is
   not Nautilus' OCO.
 - **Fees live**: Kraken reports the actual fee per fill, so the live trade recorder needs no
@@ -631,7 +668,7 @@ defaults.
 | C13 | Sizing unit | fractional coin units floored to `size_increment`, no minimum of 1, below-minimum orders dropped and counted; decimal `--units` | **accepted by Allay, 2026-11-24** |
 | C14 | Price precision | fixed 4 decimals per coin (the 1h/1d data maximum); 1-minute 5-decimal rows rounded half-even and counted | **accepted by Allay, 2026-11-24** |
 | C15 | Volume | store as-is (coin units, 8 dp); warn on the 2026-03-21 whole-coin rounding; no volume inflation; spike pins fill behaviour | pending |
-| C16 | Kraken path | fix to spot series or refuse old ranges (M7); never perp prices in a spot instrument | pending |
+| C16 | Kraken path | spot REST `OHLC` for the latest 720 candles, refuse older ranges (exit 2) and point at the `kraken-crypto` catalog imported from Kraken's OHLCVT history; never perp prices in a spot instrument | **implemented in M7, 2026-11-24** (Allay asked for the history import in M7) |
 | C17 | Coin universe | BTC, ETH, SOL (the data on the VPS) | **accepted by Allay, 2026-11-24** |
 | C18 | OpenSpec layout | one umbrella change, tasks by milestone, one PR per milestone, archive after M7 | pending |
 | C19 | Headline metric | account return on USD equity; underlying return and costs split alongside | pending |

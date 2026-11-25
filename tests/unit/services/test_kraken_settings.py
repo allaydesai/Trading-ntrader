@@ -48,20 +48,30 @@ class TestKrakenSettingsDefaults:
         assert settings.kraken_rate_limit == 10
 
     def test_default_maker_fee(self):
-        """Default maker fee is 0.0016 (0.16%)."""
+        """Default maker fee is Kraken Pro spot tier 2's 0.30% (crypto M7; was 0.16%)."""
         # Arrange & Act
         settings = KrakenSettings()
 
         # Assert
-        assert settings.kraken_default_maker_fee == Decimal("0.0016")
+        assert settings.kraken_default_maker_fee == Decimal("0.0030")
 
     def test_default_taker_fee(self):
-        """Default taker fee is 0.0026 (0.26%)."""
+        """Default taker fee is Kraken Pro spot tier 2's 0.60% (crypto M7; was 0.26%)."""
         # Arrange & Act
         settings = KrakenSettings()
 
         # Assert
-        assert settings.kraken_default_taker_fee == Decimal("0.0026")
+        assert settings.kraken_default_taker_fee == Decimal("0.0060")
+
+    def test_default_fees_follow_the_schedules_default_tier(self):
+        """The literal defaults equal coin_specs.yaml's default tier (the M3 fee model)."""
+        from src.services.crypto.coin_specs import get_fee_schedule
+
+        schedule = get_fee_schedule()
+        tier = schedule.tier(schedule.default_tier)
+        settings = KrakenSettings()
+        assert settings.kraken_default_maker_fee == tier.maker_pct / 100
+        assert settings.kraken_default_taker_fee == tier.taker_pct / 100
 
 
 class TestKrakenSettingsEnvOverrides:
@@ -239,12 +249,22 @@ class TestKrakenCredentialValidationOnConnect:
     """Test suite for credential validation during connect()."""
 
     @pytest.mark.asyncio
-    async def test_connect_empty_credentials_raises_connection_error(self):
-        """Empty key + secret raises KrakenConnectionError mentioning KRAKEN_API_KEY."""
+    async def test_connect_without_credentials_succeeds(self):
+        """Spot OHLC and AssetPairs are public endpoints (crypto M7): no key is required."""
         # Arrange
         client = KrakenHistoricalClient(api_key="", api_secret="")
 
-        # Act & Assert
+        # Act
+        with patch("src.services.kraken_client.SpotMarket"):
+            result = await client.connect()
+
+        # Assert
+        assert result["connected"] is True
+
+    @pytest.mark.asyncio
+    async def test_connect_secret_without_key_raises_descriptive_error(self):
+        """Secret set but key empty raises KrakenConnectionError mentioning KRAKEN_API_KEY."""
+        client = KrakenHistoricalClient(api_key="", api_secret="c2VjcmV0")
         with pytest.raises(KrakenConnectionError, match="KRAKEN_API_KEY"):
             await client.connect()
 
@@ -265,10 +285,7 @@ class TestKrakenCredentialValidationOnConnect:
         client = KrakenHistoricalClient(api_key="test-key", api_secret="test-secret")
 
         # Act
-        with (
-            patch("src.services.kraken_client.FuturesMarket"),
-            patch("src.services.kraken_client.SpotMarket"),
-        ):
+        with patch("src.services.kraken_client.SpotMarket"):
             result = await client.connect()
 
         # Assert
@@ -310,7 +327,7 @@ class TestKrakenCredentialSecurityHardening:
 
         # Act
         with patch(
-            "src.services.kraken_client.FuturesMarket",
+            "src.services.kraken_client.SpotMarket",
             side_effect=Exception(f"auth failed with key={api_key}"),
         ):
             with pytest.raises(KrakenConnectionError) as exc_info:
@@ -331,7 +348,6 @@ class TestKrakenCredentialSecurityHardening:
 
         # Act
         with (
-            patch("src.services.kraken_client.FuturesMarket"),
             patch("src.services.kraken_client.SpotMarket"),
             capture_logs() as cap_logs,
         ):
