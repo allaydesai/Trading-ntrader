@@ -92,8 +92,8 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: conversion pair) and ``templates/partials/fx_panel.html`` (the FX panel's "Net P&L (USD)"
 #: label becomes "Closed-trade P&L (USD)"). 61 files; nothing else changed.
 #: **Regenerated 2026-11-24 by PO sign-off (Allay, crypto dashboard, crypto M5)** for exactly
-#: the files section 10 of ``openspec/changes/add-crypto-backtesting/design.md`` lists and M5
-#: touched: the crypto panel (new ``templates/partials/crypto_panel.html``,
+#: the files section 10 of ``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md``
+#: lists and M5 touched: the crypto panel (new ``templates/partials/crypto_panel.html``,
 #: ``backtest_detail.py``, ``detail.html``), the trades table (``trades_table.html``; its
 #: cells come from ``src/services/fx/display.trade_table_cells``, so ``ui/backtests.py`` is
 #: unchanged), the export (``rest/trades.py``), the run list (``backtest_list.py``,

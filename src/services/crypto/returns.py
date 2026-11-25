@@ -18,9 +18,10 @@ position's largest quantity and its open time, not its fill history, so a positi
 in is counted at its largest size from its open, and a position opened and closed at one
 timestamp counts as held then (:func:`src.services.fx.returns.peaks`): exact for single-entry
 positions that span bars, an upper bound otherwise (:func:`note` says so). See section 10 of
-``openspec/changes/add-crypto-backtesting/design.md``. Runs saved with their computed peaks
-(``crypto_peaks``) or, from PR #79, a fill series (``crypto_pairs[<id>].position_series``) get
-exact figures instead (:mod:`src.services.crypto.exposure`,
+``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md``. Runs saved with their
+computed peaks (``crypto_peaks``) or, from PR #79, a fill series
+(``crypto_pairs[<id>].position_series``) get exact figures instead
+(:mod:`src.services.crypto.exposure`,
 ``openspec/changes/add-crypto-exact-exposure``).
 """
 

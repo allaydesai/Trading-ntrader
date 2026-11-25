@@ -22,7 +22,8 @@ Before M2-M7 build on it, this proves in a real ``BacktestEngine`` that:
    price increment worse. Bar volume must carry the instrument's size precision (8).
 
 The gate here is a prototype; M3 ships the real requirement and rule in ``margin_gate.py``.
-See ``openspec/changes/add-crypto-backtesting/design.md`` sections 1 and 3 (decision C8).
+See ``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md`` sections 1 and 3
+(decision C8).
 
 Run with ``--forked`` (C extensions).
 """

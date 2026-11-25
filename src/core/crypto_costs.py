@@ -2,8 +2,9 @@
 
 A crypto venue's account is single-currency USD (``src/core/backtest_venue.py``) and every
 shipped pair is USD-quoted, so every charge is USD with no conversion. Per fill,
-:class:`CryptoCommissionModel` charges (``openspec/changes/add-crypto-backtesting/design.md``
-section 4, decisions C3, C4 and C21):
+:class:`CryptoCommissionModel` charges
+(``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md`` section 4,
+decisions C3, C4 and C21):
 
 - **commission**: ``rate x qty x price``, where the rate is the run's Kraken Pro tier's
   **maker** rate when Nautilus marks the fill ``MAKER`` (an order that rested on the book) and

@@ -6,7 +6,7 @@ discipline: validated on load with ``extra="forbid"``, and every failure surface
 (``coins.BTC.quote: ...``). Every per-coin value and fee-schedule default carries a dated
 ``source`` entry whose ``status`` says whether it was checked (``VERIFIED``) or is a best-known
 public figure still to be confirmed (``UNVERIFIED``). Only USD-quoted coins load (decision C6).
-See ``openspec/changes/add-crypto-backtesting/design.md`` section 1.
+See ``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md`` section 1.
 """
 
 from __future__ import annotations

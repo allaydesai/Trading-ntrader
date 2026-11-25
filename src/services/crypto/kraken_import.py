@@ -17,7 +17,7 @@ verified from the Parquet footers, and an unchanged series is skipped on a re-ru
 - stamps are epoch seconds, and the re-run classifier's source-end probe reads them;
 - the seventh column (trade count) is read and dropped.
 
-See ``openspec/changes/add-crypto-backtesting/design.md`` section 11.
+See ``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md`` section 11.
 """
 
 from __future__ import annotations

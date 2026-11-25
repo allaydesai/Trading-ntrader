@@ -14,9 +14,9 @@ the margin gate (``src/core/margin_gate.py``) enforces percentage margin. Given 
 registers the ``FxRateFeeder`` (``src/core/fx_rates.py``) before the caller adds strategies.
 
 A venue listing spec-built spot crypto pairs (``is_crypto``, crypto M3) gets the account the M1
-spike chose (decision C8, ``openspec/changes/add-crypto-backtesting/design.md`` section 1): a
-single-currency USD ``MARGIN`` account at leverage 1 (the pairs' ``margin_init`` is 1, so a
-position locks its full notional), the Kraken Pro spot fee model at the run's tier
+spike chose (decision C8, ``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md``
+section 1): a single-currency USD ``MARGIN`` account at leverage 1 (the pairs' ``margin_init``
+is 1, so a position locks its full notional), the Kraken Pro spot fee model at the run's tier
 (``src/core/crypto_costs.py``) and the margin gate's spot rules (cash, no short). The gate is
 what enforces cash: Nautilus runs no risk checks for margin accounts. Crypto and FX venues list
 only their own kind; a mix is refused.

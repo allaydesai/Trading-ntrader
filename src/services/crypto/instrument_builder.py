@@ -10,7 +10,7 @@ Spot is unlevered: margin fractions are 1 (100% of notional, decision C8). Instr
 zero because commission comes from the venue fee model (M3, ``src/core/crypto_costs.py``),
 charged at a run's fee tier. The tier is a run parameter: ``info`` records the schedule's source,
 date and default tier, plus ``fee_tier`` only when a run overrides the default (``--fee-tier``).
-See ``openspec/changes/add-crypto-backtesting/design.md`` section 1.
+See ``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md`` section 1.
 """
 
 from __future__ import annotations
