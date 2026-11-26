@@ -1,8 +1,8 @@
 # Crypto backtesting: coins, instruments, account model
 
-Spot crypto on Kraken, planned in `openspec/changes/add-crypto-backtesting/` (milestones
-M1-M7; decisions C1-C25 in `design.md` section 13). **Status: M1-M7 implemented** (coin
-specs, instruments, catalog dispatch, engine spike; the FirstRate importer and the
+Spot crypto on Kraken, planned in `openspec/changes/archive/2026-11-25-add-crypto-backtesting/`
+(milestones M1-M7; decisions C1-C25 in `design.md` section 13). **Status: M1-M7 implemented**
+(coin specs, instruments, catalog dispatch, engine spike; the FirstRate importer and the
 `firstrate-crypto` catalog; the account, Kraken fees and the spot gate; fractional sizing;
 reporting, symbols and the dashboard; the `riptide` and `bollinger_reversal` ports; the Kraken
 data path and the `kraken-crypto` catalog from Kraken's own history, below). Crypto backtests

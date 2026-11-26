@@ -1,10 +1,10 @@
 """Kraken client for historical **spot** crypto candles (``--data-source kraken``).
 
-Crypto M7 (``openspec/changes/add-crypto-backtesting/design.md`` section 11): the client reads
-Kraken's public spot REST ``OHLC`` endpoint, never the Futures Charts API (its symbols are
-perpetuals and futures; its ``spot`` tick type is an index). That endpoint serves only the
-latest 720 candles of an interval, so an older range is refused before any request
-(:mod:`src.services.crypto.kraken_spot`); the instrument is the coin spec's
+Crypto M7 (``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md``
+section 11): the client reads Kraken's public spot REST ``OHLC`` endpoint, never the Futures
+Charts API (its symbols are perpetuals and futures; its ``spot`` tick type is an index). That
+endpoint serves only the latest 720 candles of an interval, so an older range is refused before
+any request (:mod:`src.services.crypto.kraken_spot`); the instrument is the coin spec's
 ``BTC/USD.KRAKEN``. Both endpoints used (``OHLC``, ``AssetPairs``) are public: an API key is
 optional.
 """

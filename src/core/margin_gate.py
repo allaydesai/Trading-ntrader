@@ -54,7 +54,8 @@ the one-quantity-modify-at-a-time rule and the unreserved margin below; each req
 when the venue applies or rejects it or the order closes. The gate is installed only when a
 run has a futures contract, an FX pair or a spot crypto pair, so equity runs never see it. For
 spot crypto it is mandatory: the M1 spike showed a margin venue without it fills a USD 156k buy
-on USD 10k and opens shorts (``openspec/changes/add-crypto-backtesting/design.md`` section 1).
+on USD 10k and opens shorts
+(``openspec/changes/archive/2026-11-25-add-crypto-backtesting/design.md`` section 1).
 
 "Free" is Nautilus' free balance in the account's currency (USD for an FX venue's single
 currency account, the quote currency otherwise): realised cash minus the margin it has locked
