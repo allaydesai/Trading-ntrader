@@ -324,7 +324,9 @@ No order was denied in the Riptide runs. Daily-close basis FirstRate vs Kraken, 
 p95 is 79.5 bp and ETH 391.9 bp, so FirstRate's source is not Kraken. **Decision (Allay,
 2026-11-25):** `firstrate-crypto` is the primary crypto backtest catalog (it also has 30-minute
 bars and BTC before 2013-10-06); `kraken-crypto` (same venue as the fees and any live trading)
-is an optional cross-check, run on the same config when a sanity test is wanted.
+is an optional cross-check, run on the same config when a sanity test is wanted. Kraken has no
+30-minute file and no BTC before 2013-10-06, so a 30-minute config or an earlier BTC window has
+no `kraken-crypto` cross-check.
 
 Live `--data-source kraken` (2026-11-25 03:49 UTC): BTC/USD 1-hour 2024-01-01 to 2024-03-01
 exits 2 ("serves only the latest 720 60-minute candles ... from 2026-10-26 03:00 UTC"); BTC/USD
