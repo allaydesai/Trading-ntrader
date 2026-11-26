@@ -321,9 +321,12 @@ The raw files sit with the archive's `MANIFEST.json` and a `SHA256SUMS`.
 
 No order was denied in the Riptide runs. Daily-close basis FirstRate vs Kraken, 2021-07 to
 2026-05: median 3.5 bp (BTC), 4.0 (ETH), 6.6 (SOL), p95 11.8 / 12.5 / 22.8 bp; since 2017 BTC
-p95 is 79.5 bp and ETH 391.9 bp, so FirstRate's source is not Kraken. **Recommendation:**
-`kraken-crypto` is the primary crypto catalog (same venue as the fees and any live trading);
-FirstRate is a cross-check, and the only source for BTC before 2013-10-06.
+p95 is 79.5 bp and ETH 391.9 bp, so FirstRate's source is not Kraken. **Decision (Allay,
+2026-11-25):** `firstrate-crypto` is the primary crypto backtest catalog (it also has 30-minute
+bars and BTC before 2013-10-06); `kraken-crypto` (same venue as the fees and any live trading)
+is an optional cross-check, run on the same config when a sanity test is wanted. Kraken has no
+30-minute file and no BTC before 2013-10-06, so a 30-minute config or an earlier BTC window has
+no `kraken-crypto` cross-check.
 
 Live `--data-source kraken` (2026-11-25 03:49 UTC): BTC/USD 1-hour 2024-01-01 to 2024-03-01
 exits 2 ("serves only the latest 720 60-minute candles ... from 2026-10-26 03:00 UTC"); BTC/USD
