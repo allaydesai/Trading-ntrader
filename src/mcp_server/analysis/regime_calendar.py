@@ -354,7 +354,7 @@ def build_regime_calendar(
     )
 
 
-def _version_for(
+def calendar_version_for(
     repo: SyncRegimeRepository, key: tuple[str, str, str], number: int | None
 ) -> RegimeCalendarVersion:
     if number is not None:
@@ -392,7 +392,7 @@ def get_regime_labels(
     key = (benchmark_symbol.strip().upper(), catalog, label_set)
     with get_sync_session() as session:
         repo = SyncRegimeRepository(session)
-        found = _version_for(repo, key, version)
+        found = calendar_version_for(repo, key, version)
         build = found.build_no if as_of_build is None else as_of_build
         if not 1 <= build <= found.build_no:
             raise ToolFailure(

@@ -5,6 +5,7 @@ from typing import Any
 from mcp.server import MCPServer
 
 from src.mcp_server import export, runs
+from src.mcp_server.analysis.regime_export import export_regime_report
 from src.mcp_server.context import ServerContext
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.paper.record import export_session
@@ -12,6 +13,22 @@ from src.mcp_server.studies import record
 from src.mcp_server.tools import call
 
 TOOL_NAMES = ("get_run", "compare_runs", "export_results")
+
+
+async def _export_regime(
+    ctx: ServerContext, report_id: str, alone: bool, slug: str, folder: str, overwrite: bool
+) -> dict[str, Any]:
+    """``export_results(regime_report=...)``: a stored regime report, exported on its own."""
+    if not alone:
+        return ToolFailure(
+            "invalid_request",
+            "Export a regime report on its own, not with study, session or run_ids.",
+            fix="Make one export_results call per regime report.",
+        ).to_dict()
+    return await call(
+        export_regime_report, ctx.settings, report_id, slug=slug, folder=folder,
+        overwrite=overwrite,
+    )  # fmt: skip
 
 
 def register(server: MCPServer, ctx: ServerContext) -> None:
@@ -51,6 +68,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         folder: str = "Lab/results",
         overwrite: bool = False,
         session: str | None = None,
+        regime_report: str | None = None,
     ) -> dict[str, Any]:
         """Write runs to the vault as <slug>.json and <slug>.trades.csv (runner format).
 
@@ -61,8 +79,13 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         <slug>.<date>.session.trades.csv, one reading per day, and its compare-to
         run as <slug>.json once. Only folders in NTRADER_MCP_EXPORT_FOLDERS are
         writable; an existing slug (or a second reading the same day) needs
-        overwrite=true.
+        overwrite=true. With regime_report (a run_regime_attribution report_id, alone),
+        writes the stored report as <slug>.regime.json and <slug>.regime.md, stamped
+        "hindsight, not tradeable" when it read ground truth.
         """
+        if regime_report is not None:
+            alone = study is None and not run_ids and session is None
+            return await _export_regime(ctx, regime_report, alone, slug, folder, overwrite)
         if session is not None:
             if study is not None or run_ids:
                 return ToolFailure(
