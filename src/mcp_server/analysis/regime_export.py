@@ -25,6 +25,8 @@ _DAILY = (
     ("ci_high", "90% CI high"), ("exposure", "Exposure"), ("benchmark_ann_return", "Bench"),
     ("drift_return", "Drift"), ("trades_entered", "Trades in"), ("insufficient", "Insufficient"),
 )  # fmt: skip
+#: Only a position-scaled report (``drift_scaling: "position"``) shows the weight column.
+_SCALED = (*_DAILY[:-2], ("mean_position_weight", "Pos. weight"), *_DAILY[-2:])
 _DIFFERENCES = (
     ("pair", "Difference"), ("point", "Mean daily"), ("low", "90% CI low"),
     ("high", "90% CI high"), ("excludes_zero", "Excludes 0"),
@@ -53,11 +55,12 @@ def _table(rows: list[dict[str, Any]], columns: tuple[tuple[str, str], ...]) -> 
     return lines
 
 
-def _family_lines(name: str, family: dict[str, Any]) -> list[str]:
+def _family_lines(name: str, family: dict[str, Any], scaled: bool = False) -> list[str]:
     outcome = family["outcome"]
     title = f"#### {name}" + (f" (scale: {family['scale']})" if "scale" in family else "")
     lines = [title, "", f"Outcome: **{outcome['outcome']}** ({outcome['sufficient']} sufficient)"]
-    lines += ["", *_table([*family["rows"], family["unlabelled"], family["total"]], _DAILY), ""]
+    columns = _SCALED if scaled else _DAILY
+    lines += ["", *_table([*family["rows"], family["unlabelled"], family["total"]], columns), ""]
     differences = [{**d, "pair": f"{d['a']} − {d['b']}"} for d in family["differences"]]
     lines += ["Differences:", "", *_table(differences, _DIFFERENCES), ""]
     view = family["trades"]
@@ -86,13 +89,16 @@ def render_markdown(report: dict[str, Any]) -> str:
         ],
         f"- labels_hash `{report['labels_hash']}`",
         f"- overrides: {json.dumps(report['overrides']) if report['overrides'] else 'none'}",
-        "",
     ]
+    scaled = report.get("drift_scaling") == "position"
+    if scaled:
+        lines.append("- drift: position-scaled (benchmark return x the weight carried in)")
+    lines.append("")
     for run in report["runs"]:
         lines += [f"## {run['strategy']} {run['symbol']} `{run['run_id']}`", ""]
         lines += [f"- {note}" for note in run["notes"]] + [""]
         for name, family in run["families"].items():
-            lines += _family_lines(name, family)
+            lines += _family_lines(name, family, scaled)
     return "\n".join(lines) + "\n"
 
 

@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.regimes.attribution import (
+    DRIFT_SCALINGS,
     Calendar,
     TradeRecord,
     bucket_name,
@@ -74,10 +75,24 @@ DEFAULTS: dict[str, Any] = {
     "seed": 0,
     "calendar_version": None,
     "as_of_build": None,
+    "drift_scaling": "side",
 }
 DETECTOR_LAG = 1
 #: Selectors, not settings: choosing the label set or a snapshot to rerun is no override.
-_NOT_OVERRIDES = ("label_set", "as_of_build")
+#: ``drift_scaling`` changes no label, bucket or interval, only the drift column, so it is
+#: recorded in ``params`` but declares no robustness check.
+_NOT_OVERRIDES = ("label_set", "as_of_build", "drift_scaling")
+_SIDE_DRIFT = (
+    "benchmark daily return x the side held into each day (+1 long, -1 short, 0 flat), "
+    "mean x252; position size is not scaled"
+)
+_POSITION_DRIFT = {
+    "drift_return": "benchmark daily return x the position weight carried into each day, "
+    "mean x252 (drift_scaling='position')",
+    "mean_position_weight": "signed quantity carried in from the previous close x the "
+    "reference's previous close / the previous equity, mean over the bucket's days (+0.10 = "
+    "long 10% of equity; flat days count as 0)",
+}
 
 
 @dataclass(frozen=True)
@@ -126,6 +141,30 @@ def _check_params(min_days: int, min_trades: int, samples: int, seed: int) -> No
         )
     if seed < 0:
         raise ToolFailure("invalid_seed", "seed must be 0 or more.", fix="Use 0 (the default).")
+
+
+def _check_drift_scaling(drift_scaling: str) -> None:
+    if drift_scaling not in DRIFT_SCALINGS:
+        raise ToolFailure(
+            "invalid_drift_scaling",
+            f"Unknown drift_scaling '{drift_scaling}'.",
+            fix="Use 'side' (the default, phase 2) or 'position' (weighted by exposure).",
+        )
+
+
+def _check_scalable(fields: dict[str, Any], sleeve: Sleeve, read: _Read) -> None:
+    """Position-scaled drift marks the carried quantity at the reference's close, so the
+    reference must be the instrument traded, and a futures multiplier is not known here."""
+    reference, catalog = read.version.reference, read.version.catalog
+    futures = "futures" in catalog or "futures" in (sleeve.run.data_source or "")
+    if fields["symbol"].upper() != reference or futures:
+        raise ToolFailure(
+            "drift_scaling_unavailable",
+            f"Run {sleeve.run_id} trades {fields['symbol']} from "
+            f"'{sleeve.run.data_source}'; position-scaled drift marks its quantity at "
+            f"{reference}'s close in '{catalog}', which needs the same, unlevered instrument.",
+            fix="Profile it against its own symbol's calendar, or leave drift_scaling unset.",
+        )
 
 
 def labels_hash(rows: list[tuple[date, dict[str, Any]]]) -> str:
@@ -185,13 +224,16 @@ def _benchmark_closes(bars: pd.DataFrame, read: _Read) -> pd.Series:
 
 def _trades(session: Session, sleeve: Sleeve) -> list[TradeRecord]:
     stmt = (
-        select(Trade.entry_timestamp, Trade.exit_timestamp, Trade.order_side, Trade.profit_loss)
+        select(
+            Trade.entry_timestamp, Trade.exit_timestamp, Trade.order_side, Trade.profit_loss,
+            Trade.quantity,
+        )
         .where(Trade.backtest_run_id == sleeve.run.id)
         .order_by(Trade.entry_timestamp, Trade.id)
-    )
+    )  # fmt: skip
     return [
-        TradeRecord(entry, exit_, side, float(pnl or 0))
-        for entry, exit_, side, pnl in session.execute(stmt).all()
+        TradeRecord(entry, exit_, side, float(pnl or 0), abs(float(qty or 0)))
+        for entry, exit_, side, pnl, qty in session.execute(stmt).all()
     ]
 
 
@@ -237,6 +279,9 @@ def _run_profile(
     params: dict,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     fields, trades = inputs
+    scaling = params.get("drift_scaling", "side")
+    if scaling == "position":
+        _check_scalable(fields, sleeve, read)
     frame = daily_frame(sleeve.equity, fields["initial_capital"])
     result = profile(
         frame,
@@ -249,6 +294,7 @@ def _run_profile(
         samples=params["bootstrap_samples"],
         seed=params["seed"],
         initial_capital=fields["initial_capital"],
+        drift_scaling=scaling,
     )
     notes = [n for n in (_closing_note(fields, frame, sum(t.exit is None for t in trades)),) if n]
     if fields["symbol"].upper() != read.version.reference:
@@ -322,10 +368,12 @@ def run_regime_attribution(
     seed: int = 0,
     calendar_version: int | None = None,
     as_of_build: int | None = None,
+    drift_scaling: str = "side",
 ) -> dict[str, Any]:
     """Profile runs against one stored calendar version; store and return the report."""
     lag = _resolve_lag(label_set, lag_days)
     _check_params(min_days, min_trades, bootstrap_samples, seed)
+    _check_drift_scaling(drift_scaling)
     reference = benchmark_symbol.strip().upper()
     given = {
         "label_set": label_set, "benchmark_symbol": reference, "catalog": catalog,
@@ -333,6 +381,8 @@ def run_regime_attribution(
         "bootstrap_samples": bootstrap_samples, "seed": seed,
         "calendar_version": calendar_version, "as_of_build": as_of_build,
     }  # fmt: skip
+    if drift_scaling != DEFAULTS["drift_scaling"]:  # absent by default: phase 2 reproduces
+        given["drift_scaling"] = drift_scaling
     with get_sync_session() as session:
         sleeves = load_sleeves(session, run_ids, minimum=1, maximum=MAX_RUNS)
         inputs = {s.run_id: (_run_fields(s), _trades(session, s)) for s in sleeves}
@@ -359,37 +409,51 @@ def _payload(read: _Read, params: dict, overrides: dict, runs: list[dict]) -> di
     payload: dict[str, Any] = {"hindsight": hindsight}
     if hindsight:
         payload["stamp"] = STAMP
-    return payload | {
-        "label_set": read.calendar.label_set,
-        "lag_days": params["lag_days"],
-        "reference": read.version.reference,
-        "catalog": read.version.catalog,
-        "calendar": [_calendar_stamp(read)],
-        "labels_hash": read.labels_hash,
-        "params": params,
-        "overrides": overrides,
-        "declared_robustness_check": bool(overrides),
-        "interval": {
-            "method": "stationary bootstrap of the whole daily timeline, circular wrap",
-            "mean_block_days": MEAN_BLOCK,
-            "confidence": CONFIDENCE,
-            "samples": params["bootstrap_samples"],
-            "seed": params["seed"],
-        },
-        "runs": runs,
-        "definitions": {
-            "pnl": "E(d) - E(d-1), the first day from initial capital; rows incl. unlabelled "
-            "sum to the last equity point minus initial capital",
-            "exposure": "share of the bucket's days with a position carried in from the "
-            "previous close, or opened and closed within the day",
-            "benchmark": f"{read.version.reference} close-to-close return from catalog "
-            f"'{read.version.catalog}' on the bucket's days, annualised x252 (no dividends "
-            "unless the catalog's bars fold them in)",
-            "drift_return": "benchmark daily return x the side held into each day (+1 long, "
-            "-1 short, 0 flat), mean x252; position size is not scaled",
-            "trades": "closed trades by the label in force on their entry day; open apart",
-        },
+    return (
+        payload
+        | {
+            "label_set": read.calendar.label_set,
+            "lag_days": params["lag_days"],
+            "reference": read.version.reference,
+            "catalog": read.version.catalog,
+            "calendar": [_calendar_stamp(read)],
+            "labels_hash": read.labels_hash,
+            "params": params,
+            "overrides": overrides,
+            "declared_robustness_check": bool(overrides),
+            "interval": {
+                "method": "stationary bootstrap of the whole daily timeline, circular wrap",
+                "mean_block_days": MEAN_BLOCK,
+                "confidence": CONFIDENCE,
+                "samples": params["bootstrap_samples"],
+                "seed": params["seed"],
+            },
+            "runs": runs,
+            "definitions": _definitions(read, params),
+        }
+        | _scaling(params)
+    )
+
+
+def _definitions(read: _Read, params: dict) -> dict[str, str]:
+    definitions = {
+        "pnl": "E(d) - E(d-1), the first day from initial capital; rows incl. unlabelled "
+        "sum to the last equity point minus initial capital",
+        "exposure": "share of the bucket's days with a position carried in from the "
+        "previous close, or opened and closed within the day",
+        "benchmark": f"{read.version.reference} close-to-close return from catalog "
+        f"'{read.version.catalog}' on the bucket's days, annualised x252 (no dividends "
+        "unless the catalog's bars fold them in)",
+        "drift_return": _SIDE_DRIFT,
+        "trades": "closed trades by the label in force on their entry day; open apart",
     }
+    return definitions | (_POSITION_DRIFT if _scaling(params) else {})
+
+
+def _scaling(params: dict) -> dict[str, Any]:
+    """The top-level marker of a position-scaled report; nothing for the default."""
+    scaling = params.get("drift_scaling", DEFAULTS["drift_scaling"])
+    return {} if scaling == DEFAULTS["drift_scaling"] else {"drift_scaling": scaling}
 
 
 def _store(payload: dict[str, Any], read: _Read, label_set: str) -> dict[str, Any]:
