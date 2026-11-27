@@ -107,14 +107,21 @@ def _stamp(day: date) -> int:
     return int(datetime.combine(day, time(), tzinfo=timezone.utc).timestamp())
 
 
-def seed_run(store, days: list[date], *, basis: str = "mark_to_market", symbol: str = "SPY") -> str:
+def seed_run(
+    store,
+    days: list[date],
+    *,
+    basis: str = "mark_to_market",
+    symbol: str = "SPY",
+    data_source: str = "catalog:firstrate-etf",
+) -> str:
     """A stored SPY run over ``days``: a drifting curve, a few trades, one still open."""
     values = [INITIAL * (1 + 0.0004 * (i % 37) - 0.0002 * (i % 11)) for i in range(len(days))]
     run = BacktestRun(
         run_id=uuid4(), strategy_name="Fixture", strategy_type="fixture",
         instrument_symbol=symbol, start_date=datetime.combine(days[0], time(), timezone.utc),
         end_date=datetime.combine(days[-1], time(), timezone.utc),
-        initial_capital=Decimal(str(INITIAL)), data_source="catalog:firstrate-etf",
+        initial_capital=Decimal(str(INITIAL)), data_source=data_source,
         execution_status="success", execution_duration_seconds=Decimal("1"),
         config_snapshot={"metrics_basis": basis, "config": {}},
     )  # fmt: skip
@@ -410,6 +417,18 @@ async def test_position_scaled_drift_needs_the_reference_to_be_the_traded_symbol
     assert "QQQ" in data["error"]["message"] and data["error"]["fix"]
     plain = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
     assert plain["ok"] is True
+
+
+async def test_position_scaled_drift_refuses_fx_and_futures_runs(server, store, bars):
+    """Quantity x close is not USD notional for a pair quoted in another currency, and no
+    futures multiplier is stored with a trade."""
+    await _call(server, "build_regime_calendar")
+    for source in ("catalog:firstrate-fx", "catalog:firstrate-futures"):
+        run_id = seed_run(store, _run_days(bars["frame"], 300), data_source=source)
+        data = await _call(
+            server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+        )
+        assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
 
 
 async def test_an_unknown_drift_scaling_is_refused_with_a_fix(server, store, bars):

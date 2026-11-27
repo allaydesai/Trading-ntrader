@@ -91,7 +91,8 @@ _POSITION_DRIFT = {
     "mean x252 (drift_scaling='position')",
     "mean_position_weight": "signed quantity carried in from the previous close x the "
     "reference's previous close / the previous equity, mean over the bucket's days (+0.10 = "
-    "long 10% of equity; flat days count as 0)",
+    "long 10% of equity; flat days count as 0). The quantity is the stored trade's, its peak "
+    "for a position scaled in or out, which overweights its smaller days",
 }
 
 
@@ -152,15 +153,21 @@ def _check_drift_scaling(drift_scaling: str) -> None:
         )
 
 
-def _check_scalable(fields: dict[str, Any], sleeve: Sleeve, read: _Read) -> None:
+#: Catalog kinds whose quantity x close is not the position's USD notional: futures (the
+#: multiplier is not stored with a trade) and FX (a pair quoted in another currency, and
+#: leverage).
+_UNSCALABLE = ("futures", "fx")
+
+
+def _check_scalable(sleeve: Sleeve, reference: str, catalog: str) -> None:
     """Position-scaled drift marks the carried quantity at the reference's close, so the
-    reference must be the instrument traded, and a futures multiplier is not known here."""
-    reference, catalog = read.version.reference, read.version.catalog
-    futures = "futures" in catalog or "futures" in (sleeve.run.data_source or "")
-    if fields["symbol"].upper() != reference or futures:
+    reference must be the instrument traded, in an unlevered, USD-quoted catalog."""
+    source = sleeve.run.data_source or ""
+    kinds = {k for k in _UNSCALABLE for where in (catalog, source) if f"-{k}" in where}
+    if sleeve.run.instrument_symbol.upper() != reference or kinds:
         raise ToolFailure(
             "drift_scaling_unavailable",
-            f"Run {sleeve.run_id} trades {fields['symbol']} from "
+            f"Run {sleeve.run_id} trades {sleeve.run.instrument_symbol} from "
             f"'{sleeve.run.data_source}'; position-scaled drift marks its quantity at "
             f"{reference}'s close in '{catalog}', which needs the same, unlevered instrument.",
             fix="Profile it against its own symbol's calendar, or leave drift_scaling unset.",
@@ -279,9 +286,6 @@ def _run_profile(
     params: dict,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     fields, trades = inputs
-    scaling = params.get("drift_scaling", "side")
-    if scaling == "position":
-        _check_scalable(fields, sleeve, read)
     frame = daily_frame(sleeve.equity, fields["initial_capital"])
     result = profile(
         frame,
@@ -294,7 +298,7 @@ def _run_profile(
         samples=params["bootstrap_samples"],
         seed=params["seed"],
         initial_capital=fields["initial_capital"],
-        drift_scaling=scaling,
+        drift_scaling=params.get("drift_scaling", DEFAULTS["drift_scaling"]),
     )
     notes = [n for n in (_closing_note(fields, frame, sum(t.exit is None for t in trades)),) if n]
     if fields["symbol"].upper() != read.version.reference:
@@ -385,6 +389,9 @@ def run_regime_attribution(
         given["drift_scaling"] = drift_scaling
     with get_sync_session() as session:
         sleeves = load_sleeves(session, run_ids, minimum=1, maximum=MAX_RUNS)
+        if drift_scaling == "position":  # refuse before any calendar or catalog read
+            for sleeve in sleeves:
+                _check_scalable(sleeve, reference, catalog)
         inputs = {s.run_id: (_run_fields(s), _trades(session, s)) for s in sleeves}
         read = _read_calendar(
             SyncRegimeRepository(session), (reference, catalog, label_set),

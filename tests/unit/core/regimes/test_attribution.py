@@ -420,3 +420,18 @@ def test_an_unknown_drift_scaling_is_refused():
     frame, trades, calendar, closes = _scaled_run()
     with pytest.raises(ValueError, match="drift_scaling"):
         profile(frame, calendar, trades, closes, lag=1, samples=10, drift_scaling="notional")
+
+
+def test_a_non_positive_previous_equity_weighs_nothing_instead_of_overflowing():
+    days = _sessions(3)
+    closes = pd.Series([10.0, 10.0, 10.0], index=days)
+    trades = [TradeRecord(_at(days[0]), None, "BUY", 0.0, quantity=10.0)]
+    weights = position_weights(days, trades, closes, np.array([1_000.0, 0.0, -50.0]))
+    assert list(weights) == [0.0, 0.0, 0.0]
+
+
+def test_position_scaled_drift_refuses_a_trade_without_a_quantity():
+    frame, trades, calendar, closes = _scaled_run()
+    unsized = [*trades[:-1], TradeRecord(trades[-1].entry, None, "BUY", 0.0)]
+    with pytest.raises(ValueError, match="quantity"):
+        profile(frame, calendar, unsized, closes, lag=1, samples=10, drift_scaling="position")

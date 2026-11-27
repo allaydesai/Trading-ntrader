@@ -26,7 +26,15 @@ _DAILY = (
     ("drift_return", "Drift"), ("trades_entered", "Trades in"), ("insufficient", "Insufficient"),
 )  # fmt: skip
 #: Only a position-scaled report (``drift_scaling: "position"``) shows the weight column.
-_SCALED = (*_DAILY[:-2], ("mean_position_weight", "Pos. weight"), *_DAILY[-2:])
+_SCALED = tuple(
+    column
+    for key, title in _DAILY
+    for column in (
+        [("mean_position_weight", "Pos. weight"), (key, title)]
+        if key == "trades_entered"
+        else [(key, title)]
+    )
+)
 _DIFFERENCES = (
     ("pair", "Difference"), ("point", "Mean daily"), ("low", "90% CI low"),
     ("high", "90% CI high"), ("excludes_zero", "Excludes 0"),
