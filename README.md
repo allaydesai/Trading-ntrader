@@ -691,6 +691,15 @@ candidate's out-of-sample run is warned about, not refused; before a freeze a st
 bring its own in-sample runs. Phase 5b — an engine-backed multi-strategy backtest with shared
 capital and exposure limits, scan-driven universes, a portfolio gate — is not built.
 
+**Tools (regime attribution phase 1, the regime calendar):** `build_regime_calendar`,
+`get_regime_labels`. `build_regime_calendar` (default `SPY` in `firstrate-etf`) stores a
+versioned, append-only calendar in Postgres: ground-truth labels (hindsight wave legs at
+3 / 6 / 12 × ATR20, centred ranging and volatility) and detector labels (`sma200`, past data
+only, 272-session warm-up). A rebuild verifies the stored bar hashes, appends new sessions and
+fills ground-truth values once final; a changed definition is a new version.
+`get_regime_labels` reads labels by date, optionally as of an earlier build; ground-truth
+output is stamped "hindsight, not tradeable". See `docs/agent/regime-attribution.md`.
+
 A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
 for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
 `export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the

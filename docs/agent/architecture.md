@@ -116,5 +116,6 @@ Read the topic doc for your area of work:
 | Spot crypto (Kraken): coin specs, instruments, account model | `docs/agent/crypto-backtesting.md` |
 | Web UI, HTMX, templates, charts | `docs/agent/web-ui.md` |
 | Database, repositories, persistence | `docs/agent/persistence.md` |
+| Regime calendar and attribution (versions, labels, hindsight rules) | `docs/agent/regime-attribution.md` |
 | Tests, fixtures, TDD | `docs/agent/testing.md` |
 | Git, style, dependencies | `docs/agent/conventions.md` |

@@ -126,6 +126,13 @@ end at 2026-05-01, so any run past that date has unlabelled tail days. Whether t
 split- and dividend-adjusted is not recorded in the catalog. Phase 1 task 1.1 checks it, since
 it matters for the drift benchmark (section 5.6).
 
+**Task 1.1 result (2026-11-26): the SPY bars are unadjusted for dividends**, and SPY has had no
+split. The catalog's closes are the raw prints: 222.95 on 2020-03-23 and 145.5625 on
+2000-01-03 (a dividend-adjusted series is about 10% and 35% lower on those dates).
+`catalog_dividends` holds 132 SPY ex-dates (1993-03-19 → 2026-03-20) that the prices do not
+fold in, and `catalog_stock_splits` has no SPY row. Close-to-close returns, and so the drift
+benchmark (section 5.6), exclude dividends on both sides.
+
 ### (e) Baseline candidates and ORB runs
 
 The VPS DB holds 97 runs (87 successful) and **0 research studies**. All runs were made between

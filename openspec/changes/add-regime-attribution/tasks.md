@@ -27,10 +27,10 @@ Acceptance: `build_regime_calendar` stores ground-truth version 1 and detector v
 (`sma200`) for SPY. A rebuild reproduces every stored label exactly. Detector rows cannot be
 updated or deleted. The wave-leg chart looks right to Allay.
 
-- [ ] 1.1 Data check (no code): find out whether `firstrate-etf` SPY daily bars are split- and
+- [x] 1.1 Data check (no code): find out whether `firstrate-etf` SPY daily bars are split- and
       dividend-adjusted (compare against `catalog_dividends` ex-dates and a known split-free
       price). Record the answer in `design.md` section 0(d). The drift benchmark depends on it.
-- [ ] 1.2 Unit (failing first): `tests/unit/core/regimes/test_ground_truth.py`:
+- [x] 1.2 Unit (failing first): `tests/unit/core/regimes/test_ground_truth.py`:
   - ATR20 is a simple mean.
   - A synthetic zigzag gives the expected peaks and troughs at k = 3, 6 and 12, using the ATR
     at the extreme's date.
@@ -40,21 +40,21 @@ updated or deleted. The wave-leg chart looks right to Allay.
     either end.
   - Volatility is centred 21-session volatility against a frozen median.
   - Finality: appending bars never changes a label that is already set.
-- [ ] 1.3 Implement `src/core/regimes/ground_truth.py` (pure).
-- [ ] 1.4 Unit (failing first): `tests/unit/core/regimes/test_detectors.py`:
+- [x] 1.3 Implement `src/core/regimes/ground_truth.py` (pure).
+- [x] 1.4 Unit (failing first): `tests/unit/core/regimes/test_detectors.py`:
   - `sma200` is `up` when close > SMA200 up to *t*.
   - The first 272 sessions are `null`.
   - **No lookahead**: perturbing every bar after *t* leaves labels ≤ *t* unchanged.
-- [ ] 1.5 Implement `src/core/regimes/detectors.py` (`sma200` only).
-- [ ] 1.6 Unit (failing first): `tests/unit/core/regimes/test_definition.py`: the default
+- [x] 1.5 Implement `src/core/regimes/detectors.py` (`sma200` only).
+- [x] 1.6 Unit (failing first): `tests/unit/core/regimes/test_definition.py`: the default
       definition's canonical JSON and sha256 hash are pinned. Any changed parameter changes
       the hash. Unknown keys are refused. The definition holds no data-derived value: the
       frozen volatility median lives in `frozen_stats`, so building on more bars leaves the
       hash unchanged. The per-session `bar_hash` is stable for the same OHLC and changes when
       any one of its prices changes.
-- [ ] 1.7 Implement `src/core/regimes/definition.py` (pydantic definitions, label payload models,
+- [x] 1.7 Implement `src/core/regimes/definition.py` (pydantic definitions, label payload models,
       hashing).
-- [ ] 1.8 Integration (failing first, Postgres): `tests/integration/db/test_regime_repository.py`:
+- [x] 1.8 Integration (failing first, Postgres): `tests/integration/db/test_regime_repository.py`:
   - Insert a version and its labels; read by date range.
   - Uniqueness on (`reference`, `catalog`, `label_set`, `definition_hash`, `input_revision`)
     holds. The same definition at `input_revision` 2 is accepted only with a
@@ -73,7 +73,7 @@ updated or deleted. The wave-leg chart looks right to Allay.
   - Reading as of build *n* hides values set later and rows inserted later
     (`inserted_in_build` > *n*, including all-null ground-truth rows), and returns build
     *n*'s `data_end` from the append-only `regime_calendar_builds`.
-- [ ] 1.9 Migration (off `3f56b46c78eb`): `regime_calendar_versions`, `regime_labels`,
+- [x] 1.9 Migration (off `3f56b46c78eb`): `regime_calendar_versions`, `regime_labels`,
       `regime_calendar_builds`, and the `regime_labels_append_only`,
       `regime_versions_immutable` and append-only builds triggers. Add
       `src/db/models/regime.py` and `src/db/repositories/regime_repository_sync.py` (insert
@@ -81,14 +81,14 @@ updated or deleted. The wave-leg chart looks right to Allay.
       2026-11-26 (`design.md` Q13), so no async repository is added. Update the single-head
       note in `CLAUDE.md` and
       `docs/agent/persistence.md` (the new tables, plus the exception if approved).
-- [ ] 1.10 Unit (failing first): `tests/unit/governance/test_regime_ground_truth_boundary.py`
+- [x] 1.10 Unit (failing first): `tests/unit/governance/test_regime_ground_truth_boundary.py`
       scans the AST of `src/**`, plus `src/core/strategies/custom/**` when it is present,
       resolving relative imports. Only the **named** permitted files (`design.md` section 9; no
       globs) may import `src.core.regimes.ground_truth` or call the repository's ground-truth
       reader. `src/core/regimes/filter_test.py` and `src/mcp_server/analysis/regime_filter.py`
       are explicitly forbidden. The test starts red against planted fixture modules, one
       absolute import and one relative.
-- [ ] 1.11 Component (failing first): `tests/component/mcp_server/test_regime_calendar_tools.py`:
+- [x] 1.11 Component (failing first): `tests/component/mcp_server/test_regime_calendar_tools.py`:
   - `build_regime_calendar` on a fixture catalog creates both versions.
   - Running it again with the same definition is a no-op.
   - New bars append rows.
@@ -102,19 +102,23 @@ updated or deleted. The wave-leg chart looks right to Allay.
   - `label_set="ground_truth"` output carries `hindsight: true` and
     `"hindsight, not tradeable"`.
   - Refusals carry `fix`.
-- [ ] 1.12 Implement `src/mcp_server/analysis/regime_calendar.py` and
+- [x] 1.12 Implement `src/mcp_server/analysis/regime_calendar.py` and
       `src/mcp_server/tools/regimes.py` (`build_regime_calendar`, `get_regime_labels`).
       Register them in `server.py`. Add both names to `REGISTERED_TOOLS` and to `PINNED_TOOLS`
       (`tests/component/mcp_server/test_protocol_safety.py`) in the same commit. Add one
       sentence to `INSTRUCTIONS`.
-- [ ] 1.13 Integration (failing first): `tests/integration/mcp_server/test_regime_calendar.py`:
+- [x] 1.13 Integration (failing first): `tests/integration/mcp_server/test_regime_calendar.py`:
       build SPY from the real `firstrate-etf` catalog, rebuild into a scratch schema, and check
       that every label is equal (**exit check: rebuild reproduces**).
 - [ ] 1.14 Exit check: render SPY 2000-2026 with the legs shaded per scale (an HTML file
       attached to the PR), plus the leg count per scale and the median leg length. Allay
       confirms the 3 / 6 / 12 × ATR thresholds (`design.md` Q8) **before** phase 2 profiles
       any strategy.
-- [ ] 1.15 Docs: `docs/agent/regime-attribution.md` (calendar, versions, rules), indexed in
+      _Done 2026-11-26 except Allay's confirmation:_ leg charts as PNGs outside the repo
+      (`~/.ntrader/regime/charts/spy_legs_{minor,intermediate,major}.png` on the VPS),
+      summarised in the PR. Legs (up / down, median sessions): minor 119 / 120, 21.0;
+      intermediate 38 / 38, 65.5; major 8 / 9, 289.0. Waiting on Q8.
+- [x] 1.15 Docs: `docs/agent/regime-attribution.md` (calendar, versions, rules), indexed in
       `docs/agent/architecture.md`. Update the README's MCP tool list.
 
 ## 1b. Futures calendars (ES, NQ), right after the SPY phase-1 build
