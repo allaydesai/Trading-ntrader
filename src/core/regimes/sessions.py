@@ -1,0 +1,62 @@
+"""Map a daily bar's timestamp to its trading-session date (tasks.md 1b.1).
+
+The calendar is keyed by session date, so every series must say which session each of
+its daily bars is. Two stamping conventions are supported, and one series must use one:
+
+- ``session_date``: 00:00 New York of the session date. FirstRate ETF and futures daily
+  bars (``firstrate-etf``, ``firstrate-futures``) are stamped this way.
+- ``session_open``: 17:00 New York on the evening the CME session opens, which is the
+  previous calendar day (``D-1 17:00`` → ``D``; Sunday's open → Monday). The FirstRate FX
+  importer stamps this way (decision D5). No session opens on a Friday or Saturday evening.
+
+The hour is read on the New York wall clock, so the UTC hour moves with daylight saving
+and a 17:00 open is 21:00Z in summer and 22:00Z in winter. An exchange holiday has no
+bar, so it simply yields no date. Any other stamp is refused rather than guessed: keying
+labels one day off would silently misalign every report built on them.
+"""
+
+from datetime import date, timedelta
+
+import pandas as pd
+
+NEW_YORK = "America/New_York"
+#: (hour, minute) on the New York wall clock → convention name.
+CONVENTIONS: dict[tuple[int, int], str] = {(0, 0): "session_date", (17, 0): "session_open"}
+#: Friday and Saturday (pandas: Monday = 0): the CME is shut from Friday 17:00 to Sunday 17:00.
+_NO_OPEN_DAYS = (4, 5)
+
+
+class UnsupportedSessionStamp(ValueError):
+    """A daily-bar stamp that fits no supported convention."""
+
+
+def session_convention(stamps: pd.DatetimeIndex) -> str | None:
+    """The single convention of ``stamps``; ``None`` when empty. Raises on anything else."""
+    if stamps.tz is None:
+        raise UnsupportedSessionStamp("daily-bar stamps carry no timezone")
+    local = stamps.tz_convert(NEW_YORK)
+    found: set[str] = set()
+    for stamp in local:
+        convention = CONVENTIONS.get((stamp.hour, stamp.minute))
+        if convention is None or stamp.second or stamp.microsecond or stamp.nanosecond:
+            raise UnsupportedSessionStamp(
+                f"{stamp.isoformat()} fits no supported daily-bar stamp "
+                "(00:00 New York session date, or the 17:00 New York session open)"
+            )
+        if convention == "session_open" and stamp.dayofweek in _NO_OPEN_DAYS:
+            raise UnsupportedSessionStamp(
+                f"{stamp.isoformat()}: no CME session opens on a {stamp.day_name()} evening"
+            )
+        found.add(convention)
+    if len(found) > 1:
+        raise UnsupportedSessionStamp(f"the series mixes stamp conventions: {sorted(found)}")
+    return found.pop() if found else None
+
+
+def session_dates(stamps: pd.DatetimeIndex) -> list[date]:
+    """The session date of every stamp, in order."""
+    convention = session_convention(stamps)
+    local_dates = list(stamps.tz_convert(NEW_YORK).date) if len(stamps) else []
+    if convention == "session_open":
+        return [day + timedelta(days=1) for day in local_dates]
+    return local_dates
