@@ -8,7 +8,8 @@ calendar) is built; attribution (phase 2 on) is not yet.
 
 One **version** per (reference, catalog, label set, definition hash, input revision), numbered
 per (reference, catalog, label set). One **label row** per version and reference session
-date (the daily bar's UTC date, which is the New York session date for FirstRate bars).
+date, mapped from the daily bar's stamp by `src/core/regimes/sessions.py` (see "Session
+dates" below).
 Storage: `docs/agent/persistence.md`, "Regime Calendar".
 
 | Label set | Keys | Rule | Code |
@@ -35,6 +36,16 @@ the version it replaces before comparing labels.
 | `ground_truth` | 2 | default, `ranging_threshold` 0.2 (hash `45e4389e…`) | phase 2 on (design.md Q14). Built 2026-11-27 from the unchanged catalog: frozen median (0.13723) and range checked equal to v1's |
 | `detector` | 1 | default (`sma200`) | unchanged by the ground-truth v2 |
 
+Stored ES and NQ versions (`firstrate-futures`, tasks.md 1b, built 2026-11-27). Each futures
+root is its own reference with its own versions and frozen median; SPY labels are never
+reused for them. Both are v1 of the **same default definitions as SPY v2** (ground truth
+`45e4389e…`, detector `sma200`), over 2008-01-02 → 2026-05-01 (4,623 sessions):
+
+| Reference | Ground truth v1 frozen median | Detector v1 |
+|---|---|---|
+| ES | 0.13518 | `sma200`, labels from 2009-01-29 |
+| NQ | 0.16927 | `sma200`, labels from 2009-01-29 |
+
 ## Rules
 
 - **Append-only.** Detector rows never change. A ground-truth value goes `null` → value once,
@@ -58,9 +69,37 @@ for dividends** (closes match the raw prints, e.g. 222.95 on 2020-03-23), and SP
 split, so there is no split adjustment to check. Close-to-close returns therefore exclude
 dividends; the phase 2 benchmark return does too (design.md section 5.6).
 
-Only daily bars stamped at 00:00 New York are accepted (their UTC date is the session
-date). Futures daily bars open at `D-1 17:00` New York and are refused
-(`unsupported_session_stamp`) until the futures mapping lands (tasks.md 1b).
+## Futures data (ES, NQ)
+
+`firstrate-futures` holds FirstRate's **back-adjusted continuous** series only (no
+per-contract bars). Per the vendor (firstratedata.com FAQ and price-adjustment pages, read
+2026-11-27): rolls happen on a fixed date per ticker set from historical volume changeover
+(ES/NQ about 7-10 days before expiry); the adjustment is **ratio**, one factor per roll
+(incoming ÷ outgoing settle on the last day both settled), compounded backwards so the latest
+contract is unadjusted. A daily bar is the CME trading day (18:00 → 17:00 New York) and its
+close is the **official settlement**, not the 16:00 or 17:00 last trade (checked: it matches
+neither hourly close). Ratio adjustment keeps percent returns, ATR-relative legs and realised
+volatility the same across rolls and never goes negative (min close ES 648.97, NQ 1,183.70);
+the roll windows show no gaps (median |open ÷ previous close − 1| 4 bp vs 5 bp elsewhere for ES).
+
+On the same 2008 → 2026 window, futures legs are fewer and longer than SPY's at the minor
+scale (ES 68 / 69 legs vs SPY 87 / 88): a Globex bar's range includes the overnight session,
+so ATR20 is about 2.5× the median daily move against 2.2× for SPY, and k × ATR20 is a wider
+threshold in return terms.
+
+## Session dates
+
+`src/core/regimes/sessions.py` maps each daily bar's stamp to its session date. One
+convention per series, read on the New York wall clock (so DST moves only the UTC hour):
+
+- 00:00 New York: the session date itself. FirstRate ETF **and futures** daily bars are
+  stamped this way.
+- 17:00 New York: the CME session open, so the bar belongs to the next calendar day
+  (`D-1 17:00` → `D`; Sunday's open → Monday). This is the FX importer's stamp. A
+  Friday or Saturday 17:00 has no session and is refused; a holiday has no bar, so no date.
+
+Any other stamp, or a series mixing both, is refused with `unsupported_session_stamp`,
+never keyed by its UTC date.
 
 ## Tools
 

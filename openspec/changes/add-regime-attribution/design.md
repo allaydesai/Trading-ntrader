@@ -133,6 +133,27 @@ split. The catalog's closes are the raw prints: 222.95 on 2020-03-23 and 145.562
 fold in, and `catalog_stock_splits` has no SPY row. Close-to-close returns, and so the drift
 benchmark (section 5.6), exclude dividends on both sides.
 
+**Task 1b.1/1b.2 result (2026-11-27): ES and NQ daily bars.** `firstrate-futures` holds only
+FirstRate's back-adjusted continuous series (`{ROOT}_full_1day_continuous_ratio_adjusted.txt`,
+no per-contract bars), so it is used as it is and nothing is derived. Its method, from the
+vendor's FAQ and price-adjustment pages: a fixed roll date per ticker set from historical
+volume changeover (ES/NQ roughly 7-10 days before expiry); a **ratio** factor per roll
+(incoming ÷ outgoing settle on the last day both settled), compounded backwards from the
+current, unadjusted contract. Ratio adjustment is the right one for this study: percent
+returns, ATR-relative wave thresholds and realised volatility are unchanged across a roll,
+whereas a difference adjustment shifts early prices by a constant, distorting percentages
+and possibly going negative. Checks on the bars: every close is positive (min ES 648.97, NQ
+1,183.70), and the quarterly roll windows show no gaps (median |open ÷ previous close − 1|
+ES 4.1 bp in the windows vs 5.1 bp elsewhere, NQ 4.5 vs 6.0; the largest gaps are 2008, 2020
+and 2025 news days). **Close**: the official CME settlement of the 18:00 → 17:00 New York
+trading day (vendor FAQ); it matched neither the 16:00 nor the 17:00 hourly close on more
+than 0.2% of days. **Stamp**: the importer stamps futures daily bars at **00:00 New York of
+the session date** (all 4,623 bars, Monday-Friday only), not `D-1 17:00` as first assumed
+here (that is the FX importer's stamp), so their UTC date already is the session date.
+`src/core/regimes/sessions.py` still maps the 17:00 session-open convention explicitly, and
+refuses anything else (section 2). Range: 2008-01-02 → 2026-05-01, 4,623 sessions; the
+detector warm-up ends on 2009-01-29.
+
 ### (e) Baseline candidates and ORB runs
 
 The VPS DB holds 97 runs (87 successful) and **0 research studies**. All runs were made between
@@ -295,8 +316,11 @@ to `persistence.md`.
 
 ## 2. Dates and alignment
 
-- **Calendar key**: the reference's session date (the UTC date of the daily bar, which is the
-  New York session date for FirstRate daily bars, section 0(d)).
+- **Calendar key**: the reference's session date, mapped from the daily bar's stamp
+  (`src/core/regimes/sessions.py`): a 00:00 New York stamp is the session date (FirstRate
+  ETF and futures daily bars, section 0(d)); a 17:00 New York stamp is the CME session open,
+  so the bar is the next calendar day's session (Sunday's open → Monday). One convention per
+  series; anything else is refused (`unsupported_session_stamp`).
 - **Run key**: the UTC date of each stored equity point (`daily_equity`,
   `mark_to_market.py:179`). For US equity and ETF runs on daily or intraday bars, this is the
   session date.
