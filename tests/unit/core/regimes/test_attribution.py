@@ -5,6 +5,8 @@ and must reconcile to the run's P&L exactly; labels are aligned by session date 
 lag rule of design.md section 2.
 """
 
+import hashlib
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
@@ -19,6 +21,7 @@ from src.core.regimes.attribution import (
     daily_frame,
     exposed_days,
     labels_in_force,
+    position_weights,
     profile,
 )
 
@@ -320,3 +323,100 @@ def test_the_cross_scale_is_chosen_among_scales_whose_buckets_are_sufficient():
     assert cross["eligible_scales"] == ["intermediate", "major"]
     expected = max(("intermediate", "major"), key=lambda s: gaps[s])
     assert cross["scale"] == expected
+
+
+# -- position-scaled drift (phase 2b; opt-in, the default output stays as it was) ---------
+
+#: sha256 of the canonical JSON of the default profiles below, pinned from the code before
+#: position-scaled drift existed (b6581df). A change here means stored phase 2 reports no
+#: longer reproduce.
+GOLDEN_SIDE_PROFILES = {
+    "detector": "73a81b775e58dbb04be997868fe9eec2d2669d78aca5e5858bd5efd637aafbc1",
+    "ground_truth": "35f40dab22e7c6b22fde93facb4a64a6c93874f178e77c5641c1444739c418f7",
+}
+
+
+def _digest(result: dict) -> str:
+    text = json.dumps(result, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _default_profiles(**kwargs) -> dict[str, dict]:
+    days, equity, trades, calendar, closes = _run()
+    frame = daily_frame(equity, INITIAL)
+    gt = _gt_calendar(_sessions(320))
+    return {
+        "detector": profile(frame, calendar, trades, closes, lag=1, samples=200, seed=0, **kwargs),
+        "ground_truth": profile(frame, gt, trades, closes, lag=0, samples=200, seed=0, **kwargs),
+    }
+
+
+def test_the_default_profile_is_unchanged_from_phase_2():
+    """The old version's output, byte for byte: default and explicit ``side`` scaling."""
+    for kwargs in ({}, {"drift_scaling": "side"}):
+        digests = {k: _digest(v) for k, v in _default_profiles(**kwargs).items()}
+        assert digests == GOLDEN_SIDE_PROFILES
+
+
+def test_position_weight_is_the_carried_notional_over_the_previous_equity():
+    days = _sessions(6)
+    closes = pd.Series([50.0, 50.0, 40.0, 40.0, 60.0, 60.0], index=days)
+    previous = np.array([10_000.0, 10_000.0, 20_000.0, 8_000.0, 10_000.0, 10_000.0])
+    trades = [
+        TradeRecord(_at(days[1]), _at(days[3]), "BUY", 0.0, quantity=100.0),  # in on 2, 3
+        TradeRecord(_at(days[2]), _at(days[4]), "SELL", 0.0, quantity=50.0),  # in on 3, 4
+        TradeRecord(_at(days[5], 14), _at(days[5], 19), "BUY", 0.0, quantity=999.0),  # intraday
+    ]
+    weights = position_weights(days, trades, closes, previous)
+    # day 2: 100 x 50 / 20,000; day 3: (100 - 50) x 40 / 8,000; day 4: -50 x 40 / 10,000
+    assert list(weights) == pytest.approx([0.0, 0.0, 0.25, 0.25, -0.2, 0.0])
+
+
+def test_position_weight_on_a_weekend_uses_the_last_session_close():
+    sessions = _sessions(3)  # Thu 2, Fri 3, Mon 6 January 2020
+    days = [sessions[0], sessions[1], date(2020, 1, 4), sessions[2]]
+    closes = pd.Series([10.0, 20.0, 30.0], index=sessions)
+    trades = [TradeRecord(_at(sessions[0]), None, "BUY", 0.0, quantity=10.0)]
+    weights = position_weights(days, trades, closes, np.full(4, 1_000.0))
+    assert list(weights) == pytest.approx([0.0, 0.1, 0.2, 0.2])
+
+
+def _scaled_run():
+    days, equity, trades, calendar, closes = _run()
+    sized = [TradeRecord(t.entry, t.exit, t.side, t.pnl, quantity=10.0 * (i % 4 + 1))
+             for i, t in enumerate(trades)]  # fmt: skip
+    return daily_frame(equity, INITIAL), sized, calendar, closes
+
+
+def test_position_scaled_drift_weights_each_days_benchmark_return_by_exposure():
+    frame, trades, calendar, closes = _scaled_run()
+    side = profile(frame, calendar, trades, closes, lag=1, samples=50, seed=0)
+    scaled = profile(
+        frame, calendar, trades, closes, lag=1, samples=50, seed=0, drift_scaling="position"
+    )
+    assert scaled["drift_scaling"] == "position" and "drift_scaling" not in side
+    days = list(frame.index)
+    previous = frame["equity"].shift(1).fillna(INITIAL).to_numpy()
+    weights = position_weights(days, trades, closes, previous)
+    bench = np.nan_to_num(benchmark_returns(days, closes))
+    labels = np.array(labels_in_force(days, calendar, "sma200", lag=1), dtype=object)
+    drift_keys = ("drift_return", "excess_vs_drift", "mean_position_weight")
+    for row, plain in zip(scaled["families"]["sma200"]["rows"], side["families"]["sma200"]["rows"]):
+        mask = labels == row["bucket"]
+        expected = np.mean(bench[mask] * weights[mask]) * 252  # rows round to 6 places
+        assert row["drift_return"] == pytest.approx(expected, abs=1e-6)
+        assert row["mean_position_weight"] == pytest.approx(np.mean(weights[mask]), abs=1e-6)
+        excess = row["ann_return"] - row["drift_return"]
+        assert row["excess_vs_drift"] == pytest.approx(excess, abs=1e-6)
+        assert row["drift_return"] != plain["drift_return"]
+        # nothing but the drift columns moves: buckets, P&L, intervals, outcome
+        assert {k: v for k, v in row.items() if k not in drift_keys} == {
+            k: v for k, v in plain.items() if k not in drift_keys
+        }
+    assert scaled["families"]["sma200"]["outcome"] == side["families"]["sma200"]["outcome"]
+
+
+def test_an_unknown_drift_scaling_is_refused():
+    frame, trades, calendar, closes = _scaled_run()
+    with pytest.raises(ValueError, match="drift_scaling"):
+        profile(frame, calendar, trades, closes, lag=1, samples=10, drift_scaling="notional")

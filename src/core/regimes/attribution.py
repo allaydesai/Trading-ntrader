@@ -16,6 +16,9 @@ Nothing here computes a label: labels come from the calendar only.
 - **Drift**: the reference's return on the bucket's days, times the side the strategy held
   into each day (+1 long, -1 short, 0 flat), annualised. A bucket whose return is no higher is
   market drift, not edge (the spec's drift rule, signed so it also reads short positions).
+  Opt-in ``drift_scaling="position"`` (phase 2b) weights each day by the position actually
+  carried in instead: signed quantity x the reference's previous close / the previous
+  equity. The default (``"side"``) output is unchanged, so phase 2 reports reproduce.
 
 This module may read ground-truth rows (it is named in
 ``tests/unit/governance/test_regime_ground_truth_boundary.py``) but imports nothing from
@@ -38,6 +41,9 @@ from src.core.robustness.bootstrap import TRADING_DAYS, sharpe
 
 MIN_DAYS = 60
 MIN_TRADES = 20
+#: ``side``: drift x the side held (+1/-1/0), phase 2. ``position``: x the carried notional
+#: over the previous equity.
+DRIFT_SCALINGS = ("side", "position")
 _CENT = 0.005
 #: Each label family: its key in the label payload, and the bucket order.
 GROUND_TRUTH_FAMILIES: dict[str, tuple[str, ...]] = {
@@ -59,6 +65,8 @@ class TradeRecord:
     exit: datetime | None
     side: str
     pnl: float
+    #: Unsigned size; only position-scaled drift reads it.
+    quantity: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -142,6 +150,27 @@ def carried_sides(days: list[date], trades: list[TradeRecord]) -> np.ndarray:
     return np.sign((carried * sign).sum(axis=1)).astype(int)
 
 
+def position_weights(
+    days: list[date], trades: list[TradeRecord], closes: pd.Series, previous_equity: np.ndarray
+) -> np.ndarray:
+    """Per day: the signed notional carried in from the previous close as a share of the
+    previous equity, ``sum(sign x quantity) x close(d-1) / E(d-1)``. ``close(d-1)`` is the
+    reference's last session close strictly before *d* (the price the carried position is
+    marked from), so the reference must be the instrument traded. Same-day round trips earn
+    none of the close-to-close move and weigh nothing."""
+    if not trades or not days:
+        return np.zeros(len(days), dtype=float)
+    carried, _, sign = _positions(days, trades)
+    size = np.array([float(t.quantity) for t in trades])[None, :]
+    units = (carried * sign * size).sum(axis=1)
+    sessions = closes.sort_index()
+    stamps = np.array(list(sessions.index), dtype="datetime64[D]")
+    found = np.searchsorted(stamps, np.array(days, dtype="datetime64[D]"), side="left") - 1
+    prices = np.where(found >= 0, sessions.to_numpy(float)[np.maximum(found, 0)], np.nan)
+    weights = units * prices / np.asarray(previous_equity, dtype=float)
+    return np.where(units == 0, 0.0, np.nan_to_num(weights))
+
+
 def exposed_days(days: list[date], trades: list[TradeRecord]) -> np.ndarray:
     """Per day: whether any position was carried in, or opened and closed within the day."""
     if not trades or not days:
@@ -165,11 +194,19 @@ def _rounded(value: float | None, places: int = 6) -> float | None:
 
 
 def _metrics(
-    pnl: np.ndarray, ret: np.ndarray, bench: np.ndarray, sides: np.ndarray, exposed: np.ndarray
+    pnl: np.ndarray,
+    ret: np.ndarray,
+    bench: np.ndarray,
+    sides: np.ndarray,
+    exposed: np.ndarray,
+    *,
+    scaled: bool = False,
 ) -> dict:
+    """``sides`` is +1/-1/0 per day, or with ``scaled`` the position weight."""
     n = len(ret)
     finite_bench = bench[np.isfinite(bench)]
-    return {
+    extra = {"mean_position_weight": _rounded(float(np.mean(sides)) if n else None)}
+    return (extra if scaled else {}) | {
         "days": int(n),
         "pnl": round(float(pnl.sum()), 2),
         "ann_return": _rounded(float(ret.mean()) * TRADING_DAYS if n else None),
@@ -194,8 +231,11 @@ def _entry_buckets(trades: list[TradeRecord], calendar: Calendar, key: str, lag:
     return [bucket_name(key, v) for v in labels_in_force(entries, calendar, key, lag=lag)]
 
 
-def _masked(arrays: tuple[np.ndarray, ...], mask: np.ndarray) -> dict[str, Any]:
-    return _metrics(*(values[mask] for values in arrays))
+def _masked(
+    arrays: tuple[np.ndarray, ...], mask: np.ndarray, params: dict[str, Any]
+) -> dict[str, Any]:
+    scaled = params.get("drift_scaling") == "position"
+    return _metrics(*(values[mask] for values in arrays), scaled=scaled)
 
 
 def _bucket_row(
@@ -206,7 +246,7 @@ def _bucket_row(
     params: dict[str, Any],
 ) -> dict[str, Any]:
     """One bucket's daily-view metrics, interval, trade count and insufficient flag."""
-    row = {"bucket": bucket, **_masked(arrays, mask)}
+    row = {"bucket": bucket, **_masked(arrays, mask, params)}
     trades_in = sum(1 for b in context["entry_buckets"] if b == bucket)
     interval = context["intervals"][bucket]
     labelled, total_pnl = context["labelled"], context["total_pnl"]
@@ -262,7 +302,7 @@ def _family(
     rows = [_bucket_row(b, names == b, arrays, context, params) for b in order]
     unlabelled = {
         "bucket": UNLABELLED,
-        **_masked(arrays, names == UNLABELLED),
+        **_masked(arrays, names == UNLABELLED, params),
         "trades_entered": sum(1 for b in entry_buckets if b is None),
     }
     change = float(frame["equity"].iloc[-1] - inputs["initial"])
@@ -270,7 +310,7 @@ def _family(
         "family": name,
         "rows": rows,
         "unlabelled": unlabelled,
-        "total": {"bucket": "total", **_masked(arrays, np.ones(len(names), dtype=bool))},
+        "total": {"bucket": "total", **_masked(arrays, np.ones(len(names), dtype=bool), params)},
         "reconciliation": _reconciliation(rows, unlabelled, change, context["labelled"]),
         "outcome": dependence_outcome(rows),
         "differences": [_rounded_difference(d) for d in resampled["differences"]],
@@ -349,10 +389,13 @@ def profile(
     samples: int = 1000,
     seed: int = 0,
     initial_capital: float | None = None,
+    drift_scaling: str = "side",
 ) -> dict[str, Any]:
     """Every family's daily-view table for one run under one calendar version."""
     if calendar.label_set == "ground_truth" and lag != 0:
         raise ValueError("ground-truth labels take no lag (lag_not_allowed)")
+    if drift_scaling not in DRIFT_SCALINGS:
+        raise ValueError(f"drift_scaling must be one of {DRIFT_SCALINGS}")
     days = list(frame.index)
     initial = (
         float(frame["equity"].iloc[0] - frame["pnl"].iloc[0])
@@ -363,11 +406,14 @@ def profile(
         "frame": frame,
         "initial": initial,
         "bench": benchmark_returns(days, closes),
-        "sides": carried_sides(days, trades),
+        "sides": _drift_weights(frame, days, trades, closes, initial, drift_scaling),
         "exposed": exposed_days(days, trades),
         "trades": trades,
     }
-    params = {"min_days": min_days, "min_trades": min_trades, "samples": samples, "seed": seed}
+    params: dict[str, Any] = {
+        "min_days": min_days, "min_trades": min_trades, "samples": samples, "seed": seed,
+        "drift_scaling": drift_scaling,
+    }  # fmt: skip
     families: dict[str, dict[str, Any]] = {}
     for name, order in families_of(calendar.label_set).items():
         day_buckets = [bucket_name(name, v) for v in labels_in_force(days, calendar, name, lag=lag)]
@@ -380,4 +426,20 @@ def profile(
         day_buckets, entry_buckets = _cross_labels(days, calendar, scale, lag, entries)
         cross = _family("cross", CROSS_BUCKETS, day_buckets, entry_buckets, inputs, params)
         families["cross"] = {**cross, **choice}
-    return {"label_set": calendar.label_set, "lag_days": lag, "families": families}
+    scaling = {"drift_scaling": drift_scaling} if drift_scaling != "side" else {}
+    return {"label_set": calendar.label_set, "lag_days": lag, **scaling, "families": families}
+
+
+def _drift_weights(
+    frame: pd.DataFrame,
+    days: list[date],
+    trades: list[TradeRecord],
+    closes: pd.Series,
+    initial: float,
+    drift_scaling: str,
+) -> np.ndarray:
+    """What each day's benchmark return is multiplied by in the drift column."""
+    if drift_scaling == "side":
+        return carried_sides(days, trades)
+    previous = frame["equity"].shift(1).fillna(initial).to_numpy(float)
+    return position_weights(days, trades, closes, previous)
