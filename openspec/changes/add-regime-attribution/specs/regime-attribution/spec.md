@@ -47,10 +47,10 @@ bucket it SHALL report:
 - annualised return (mean daily return × 252) and annualised volatility (× √252)
 - Sharpe
 - worst day
-- a 90% block-bootstrap interval on mean daily return (`bootstrap_samples` resamples of
-  non-wrapping 10-consecutive-day blocks drawn from the run's whole daily timeline before the
-  bucket's days are selected, so a block never joins separate spells or the run's last and
-  first days, and a recorded `seed`)
+- a 90% stationary-bootstrap interval on mean daily return (`bootstrap_samples` resamples of
+  blocks with geometric lengths of mean 10 days, drawn from the run's whole daily timeline with
+  a circular wrap before the bucket's days are selected, so a block never joins separate spells
+  except through the wrap and no day is underweighted, and a recorded `seed`)
 - exposure
 - the reference's annualised return on the same days
 - trades entered

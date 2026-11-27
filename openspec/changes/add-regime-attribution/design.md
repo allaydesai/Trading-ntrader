@@ -282,10 +282,9 @@ versions it used for each.
 
 Repository: `src/db/repositories/regime_repository_sync.py` (sync only). Every reader is the MCP
 server, which is sync (`run_reads.py:133`). `docs/agent/persistence.md` says new DB features
-update both repositories. This proposal asks for a **recorded exception**: no async caller
-exists, because the web UI is out of scope. It needs Allay's approval before phase 1 (section
-13, Q13). If approved, task 1.9 adds the exception to `persistence.md`. If not, task 1.9 also
-adds `regime_repository.py` (async) with the same insert-only surface and the same tests.
+update both repositories. Allay approved a **recorded exception** on 2026-11-26 (section 13,
+Q13): no async caller exists, because the web UI is out of scope. Task 1.9 adds the exception
+to `persistence.md`.
 
 ## 2. Dates and alignment
 
@@ -409,15 +408,19 @@ The bucket families:
 
 The 90% interval is in phase 2, not phase 4 as the spec's phase list has it, because the stop
 rule's test ("strong dependence": one bucket's interval entirely below zero and another's
-entirely above) cannot be evaluated without it. It uses a **moving (non-wrapping) block
-bootstrap** of the run's **whole daily timeline**: 1,000 resamples of 10-consecutive-day
-blocks, with start days drawn uniformly from the first *N* − 9 days, each block carrying its
-days' bucket labels. An explicit `seed` (default 0) makes a report reproduce. Each resample's
-statistic is the mean return of the observations in the bucket. Blocks are drawn before the
-bucket filter and never wrap from the last day to the first, so a block never joins two
-spells of a bucket that are apart in time. A resample with no observation in the bucket is
-redrawn, and the redraw count is reported. A run shorter than 10 days gets no interval and is
-insufficient anyway.
+entirely above) cannot be evaluated without it. It uses a **stationary bootstrap** (Politis and
+Romano, 1994; decided 2026-11-26, section 13) of the run's **whole daily timeline**: 1,000
+resamples, each a sequence of blocks whose start day is drawn uniformly from all *N* days and
+whose length is geometric with mean 10 days (*p* = 0.1), wrapping circularly from the last day
+to the first, until *N* days are drawn. Each drawn day carries its own bucket label. Because
+blocks are cut from the timeline before the bucket filter, a block never joins two spells of a
+bucket that are apart in time except through the wrap, and the circular wrap gives every day
+the same inclusion probability, so the first and last days of the run are not underweighted
+(the boundary effect of a non-wrapping moving block bootstrap). Each resample's statistic is
+the mean return of the drawn observations in the bucket, so the wrap's adjacency of the last and
+first days never enters it. An explicit `seed` (default 0) makes a report reproduce. A resample
+with no observation in the bucket is redrawn, and the redraw count is reported. A run shorter
+than 10 days gets no interval and is insufficient anyway.
 
 ### 5.4 Insufficient flag
 
@@ -464,7 +467,7 @@ report states which.
   factor. Open trades are counted separately.
 - **Reuse**: point statistics (`sharpe`, `profit_factor`, `win_rate`) and the seeded i.i.d.
   interval helpers come from `src/core/robustness/bootstrap.py`, so a bucket's numbers use the
-  same definitions as the run's stored metrics and `run_monte_carlo`. Only the moving block
+  same definitions as the run's stored metrics and `run_monte_carlo`. Only the stationary
   bootstrap (5.3) is new code.
 - **Exit check**: Σ bucket closed trades, `unlabelled` included, =
   `performance_metrics.total_trades`, and closed plus open = trade rows.
@@ -638,48 +641,50 @@ while the dashboard runs, integration tier `--forked`.
 | D6 | Window parameters live in the calendar definition, not in `run_regime_attribution` | 1-2 |
 | D7 | Existing tools unchanged apart from a hindsight note in their `definitions` | 2 |
 | D8 | Runs must be `mark_to_market`. Legacy realised curves are refused | 2 |
-| D9 | A fresh SPY trend run is a prerequisite, because none exists | 2 |
+| D9 | A fresh SPY trend run is a prerequisite, because none exists (confirmed, Q6) | 2 |
+| D14 | Daily-view interval is a stationary bootstrap with mean block 10 (decided 2026-11-26) | 2 |
 | D10 | Phase 6 scales stored returns and does not re-run the engine | 6 |
 | D11 | Detector scoring uses the lag-1 label, the one a strategy could act on | 3 |
 | D12 | Annualisation is ×252 throughout, the reference's sessions, whatever the traded asset | 2 |
-| D13 | No async repository (pending approval, Q13) and no web UI in v1 | all |
+| D13 | No async repository (approved 2026-11-26, Q13) and no web UI in v1 | all |
 
 ## 13. Open questions for Allay
 
-1. **Reference map.** Is the spec's map (US stocks and broad ETFs → SPY, tech and NQ → QQQ,
-   small caps → IWM, bonds → TLT, gold → GLD) right for what you trade? v1 builds SPY only.
-   All five ETFs have daily bars from 2000 in `firstrate-etf`.
-2. **VIX vs realised volatility.** No VIX series exists in any catalog, so offering VIX means an
-   import first (a separate data change). Keep realised volatility for v1?
-3. **NQ/ES reference.** Should ES/NQ runs use the future itself (daily bars from 2008-01-02 in
-   `firstrate-futures`, ratio-adjusted continuous) with the same rules, or SPY/QQQ? The CME
-   evening session splits at UTC midnight in stored equity (section 2).
-4. **Promotion gates.** Should the regime profile become part of the gates, for example a G1
-   note that the profile matches the written regime expectation? This change does not touch
-   the gates.
-5. **Idea template.** Should the vault's Idea template gain a "Regime expectation" line (spec
-   step 1)? That is a vault edit, not NTrader code.
-6. **Baselines.** Which strategies are "the existing trend strategy" and "the existing
-   mean-reversion strategy"? Proposed: core `sma_crossover` on SPY daily (a new run) and
-   Bollinger Reversal on SPY (`c4c9c098`, or a fresh run on the same commit), both
-   2015-01-02 → 2025-12-31. Is Riptide meant to be one of them? Does your research database
-   (the Mac?) hold better runs than the VPS DB, which has no studies?
-7. **ORB runs.** None exist in the VPS DB. Where are the SPY ORB runs the spec mentions, and
-   should their alignment run come first in phase 4?
-8. **Wave thresholds.** Confirm 3 / 6 / 12 × ATR20 after seeing the phase 1 leg chart, before
-   phase 2 profiles any strategy (the spec fixes thresholds before results are seen).
-9. **Ground-truth volatility median.** Frozen per version (D3), or re-cut on full history as a
-   new version at every extension?
-10. **Swing detector with mixed structure** (higher high with lower low, or the reverse): keep
-    the previous state (proposed), or label it `null`?
-11. **Trials.** The spec says all four detectors "count as trials in the study record". Should a
-    profile filed against a study add four entries to that study's trial ledger, or is a note
-    in the record enough? The ledger today counts engine jobs only.
-12. **Stop-rule reading.** At the end of phase 2, the reading of "no dependence under the
-    ground-truth labels" is yours. Phases 3-6 start only on your explicit go-ahead. If a
-    family comes back `insufficient_evidence` (section 5.4), most likely for the
-    low-frequency Bollinger run, do you want more history or instruments first, or a
-    judgement on the daily-view numbers alone?
-13. **Sync-only repository.** `docs/agent/persistence.md` says new DB features update both the
-    sync and async repositories. Do you approve a recorded exception for the regime tables,
-    which have no async reader (D13)? If not, phase 1 also adds the async repository.
+Allay answered these on 2026-11-26. Each entry keeps the question and records the decision.
+
+1. **Reference map. RESOLVED (2026-11-26): OK.** The spec's map (US stocks and broad ETFs →
+   SPY, tech → QQQ, small caps → IWM, bonds → TLT, gold → GLD) stands. v1 builds SPY only; all
+   five ETFs have daily bars from 2000 in `firstrate-etf`. ES and NQ get their own calendars
+   (Q3).
+2. **VIX vs realised volatility. RESOLVED (2026-11-26): realised volatility, no VIX.** No VIX
+   import is planned.
+3. **NQ/ES reference. RESOLVED (2026-11-26): their own calendars.** ES and NQ each get a
+   calendar built with the same rules on the back-adjusted continuous futures daily series in
+   `firstrate-futures`, built right after the SPY phase-1 build (tasks.md section 1b). Which
+   session close the futures daily bar uses (RTH close or the Globex settle) is checked and
+   recorded there first.
+4. **Promotion gates. RESOLVED (2026-11-26): out of repo scope.** A G1 gate note lives in
+   Allay's vault, not in NTrader. This change does not touch the gates.
+5. **Idea template. RESOLVED (2026-11-26): out of repo scope.** The "Regime expectation" line
+   is a vault edit, not NTrader code.
+6. **Baselines. RESOLVED (2026-11-26):** a new core `sma_crossover` run on SPY daily,
+   2015-01-02 → 2025-12-31 (task 2.1), plus the existing Bollinger Reversal run `c4c9c098`.
+   **Riptide is not a baseline.**
+7. **ORB runs.** Still open: none exist in the VPS DB. Where are the SPY ORB runs the spec
+   mentions, and should their alignment run come first in phase 4? (Needed only by phase 4.)
+8. **Wave thresholds.** Still open by design: Allay confirms 3 / 6 / 12 × ATR20 after seeing the
+   phase 1 leg chart, before phase 2 profiles any strategy (the spec fixes thresholds before
+   results are seen).
+9. **Ground-truth volatility median. RESOLVED (2026-11-26): frozen per version (D3).** A re-cut
+   on longer history is an explicit new `input_revision` with reason `median_recut`.
+10. **Swing detector with mixed structure. RESOLVED (2026-11-26): keep the previous state.** A
+    higher high with a lower low, or the reverse, leaves the label unchanged.
+11. **Trials. RESOLVED (2026-11-26): the four detectors count as trials.** The panel always
+    reports all four, and a profile filed against a study records the four definitions as
+    trials. (The exact ledger mechanism is settled in phase 3, where the panel arrives.)
+12. **Stop-rule reading. RESOLVED (2026-11-26):** `insufficient_evidence` at the stop rule
+    means **extend the history or add an instrument before stopping**. It never reads as "no
+    dependence". Phases 3-6 still start only on Allay's explicit go-ahead.
+13. **Sync-only repository. RESOLVED (2026-11-26): approved.** The regime tables get a sync
+    repository only, recorded as an exception in `docs/agent/persistence.md` (D13). No async
+    repository is added.

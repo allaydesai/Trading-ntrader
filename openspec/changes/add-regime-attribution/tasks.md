@@ -9,8 +9,9 @@ it and names its tier. Test runs follow the box's limits:
 - `GLIBC_TUNABLES=glibc.rtld.execstack=2` exported
 - integration tier `--forked`
 
-Nothing in phase 1 starts until Allay has answered `design.md` section 13 Q1 (reference map)
-and Q6 (baselines), or accepted the proposed defaults. This change touches no live/paper
+Allay answered `design.md` section 13 on 2026-11-26 (Q1 reference map, Q6 baselines and the
+rest; Q7 ORB runs and Q8 wave thresholds stay open until phase 4 and the phase 1 chart), so
+phase 1 may start. This change touches no live/paper
 module, so no live-verification task applies.
 
 ## 0. Step 0: investigation and proposal (this PR)
@@ -76,9 +77,9 @@ updated or deleted. The wave-leg chart looks right to Allay.
       `regime_calendar_builds`, and the `regime_labels_append_only`,
       `regime_versions_immutable` and append-only builds triggers. Add
       `src/db/models/regime.py` and `src/db/repositories/regime_repository_sync.py` (insert
-      and append only, no update or delete method). If Allay does not approve the sync-only
-      exception (`design.md` Q13), also add the async `regime_repository.py` with the same
-      surface and tests. Update the single-head note in `CLAUDE.md` and
+      and append only, no update or delete method). Allay approved the sync-only exception on
+      2026-11-26 (`design.md` Q13), so no async repository is added. Update the single-head
+      note in `CLAUDE.md` and
       `docs/agent/persistence.md` (the new tables, plus the exception if approved).
 - [ ] 1.10 Unit (failing first): `tests/unit/governance/test_regime_ground_truth_boundary.py`
       scans the AST of `src/**`, plus `src/core/strategies/custom/**` when it is present,
@@ -116,6 +117,25 @@ updated or deleted. The wave-leg chart looks right to Allay.
 - [ ] 1.15 Docs: `docs/agent/regime-attribution.md` (calendar, versions, rules), indexed in
       `docs/agent/architecture.md`. Update the README's MCP tool list.
 
+## 1b. Futures calendars (ES, NQ), right after the SPY phase-1 build
+
+Decided 2026-11-26 (`design.md` section 13, Q3): ES and NQ get their own calendars, built with
+the phase-1 rules on the back-adjusted continuous futures daily series in `firstrate-futures`.
+No new code path is expected beyond what phase 1 builds; each is a `build_regime_calendar` call
+with `benchmark_symbol` and `catalog` set.
+
+- [ ] 1b.1 Data check (no code): find out which session close the `firstrate-futures` ES and NQ
+      daily bar uses (the RTH close at 16:00 New York, or the Globex settle / 17:00 session
+      end), from the bar timestamps and a comparison against the hourly bars of the same day.
+      Record it in `design.md` section 0(d), with the back-adjustment method of the continuous
+      series and the session-date mapping (section 2).
+- [ ] 1b.2 Confirm the series is back-adjusted (no roll gaps in the closes) and that it has the
+      272 sessions the detector warm-up needs; record the data range.
+- [ ] 1b.3 Build ES ground truth v1 and detector v1 with `build_regime_calendar(benchmark_symbol=
+      "ES", catalog="firstrate-futures")`, then NQ. Check that a rebuild reproduces both.
+- [ ] 1b.4 Leg chart and leg counts per scale for ES and NQ, as in 1.14. Allay confirms the
+      thresholds read sensibly on futures.
+
 ## 2. Phase 2: regime profile, daily view (the stop-or-continue point)
 
 Acceptance: `run_regime_attribution` profiles one run under ground truth and under `sma200`.
@@ -125,7 +145,8 @@ are profiled and the stop-rule reading is recorded.
 - [ ] 2.1 Prerequisite runs (no code; `design.md` section 0(e), Q6), made from a clean tree:
   - a trend baseline: core `sma_crossover`, SPY, `1-DAY-LAST`, `firstrate-etf`,
     2015-01-02 → 2025-12-31
-  - Bollinger Reversal on the same window and commit (or keep `c4c9c098` if Allay prefers)
+  - Bollinger Reversal: keep the existing run `c4c9c098` (decided 2026-11-26). Riptide is
+    not a baseline.
 
       Both must have `metrics_basis = mark_to_market`. Record the run ids here.
 - [ ] 2.2 Before any new code, run the existing `get_regime_breakdown` and
@@ -146,15 +167,17 @@ are profiled and the stop-rule reading is recorded.
   - Benchmark return covers the bucket's days.
   - Insufficient flag below 60 days or 20 trades.
   - Crossing chooses the widest-gap scale and records it.
-- [ ] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a moving
-      (non-wrapping) block bootstrap with 10-day blocks drawn from the whole run timeline
-      before the bucket mask is applied. On a fixture with two bucket spells years apart, or a
-      bucket covering both the first and the last day, no resampled block contains days from
-      both spells or wraps around the end. The same seed gives the same interval. On i.i.d. data it
-      covers the true mean near 90% (seeded Monte Carlo). The three-way family outcome is
+- [ ] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a stationary
+      bootstrap (geometric block lengths with mean 10 days, start days uniform over the whole
+      run timeline, circular wrap; decided 2026-11-26) drawn before the bucket mask is applied.
+      On a fixture with two bucket spells years apart, no block joins days of the two spells
+      except through the end-to-start wrap. Every day has the same expected inclusion count, so
+      the first and last days are not underweighted (seeded Monte Carlo). The same seed gives
+      the same interval. On i.i.d. data it covers the true mean near 90% (seeded Monte Carlo).
+      The three-way family outcome is
       tested: `strong_dependence`, `no_dependence`, and `insufficient_evidence` when fewer
       than two buckets are sufficient (`design.md` section 5.4).
-- [ ] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and the moving block
+- [ ] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and the stationary
       bootstrap in `src/core/regimes/bootstrap.py`. Take `sharpe` and the seeded interval
       helpers from `src/core/robustness/bootstrap.py` rather than reimplementing them.
 - [ ] 2.6 Integration (failing first, Postgres): the `regime_reports` repository, append-only
@@ -199,8 +222,9 @@ are profiled and the stop-rule reading is recorded.
 >
 > **If neither baseline shows dependence under the ground-truth labels, the build stops
 > here.** Phases 3-6 would not pay for themselves. A family reported as
-> `insufficient_evidence` is not "no dependence". Report it as such and let Allay decide
-> (`design.md` Q12).
+> `insufficient_evidence` is not "no dependence". Report it as such: per Allay's decision
+> (2026-11-26, `design.md` Q12) it means **extend the history or add an instrument before
+> stopping**.
 >
 > **Phases 3-6 are gated on Allay's explicit go-ahead**, whatever the result. Record the
 > reading and Allay's decision (date, outcome) in this file before ticking 2.13.
