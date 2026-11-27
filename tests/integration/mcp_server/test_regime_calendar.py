@@ -1,4 +1,4 @@
-"""SPY regime calendar from the real ``firstrate-etf`` catalog (tasks.md 1.13, exit check).
+"""SPY, ES and NQ regime calendars from the real catalogs (tasks.md 1.13 and 1b.3, exit checks).
 
 **Rebuild reproduces**: SPY is built into one scratch schema, rebuilt from scratch into a
 second, and every stored label, bar hash and frozen statistic must be equal. A second
@@ -25,15 +25,20 @@ from tests.integration.mcp_server.conftest import requires_postgres
 pytestmark = [pytest.mark.integration, requires_postgres]
 
 CATALOG = "firstrate-etf"
+FUTURES = "firstrate-futures"
 TABLES = [t.__table__ for t in (RegimeCalendarVersion, RegimeLabel, RegimeCalendarBuild)]
 
 
-def _catalog_present() -> bool:
+def _catalog_present(name: str = CATALOG) -> bool:
     base = CatalogSettings().catalog_base_path
-    return bool(base) and (Path(base) / CATALOG / "data" / "bar").is_dir()
+    return bool(base) and (Path(base) / name / "data" / "bar").is_dir()
 
 
 requires_etf = pytest.mark.skipif(not _catalog_present(), reason=f"needs the {CATALOG} catalog")
+requires_futures = pytest.mark.skipif(
+    not (_catalog_present() and _catalog_present(FUTURES)),
+    reason=f"needs the {CATALOG} and {FUTURES} catalogs",
+)
 
 
 @contextmanager
@@ -88,12 +93,12 @@ def _content_hash(session_factory, version_no: int) -> tuple[str, dict]:
     return hashlib.sha256(text_.encode()).hexdigest(), content
 
 
-def _stored(session_factory) -> dict:
+def _stored(session_factory, reference: str = "SPY", catalog: str = CATALOG) -> dict:
     with session_factory() as session:
         repo = SyncRegimeRepository(session)
         out = {}
         for label_set in ("ground_truth", "detector"):
-            version = repo.latest_version("SPY", CATALOG, label_set)
+            version = repo.latest_version(reference, catalog, label_set)
             read = repo.ground_truth_labels if label_set == "ground_truth" else repo.detector_labels
             out[label_set] = {
                 "definition_hash": version.definition_hash,
@@ -151,3 +156,35 @@ def test_spy_v2_rebuilds_identically_and_leaves_v1_alone(monkeypatch):
     assert strip == [[d, {**lab, "ranging": None}, h] for d, lab, h in v1["rows"]]
     flagged = [sum(bool(lab["ranging"]) for _, lab, _ in c["rows"]) for c in (v1, v2)]
     assert flagged[1] < flagged[0]
+
+
+@requires_futures
+@pytest.mark.parametrize("root", ["ES", "NQ"])
+def test_futures_rebuild_reproduces_and_leaves_spy_alone(monkeypatch, root):
+    """ES/NQ from the back-adjusted continuous daily series: their own versions (v1 of the
+    default definition, the one SPY v2 uses), keyed by session date, rebuilt identically in a
+    second schema; a SPY calendar in the same schema is untouched by them."""
+    with scratch("test_regime_e") as first, scratch("test_regime_f") as second:
+        monkeypatch.setattr(regime_calendar, "get_sync_session", first)
+        regime_calendar.build_regime_calendar("SPY", CATALOG)
+        spy = _stored(first)
+        built = regime_calendar.build_regime_calendar(root, FUTURES)
+        again = regime_calendar.build_regime_calendar(root, FUTURES)
+        assert _stored(first) == spy
+        monkeypatch.setattr(regime_calendar, "get_sync_session", second)
+        regime_calendar.build_regime_calendar(root, FUTURES)
+        a, b = _stored(first, root, FUTURES), _stored(second, root, FUTURES)
+
+    assert built["bars"]["start"] == "2008-01-02"
+    assert {v["version"] for v in built["versions"].values()} == {1}
+    assert {v["action"] for v in again["versions"].values()} == {"up_to_date"}
+    truth = built["versions"]["ground_truth"]
+    assert truth["definition_hash"] == spy["ground_truth"]["definition_hash"]
+    assert (
+        truth["frozen_stats"]["volatility_median"]
+        != (spy["ground_truth"]["frozen_stats"]["volatility_median"])
+    )
+    days = [d for d, _, _ in a["ground_truth"]["rows"]]
+    assert len(days) == built["bars"]["sessions"] and all(d.weekday() < 5 for d in days)
+    for label_set in ("ground_truth", "detector"):
+        assert a[label_set] == b[label_set], label_set
