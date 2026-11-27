@@ -58,20 +58,38 @@ as a new version with the next version number. It SHALL leave every earlier vers
 labels untouched, so that earlier reports stay reproducible. The hashed definition SHALL hold
 parameters only. Values derived from data (the frozen ground-truth volatility median and its
 window) SHALL be stored apart from it and set once. The database SHALL reject any update of a
-version row other than moving its data end forward and adding new bar-fingerprint chunks.
+version row other than moving its data end forward and incrementing its build number.
 Version numbers and "latest" lookups SHALL be scoped to reference, catalog and label set.
+Version identity SHALL be the definition hash plus an input revision. A plain rebuild with the
+same definition SHALL append to the latest revision. A new revision of the same definition
+SHALL be created only on an explicit request that records its reason (changed reference bars
+or a re-cut frozen median).
+
+Each label row SHALL store the hash of its own session's bar, and that hash SHALL never
+change. A build SHALL verify every stored date it re-reads against that hash. Extending the
+data by any number of new sessions SHALL NOT alter any stored hash.
 
 #### Scenario: version row cannot be rewritten
 - **WHEN** any statement tries to change a stored version's definition, definition hash,
-  frozen statistics, reference, catalog, label set or version number
+  input revision, frozen statistics, reference, catalog, label set or version number
 - **THEN** the database raises an error and the row is unchanged
 
 #### Scenario: reference history changed under a version
-- **WHEN** the catalog's SPY bars for dates already covered by a version differ from the
-  fingerprint stored with that version, and `build_regime_calendar` runs with the same
-  definition
+- **WHEN** the catalog's SPY bars for dates already covered by a version differ from the bar
+  hashes stored with that version, and `build_regime_calendar` runs with the same definition
 - **THEN** it appends nothing and refuses with `reference_bars_changed`, naming the first date
   that differs
+
+#### Scenario: relabelling the same definition on changed bars
+- **WHEN** `build_regime_calendar` is then called with the same definition, a new-revision
+  request and the reason `reference_bars_changed`
+- **THEN** a new version is created with input revision 2 and that reason, and the earlier
+  version is untouched
+
+#### Scenario: mid-year extension
+- **WHEN** a version built through May gains June sessions
+- **THEN** rows are appended for the June dates with their own bar hashes, and no stored hash
+  or row changes
 
 #### Scenario: declared robustness check on the trend window
 - **WHEN** `build_regime_calendar` is called for `SPY` with a definition override setting the

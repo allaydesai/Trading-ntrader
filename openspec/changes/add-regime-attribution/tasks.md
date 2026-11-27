@@ -49,28 +49,34 @@ updated or deleted. The wave-leg chart looks right to Allay.
       definition's canonical JSON and sha256 hash are pinned. Any changed parameter changes
       the hash. Unknown keys are refused. The definition holds no data-derived value: the
       frozen volatility median lives in `frozen_stats`, so building on more bars leaves the
-      hash unchanged. The per-year bar fingerprint is stable, and it changes when one past
-      close changes.
+      hash unchanged. The per-session `bar_hash` is stable for the same OHLC and changes when
+      any one of its prices changes.
 - [ ] 1.7 Implement `src/core/regimes/definition.py` (pydantic definitions, label payload models,
       hashing).
 - [ ] 1.8 Integration (failing first, Postgres): `tests/integration/db/test_regime_repository.py`:
   - Insert a version and its labels; read by date range.
-  - The unique `definition_hash` holds.
+  - Uniqueness on (`reference`, `catalog`, `label_set`, `definition_hash`, `input_revision`)
+    holds. The same definition at `input_revision` 2 is accepted only with a
+    `revision_reason`.
   - The trigger rejects `UPDATE` and `DELETE` of a detector row.
-  - On a ground-truth row the trigger allows `null` → value, and rejects value → other value
-    and `DELETE`.
+  - On a ground-truth row the trigger allows `null` → value (with `set_in_build` set to the
+    current build), and rejects value → other value, any change to `set_in_build` entries or
+    `bar_hash`, and `DELETE`.
   - Deleting a version is rejected.
   - `regime_versions_immutable` rejects changes to `definition`, `definition_hash`,
-    `frozen_stats`, `reference`, `catalog`, `label_set`, `version` and `data_start`, and
-    changes to existing fingerprint chunks. It allows `data_end` to move forward with new
-    chunks.
+    `input_revision`, `revision_reason`, `frozen_stats`, `reference`, `catalog`,
+    `label_set`, `version` and `data_start`. It allows `data_end` to move forward and
+    `build_no` to increment.
   - Version numbering and the "latest" lookup are scoped to (`reference`, `catalog`,
     `label_set`).
+  - Reading as of build *n* hides values set later and rows inserted later.
 - [ ] 1.9 Migration (off `3f56b46c78eb`): `regime_calendar_versions`, `regime_labels`, and the
-      `regime_labels_append_only` and `regime_versions_immutable` triggers. Add `src/db/models/regime.py` and
-      `src/db/repositories/regime_repository_sync.py` (insert and append only, no update or
-      delete method). Update the single-head note in `CLAUDE.md` and the table in
-      `docs/agent/persistence.md` (with the sync-only note).
+      `regime_labels_append_only` and `regime_versions_immutable` triggers. Add
+      `src/db/models/regime.py` and `src/db/repositories/regime_repository_sync.py` (insert
+      and append only, no update or delete method). If Allay does not approve the sync-only
+      exception (`design.md` Q13), also add the async `regime_repository.py` with the same
+      surface and tests. Update the single-head note in `CLAUDE.md` and
+      `docs/agent/persistence.md` (the new tables, plus the exception if approved).
 - [ ] 1.10 Unit (failing first): `tests/unit/governance/test_regime_ground_truth_boundary.py`
       scans the AST of `src/**`, plus `src/core/strategies/custom/**` when it is present,
       resolving relative imports. Only the **named** permitted files (`design.md` section 9; no
@@ -82,7 +88,9 @@ updated or deleted. The wave-leg chart looks right to Allay.
   - `build_regime_calendar` on a fixture catalog creates both versions.
   - Running it again with the same definition is a no-op.
   - New bars append rows.
-  - A changed past bar is refused with `reference_bars_changed`.
+  - A changed past bar is refused with `reference_bars_changed`, and a new-revision request
+    with that reason then creates `input_revision` 2 of the same definition.
+  - A mid-year extension appends rows and changes no stored `bar_hash`.
   - A changed definition creates version 2 and leaves version 1 untouched.
   - `get_regime_labels` returns dated labels for a range.
   - `label_set="ground_truth"` output carries `hindsight: true` and
@@ -124,14 +132,19 @@ are profiled and the stop-rule reading is recorded.
     days sum to labelled days.
   - Ground truth uses lag 0 by exact date. Detectors use lag *k* by reference session, with
     as-of fill for non-session days.
-  - **Lag matters**: lag 0 ≠ lag 1 on a synthetic series.
+  - **Lag matters**: on a fixture with a known `up` → `down` flip inside the run, lag 0
+    puts the flip day in `down` and lag 1 puts it in `up`, so the tables differ.
+  - The detector as-of lookup is bounded by the version's `data_end`: run days after it are
+    `unlabelled`, while weekends inside the range carry the earlier label.
   - Exposure follows `design.md` section 5.5: carried in from the previous close. A
     position opened at *d*'s own bar does not count; an intraday round trip inside *d* does.
   - Benchmark return covers the bucket's days.
   - Insufficient flag below 60 days or 20 trades.
   - Crossing chooses the widest-gap scale and records it.
 - [ ] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a circular block
-      bootstrap with 10-day blocks. The same seed gives the same interval. On i.i.d. data it
+      bootstrap with 10-day blocks drawn from the whole run timeline before the bucket mask is
+      applied. On a fixture with two bucket spells years apart, no resampled block contains
+      days from both spells. The same seed gives the same interval. On i.i.d. data it
       covers the true mean near 90% (seeded Monte Carlo). The three-way family outcome is
       tested: `strong_dependence`, `no_dependence`, and `insufficient_evidence` when fewer
       than two buckets are sufficient (`design.md` section 5.4).
@@ -139,8 +152,8 @@ are profiled and the stop-rule reading is recorded.
       bootstrap in `src/core/regimes/bootstrap.py`. Take `sharpe` and the seeded interval
       helpers from `src/core/robustness/bootstrap.py` rather than reimplementing them.
 - [ ] 2.6 Integration (failing first, Postgres): the `regime_reports` repository, append-only
-      (the trigger rejects `UPDATE` and `DELETE`), with a non-empty `calendar_version_ids` and
-      unknown ids refused.
+      (the trigger rejects `UPDATE` and `DELETE`), with a non-empty `calendar_version_ids`
+      (version and `build_no`) and `labels_hash`, and unknown ids refused.
 - [ ] 2.7 Migration: `regime_reports` (`design.md` section 8). Update persistence docs and the
       single-head note.
 - [ ] 2.8 Component (failing first): `tests/component/mcp_server/test_regime_attribution_tool.py`:
@@ -148,7 +161,11 @@ are profiled and the stop-rule reading is recorded.
   - `lag_days` defaults to unset: ground truth without it runs at lag 0, and ground truth
     with any explicit `lag_days` (0 included) is refused with `lag_not_allowed`. Detectors
     without it run at lag 1.
-  - The payload records versions, params and `overrides`.
+  - The payload records versions with their `build_no`, `labels_hash`, params and
+    `overrides`.
+  - **Snapshot**: a profile stored at build *n*, rerun as of build *n* after a later build
+    filled ground-truth values, reads identical label rows (hash match) and gives identical
+    buckets.
   - Ground truth gets `hindsight: true` and the stamp; detectors get `hindsight: false`.
   - A stored report is written.
   - `export_results(slug, regime_report=...)` writes `<slug>.regime.json` and
@@ -229,7 +246,8 @@ and the fixed verdicts are reported.
   - Win rate, average win and loss, expectancy, profit factor.
   - **Reconciliation**: Σ closed trades, `unlabelled` included, = `total_trades`, and closed
     + open = trade rows.
-  - With-trend / counter-trend tags for `BUY` and `SELL`.
+  - With-trend / counter-trend tags for `BUY` and `SELL`. A trade with no trend label at
+    entry is `unclassified`, in its own row, and excluded from the direction-gate rule.
   - The trade-view expectancy interval.
 - [ ] 4.2 Implement the trade view and alignment in `attribution.py`. Take `profit_factor`,
       `win_rate` and the i.i.d. interval helpers from `src/core/robustness/bootstrap.py`; do
@@ -257,7 +275,8 @@ combination profile.
 - [ ] 5.1 Unit (failing first): `test_attribution.py`:
   - Inner join on shared days.
   - Per-bucket Pearson, `null` + insufficient under `min_days` shared days.
-  - Inverse-volatility weights.
+  - Inverse-volatility weights. A zero-volatility run makes the combination `null` with
+    `reason: "zero_volatility"`, naming the run.
   - The combination profiled as a column.
   - `uncovered_regime` when two runs lose reliably in the same bucket.
 - [ ] 5.2 Implement it in `attribution.py`, reusing `src/core/robustness/portfolio.py`
@@ -274,8 +293,9 @@ removals, on detector labels only.
   - Split by date.
   - First-half confirmation, else `bucket_not_confirmed`.
   - Half and off scaling.
-  - Random removals of the same day count, in runs of the first-half median spell length,
-    seeded.
+  - Random removals of exactly the same day count, in non-overlapping runs of the
+    first-half median spell length, seeded. Only the last run may be shorter (a 2-day spell
+    with 3 flagged days gives runs of 2 and 1).
   - Pass only when both Sharpe and max drawdown beat the 95th percentile.
   - `candidate` until a second instrument or period passes.
 - [ ] 6.2 Implement `src/core/regimes/filter_test.py`. It must not import `ground_truth`; the

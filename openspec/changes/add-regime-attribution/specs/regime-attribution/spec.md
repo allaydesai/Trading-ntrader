@@ -26,8 +26,15 @@ explicitly given `lag_days`, 0 included, SHALL be refused with `lag_not_allowed`
 - **THEN** it refuses with `curve_missing`, and the fix names `reproduce_run`
 
 #### Scenario: lag is applied
-- **WHEN** the same run is profiled under detector labels with `lag_days=0` and `lag_days=1`
-- **THEN** the two daily-view tables differ, and each report records its `lag_days`
+- **WHEN** a fixture run whose detector label flips from `up` to `down` between two
+  consecutive reference sessions inside the run is profiled with `lag_days=0` and
+  `lag_days=1`
+- **THEN** the flip day falls in `down` under lag 0 and in `up` under lag 1, the two
+  daily-view tables differ, and each report records its `lag_days`
+
+#### Scenario: run continues past the calendar
+- **WHEN** a run has days after the detector version's last reference session
+- **THEN** those days are `unlabelled` and are not filled from an earlier label
 
 ### Requirement: Daily view reconciles to the run's total P&L
 The daily view SHALL measure each day's P&L as the change in stored equity, with the first day
@@ -40,8 +47,9 @@ bucket it SHALL report:
 - annualised return (mean daily return × 252) and annualised volatility (× √252)
 - Sharpe
 - worst day
-- a 90% block-bootstrap interval on mean daily return (10-day blocks, `bootstrap_samples`
-  resamples, a recorded `seed`)
+- a 90% block-bootstrap interval on mean daily return (`bootstrap_samples` resamples of
+  10-consecutive-day blocks drawn from the run's whole daily timeline before the bucket's
+  days are selected, so a block never joins separate spells, and a recorded `seed`)
 - exposure
 - the reference's annualised return on the same days
 - trades entered
@@ -79,10 +87,21 @@ hold for `get_regime_labels` with `label_set="ground_truth"`.
 - **THEN** the payload carries `hindsight: false` and no stamp
 
 ### Requirement: Every report records the calendar version and overrides
-Every regime report SHALL be stored append-only in `regime_reports` with the calendar version
-ids it read (never empty), the label set, every parameter, the non-default parameters listed
-as `overrides`, and the code commit. A stored report SHALL never be rewritten. A new reading
-SHALL be a new row.
+Every regime report SHALL be stored append-only in `regime_reports` with:
+- the calendar version ids it read and each version's build number at read time (never empty)
+- a hash of the label rows it read
+- the label set
+- every parameter, with the non-default ones listed as `overrides`
+- the code commit
+
+A stored report SHALL never be rewritten, and a new reading SHALL be a new row. Rerunning a
+report as of its recorded build numbers SHALL reproduce its inputs exactly, even after later
+builds fill in null ground-truth values.
+
+#### Scenario: report reproduces after ground truth fills in
+- **WHEN** a ground-truth profile is stored at build 3, a later build fills the last ten
+  sessions' ranging labels, and the profile is rerun as of build 3
+- **THEN** the rerun reads the same label rows (the hash matches) and gives identical buckets
 
 #### Scenario: report names its versions
 - **WHEN** a profile is computed against ground-truth version 1 and detector version 2
@@ -120,8 +139,14 @@ The trade view SHALL bucket closed trades by the label in force on their entry d
 entered on a day with no label SHALL go in an `unlabelled` row. Per bucket it SHALL report
 trades, win rate, average win and loss, expectancy and profit factor, using the same metric
 definitions as the run's stored metrics, and it SHALL count open trades separately. The
-bucketed closed trades, `unlabelled` included, SHALL sum to the run's `total_trades`. Each trade SHALL be tagged with-trend (a `BUY` entered under `up`, or a `SELL`
-under `down`) or counter-trend for each trend definition. Verdicts SHALL be the spec's fixed
+bucketed closed trades, `unlabelled` included, SHALL sum to the run's `total_trades`. For each
+trend definition, each trade SHALL be tagged:
+- with-trend: a `BUY` entered under `up`, or a `SELL` under `down`
+- counter-trend: a `BUY` under `down`, or a `SELL` under `up`
+- unclassified: no trend label in force at entry. These are reported in their own row and
+  never counted towards either group or the direction-gate rule
+
+Verdicts SHALL be the spec's fixed
 rules (including the 70% / 30% concentration rule, the three-of-four panel rule, the
 direction-gate rule and the drift rule), with thresholds held as constants and not exposed as
 parameters.
@@ -140,7 +165,14 @@ Given two or more runs, `run_regime_attribution` SHALL report the correlation of
 on shared days, both overall and per bucket (`null` with `insufficient: true` for a bucket
 under `min_days` shared days). It SHALL also report the profile of an equal-risk combination
 weighted by the inverse volatility of each run's daily returns, and it SHALL state that those
-weights use the full window.
+weights use the full window. If any run's daily returns have zero volatility over the shared
+window, the combination SHALL be reported as `null` with `insufficient: true` and
+`reason: "zero_volatility"`, naming those runs, and no weights SHALL be computed.
+
+#### Scenario: a run that never moved
+- **WHEN** one of the runs has constant equity over the shared window
+- **THEN** the combination is `null` with `reason: "zero_volatility"` naming that run, and
+  the correlation matrix reports `null` for that run's pairs
 
 #### Scenario: two baselines
 - **WHEN** the trend and mean-reversion baselines are profiled together
@@ -151,14 +183,21 @@ weights use the full window.
 `run_regime_filter_test` SHALL accept only detector labels. It SHALL confirm the flagged
 bucket on the first half of the run's labelled days. It SHALL apply the half-size (default) or
 off filter to the second half. It SHALL compare the filtered Sharpe and max drawdown against
-1,000 seeded random removals of the same number of days, in contiguous runs whose length is
-the bucket's median spell length in the first half. It SHALL pass only when both metrics beat
+1,000 seeded random removals of exactly the same number of days, in non-overlapping contiguous
+runs whose length is the bucket's median spell length in the first half. Only the final run
+of each removal MAY be shorter, so that the total matches exactly. It SHALL pass only when
+both metrics beat
 the 95th percentile of the random versions. A pass SHALL be reported as a candidate until a
 second instrument or period also passes.
 
 #### Scenario: bucket not confirmed in the first half
 - **WHEN** the flagged bucket's first-half interval is not entirely below zero
 - **THEN** the tool refuses with `bucket_not_confirmed` and runs no baseline
+
+#### Scenario: day count not a multiple of the spell length
+- **WHEN** the first-half median spell length is 2 days and the filter flags 3 second-half
+  days
+- **THEN** every random removal takes exactly 3 days, as one 2-day run and one 1-day run
 
 #### Scenario: single pass
 - **WHEN** the filter passes on one run only

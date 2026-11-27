@@ -201,9 +201,11 @@ catalogs" is this option. The catalogs themselves stay files.
 | `label_set` | String(20) | CHECK in (`ground_truth`, `detector`) |
 | `version` | Integer | 1, 2, ... per (`reference`, `catalog`, `label_set`); UNIQUE together. "Latest" lookups always filter on all three, so a second catalog can never silently replace the price series |
 | `definition` | JSONB | **parameters only**: scales and ATR multiples, ER window and threshold, vol windows, detector list and windows, warm-up. Nothing derived from data |
-| `definition_hash` | String(64) | sha256 of canonical `definition` JSON. UNIQUE with (`reference`, `catalog`, `label_set`), so the same definition is never stored twice. The default definition is a constant, so its hash can be pinned by test |
+| `definition_hash` | String(64) | sha256 of canonical `definition` JSON. The default definition is a constant, so its hash can be pinned by test |
+| `input_revision` | Integer | 1, 2, ... per (`reference`, `catalog`, `label_set`, `definition_hash`). UNIQUE with those four. A plain rebuild with the same definition appends to the latest revision and never creates a duplicate. A new revision of the **same** definition is created only on an explicit request (`build_regime_calendar(new_revision=..., reason=...)`) after `reference_bars_changed`, or to re-cut the frozen median (section 3). It gets its own `version` number, and `revision_reason` records why |
+| `revision_reason` | Text, nullable | NULL for revision 1. Otherwise `reference_bars_changed` or `median_recut`, plus a free-text note |
 | `frozen_stats` | JSONB | values derived from data at version creation and never recomputed: the ground-truth volatility median and the sample window it was cut over (section 3). Not hashed. Set once on insert |
-| `bars_fingerprint` | JSONB | sha256 of the per-date OHLC the version was built from, kept per year-chunk with the overall hash. A build checks the overlapping history against it and refuses (`reference_bars_changed`) when past bars differ, for example after a re-import with back-adjusted prices. Re-labelling then needs a new version |
+| `build_no` | Integer | starts at 1 and increments with every build that appends rows or fills ground-truth values (section 1, "Report snapshots") |
 | `data_start`, `data_end` | Date | the bar range the latest build read |
 | `git_commit` | String(40) | code that built it |
 | `created_at`, `updated_at` | timestamptz | `updated_at` moves only when a build appends days |
@@ -215,6 +217,22 @@ catalogs" is this option. The catalogs themselves stay files.
 | `version_id` | FK → versions, `ON DELETE RESTRICT` | |
 | `session_date` | Date | the reference's session date; PK (`version_id`, `session_date`) |
 | `labels` | JSONB | see below; validated by a pydantic model on write |
+| `set_in_build` | JSONB | for each label key, the `build_no` that set its value (`null` while unset) |
+| `bar_hash` | String(32) | truncated sha256 of that session's OHLC as read. Set on insert, never changed |
+
+**Bar fingerprint.** Each label row carries the hash of its own session's bar. A build
+recomputes `bar_hash` for every stored date it reads and refuses (`reference_bars_changed`,
+naming the first differing date) when one differs, for example after a re-import with
+back-adjusted prices. New dates simply add rows with their own hash. Extending the data
+mid-year, or by a single day, therefore never touches a stored fingerprint. Re-labelling on
+changed bars needs a new `input_revision`.
+
+**Report snapshots.** A report reads a version at its current `build_no` and records
+`(version_id, build_no)` for each version used, together with a sha256 of the label rows it
+read. Reading "as of build *n*" treats any value whose `set_in_build` is greater than *n* as
+`null`, and ignores rows inserted after build *n*. A rerun with the recorded pair therefore
+recovers the original inputs exactly, even after later builds fill in null ground-truth
+values. The stored hash proves it.
 
 Label payloads:
 
@@ -228,16 +246,17 @@ and a PL/pgSQL trigger `regime_labels_append_only` enforces the same rules in th
 
 - A detector row is immutable once inserted. A build only **appends** dates after the last
   stored date.
-- A ground-truth row may change a `null` value to a value (the future it needed has arrived).
-  It may never change a set value. Any other change raises.
+- A ground-truth row may change a `null` value to a value (the future it needed has arrived),
+  recording the current build in `set_in_build`. It may never change a set value, its
+  `set_in_build` entry, or `bar_hash`. Any other change raises.
 - `DELETE` on either table raises. Versions are never removed.
 - A second trigger, `regime_versions_immutable`, rejects any `UPDATE` of a version row except
-  one that moves `data_end` forward, extends `bars_fingerprint` with new chunks (existing
-  chunks unchanged), and touches `updated_at`. `definition`, `definition_hash`,
-  `frozen_stats`, `reference`, `catalog`, `label_set`, `version` and `data_start` can never
-  change.
+  one that moves `data_end` forward, increments `build_no`, and touches `updated_at`.
+  `definition`, `definition_hash`, `input_revision`, `revision_reason`, `frozen_stats`,
+  `reference`, `catalog`, `label_set`, `version` and `data_start` can never change.
 - A changed definition gets a new `definition_hash`, so `build_regime_calendar` creates a
-  **new version**. It never edits an old one.
+  **new version**. It never edits an old one. The same definition on changed bars, or with a
+  re-cut median, becomes a new version only through an explicit new `input_revision`.
 
 Why one version per label set: ground truth and detectors change on different schedules (a
 detector panel grows in phase 3 while the ground truth stays fixed), and a report names the
@@ -245,8 +264,10 @@ versions it used for each.
 
 Repository: `src/db/repositories/regime_repository_sync.py` (sync only). Every reader is the MCP
 server, which is sync (`run_reads.py:133`). `docs/agent/persistence.md` says new DB features
-update both repositories. This change deliberately adds no async one, because no async caller
-exists (the web UI is out of scope). The doc gains that note.
+update both repositories. This proposal asks for a **recorded exception**: no async caller
+exists, because the web UI is out of scope. It needs Allay's approval before phase 1 (section
+13, Q13). If approved, task 1.9 adds the exception to `persistence.md`. If not, task 1.9 also
+adds `regime_repository.py` (async) with the same insert-only surface and the same tests.
 
 ## 2. Dates and alignment
 
@@ -262,7 +283,9 @@ exists (the web UI is out of scope). The doc gains that note.
 - **Detector labels with lag *k*** (default 1): the run's day *d* takes the label of the
   *k*-th reference session strictly before *d* (*k* = 0: the label dated on or before *d*).
   Run days with no reference session of their own, such as weekends or exchange holidays,
-  take the most recent earlier label. That is the label "in force".
+  take the most recent earlier label. That is the label "in force". The as-of lookup is
+  **bounded by the version's `data_end`**: a run day after the last reference session is
+  `unlabelled`, never filled from an older label.
 - **Ground-truth labels** (lag fixed at 0): the run's day *d* takes the label dated exactly
   *d*. A day with no reference session is **unlabelled**.
 - **`lag_days` default**: the parameter is `lag_days: int | None = None`, resolved per label
@@ -367,9 +390,13 @@ The bucket families:
 
 The 90% interval is in phase 2, not phase 4 as the spec's phase list has it, because the stop
 rule's test ("strong dependence": one bucket's interval entirely below zero and another's
-entirely above) cannot be evaluated without it. It uses a circular block bootstrap on the
-bucket's daily returns in date order: 1,000 resamples, 10-day blocks, and an explicit `seed`
-(default 0) so a report reproduces.
+entirely above) cannot be evaluated without it. It uses a circular block bootstrap of the
+run's **whole daily timeline**: 1,000 resamples of 10-consecutive-day blocks, each block
+carrying its days' bucket labels, with an explicit `seed` (default 0) so a report
+reproduces. Each resample's statistic is the mean return of the observations in the bucket.
+Blocks are drawn before the bucket filter, so a block never joins two spells of a bucket that
+are years apart. A resample with no observation in the bucket is redrawn, and the redraw count
+is reported.
 
 ### 5.4 Insufficient flag
 
@@ -420,8 +447,11 @@ report states which.
   bootstrap (5.3) is new code.
 - **Exit check**: Σ bucket closed trades, `unlabelled` included, =
   `performance_metrics.total_trades`, and closed plus open = trade rows.
-- **Alignment**: `BUY` entered under `up`, or `SELL` under `down`, is **with-trend**. Anything
-  else with a label is counter-trend. It is computed per trend definition.
+- **Alignment**: `BUY` entered under `up`, or `SELL` under `down`, is **with-trend**. `BUY`
+  under `down`, or `SELL` under `up`, is counter-trend. A trade entered with no trend label
+  in force (warm-up, `null`, past the data end) is **unclassified**, reported in its own row,
+  and never counted towards either group or the direction-gate rule. It is computed per
+  trend definition.
 - **Intervals**: the trade-view expectancy interval is an i.i.d. bootstrap over trades, used
   by the "intervals do not overlap" direction-gate rule.
 
@@ -453,7 +483,11 @@ after the numbers are in.
 
 The weights use the full window, which is hindsight. That is acceptable for a diagnostic and
 is stated in the report. Correlation inside a bucket with fewer than `min_days` shared days is
-reported as `null` with the insufficient flag.
+reported as `null` with the insufficient flag. If any run's daily returns have zero standard
+deviation over the shared window (it never traded, or its equity never moved), its inverse
+volatility is undefined. The combination is then reported as `null` with `insufficient: true`
+and `reason: "zero_volatility"`, naming those runs. The correlation matrix still reports the
+other pairs, with `null` for that run's, as `pf.correlation` already does.
 
 ## 7. Filter test (phase 6, `run_regime_filter_test`)
 
@@ -466,8 +500,11 @@ labels are refused.**
    drawdown.
 3. Baseline: 1,000 versions of the second half, each scaling the same number of days, chosen
    at random in contiguous runs. The run length is the median spell length of that bucket in
-   the **first** half, so nothing from the second half shapes the baseline. The draws are
-   seeded.
+   the **first** half, so nothing from the second half shapes the baseline. The total
+   number of days removed is always exactly the filter's day count. Every run is full length
+   except possibly the last, which is shortened to make the total exact (for example, a
+   2-day median spell and 3 flagged days give one run of 2 and one of 1). Runs never
+   overlap. The draws are seeded.
 4. Pass only when the filtered Sharpe **and** max drawdown both beat the 95th percentile of
    the random versions.
 5. A pass is stored as `candidate`. The tool reports `rule` only once a pass on a second
@@ -513,7 +550,8 @@ calendar is a later decision, once the new tools have been used.
 | `id`, `report_id` (UUID) | |
 | `kind` | CHECK in (`profile`, `scorecard`, `filter_test`) |
 | `run_ids` | JSONB list |
-| `calendar_version_ids` | JSONB list. Each id is checked to exist on write, because a JSON list can't carry a foreign key |
+| `calendar_version_ids` | JSONB list of `{version_id, build_no}`. Each id is checked to exist on write, because a JSON list can't carry a foreign key. `build_no` is the snapshot read (section 1, "Report snapshots") |
+| `labels_hash` | sha256 of the label rows read, to verify a rerun against the snapshot |
 | `label_set` | |
 | `hindsight` | bool. True whenever a ground-truth version was read |
 | `params` | JSONB, including every non-default value as `overrides` (spec: "a run that overrides them records the override") |
@@ -533,8 +571,8 @@ pointing at the regime tools.
 | Ground-truth labels are **never** exported to a strategy, config, sweep or filter | (1) Governance unit test `tests/unit/governance/test_regime_ground_truth_boundary.py`: an AST scan of `src/**` (and the strategies submodule when it is checked out) that resolves relative imports (`from . import ground_truth`) as well as absolute ones. The permitted set is an explicit list of **named files**, never a glob: `src/core/regimes/attribution.py`, `src/core/regimes/scorecard.py`, `src/mcp_server/analysis/regime_calendar.py` (build and read) and `src/mcp_server/analysis/regime_reports.py`. Only these may import `src.core.regimes.ground_truth` or call the repository's ground-truth reader. `src/core/regimes/filter_test.py` and any filter-test glue are named as **forbidden**, and the filter-test entry point lives in its own module (`src/mcp_server/analysis/regime_filter.py`) so the test can tell it apart. The test pins the set against the code. (2) `run_regime_filter_test` refuses `label_set="ground_truth"`, and its glue reads detector versions only. (3) `submit_backtest`, `submit_sweep` and `validate_config` are unchanged and gain no regime parameter. (4) `export_bars` does not export labels |
 | Every report built from ground-truth labels is stamped "hindsight, not tradeable" | `hindsight: true` and `stamp: "hindsight, not tradeable"` at the top level of every tool payload, stored report and vault file that read a ground-truth version. `get_regime_labels(label_set="ground_truth")` carries the stamp too. A component test asserts it for each tool |
 | Detector labels are append-only | repository (no update or delete) + DB trigger (section 1) + integration test against Postgres (`tests/integration/db/`) |
-| A definition change creates a new version | `definition_hash` uniqueness. `build_regime_calendar` with a changed definition creates version n+1 and leaves version n untouched (integration test) |
-| Every report records the calendar version | `regime_reports.calendar_version_ids` NOT NULL and non-empty, and echoed in every payload |
+| A definition change creates a new version | uniqueness on (`reference`, `catalog`, `label_set`, `definition_hash`, `input_revision`). `build_regime_calendar` with a changed definition creates version n+1 and leaves version n untouched (integration test) |
+| Every report records the calendar version | `regime_reports.calendar_version_ids` (version and `build_no`) NOT NULL and non-empty, echoed in every payload, plus `labels_hash`. A rerun as of the recorded builds reproduces the report |
 | Thresholds fixed before results are seen | definition defaults are constants. A non-default is recorded as an override and labelled "declared robustness check" in the report |
 | All four detectors count as trials | the panel table always reports all four. The tool has no "pick the best" option. When the profile is filed against a study, the report notes the four definitions for the study record (how they enter the trial ledger is section 13, Q11) |
 
@@ -581,7 +619,7 @@ while the dashboard runs, integration tier `--forked`.
 | D10 | Phase 6 scales stored returns and does not re-run the engine | 6 |
 | D11 | Detector scoring uses the lag-1 label, the one a strategy could act on | 3 |
 | D12 | Annualisation is ×252 throughout, the reference's sessions, whatever the traded asset | 2 |
-| D13 | No async repository and no web UI in v1 | all |
+| D13 | No async repository (pending approval, Q13) and no web UI in v1 | all |
 
 ## 13. Open questions for Allay
 
@@ -619,3 +657,6 @@ while the dashboard runs, integration tier `--forked`.
     family comes back `insufficient_evidence` (section 5.4), most likely for the
     low-frequency Bollinger run, do you want more history or instruments first, or a
     judgement on the daily-view numbers alone?
+13. **Sync-only repository.** `docs/agent/persistence.md` says new DB features update both the
+    sync and async repositories. Do you approve a recorded exception for the regime tables,
+    which have no async reader (D13)? If not, phase 1 also adds the async repository.
