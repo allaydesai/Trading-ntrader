@@ -95,13 +95,25 @@ def upgrade() -> None:
             op.execute(statement)
 
 
+REFUSE_POPULATED = """
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM regime_reports) THEN
+        RAISE EXCEPTION 'regime_reports holds stored reports; a downgrade would delete them. '
+            'Export them first and empty the table deliberately if they really must go.';
+    END IF;
+END $$
+"""
+
+
 def downgrade() -> None:
-    """Downgrade schema; refused while any stored report exists (reports are never lost)."""
-    stored = op.get_bind().execute(sa.text("SELECT count(*) FROM regime_reports")).scalar()
-    if stored:
-        raise RuntimeError(
-            f"regime_reports holds {stored} stored report(s); a downgrade would delete them. "
-            "Export them first and empty the table deliberately if they really must go."
-        )
+    """Downgrade schema; refused while any stored report exists (reports are never lost).
+
+    The table is locked against inserts first, so no report can commit between the check
+    and the drop. The database evaluates the check itself, so ``alembic downgrade --sql``
+    (offline mode) still writes the script.
+    """
+    op.execute("LOCK TABLE regime_reports IN SHARE ROW EXCLUSIVE MODE")
+    op.execute(REFUSE_POPULATED)
     op.drop_table("regime_reports")
     op.execute("DROP FUNCTION IF EXISTS regime_reports_append_only()")
