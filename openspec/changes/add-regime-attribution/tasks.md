@@ -277,6 +277,54 @@ are profiled and the stop-rule reading is recorded.
       interval on each regime-conditional difference (same resamples), and descriptive trade
       view, alignment and correlation tables (no verdict reads them before phase 4).
 
+## 2b. Phase 2 follow-ups before the go/stop (approved by Allay 2026-11-27)
+
+Three follow-ups to the 2.12 reading, done before 2.13 and without starting phase 3 or the
+filter test. All reports: ground truth = the reference's default-definition version (SPY v2,
+QQQ v1, build 1), detector `sma200` lag 1, seed 0, 1,000 resamples. Every family reconciles to
+the cent.
+
+- [x] 2b.1 **Long-only trend baseline.** `sma_crossover_long_only` is registered (strategies
+      submodule at `028db77`). Run **`b9ead99e-1c9f-4259-9e2f-0540c67051af`** through the CLI
+      (`backtest run --symbol SPY --strategy sma_crossover_long_only --catalog firstrate-etf
+      --timeframe 1-day --start 2015-01-01 --end 2025-12-31`), from a clean tree at `b6581df`.
+      Defaults: SMA 10 / 20, `portfolio_value` 10,000,000, `position_size_pct` 10,
+      `1-DAY-LAST`, fill seed 42, `mark_to_market`. 63 closed trades; +5.98%. Reports: ground
+      truth `de90d577`, `sma200` `5072d9b1`. **Circularity:** an SMA-crossover trend follower
+      and trend/SMA-based labels are built from the same price path, so part of its regime
+      dependence is built in. It also enters mostly in up legs by construction, which is why
+      its minor and intermediate down legs fall under 20 trades.
+- [x] 2b.2 **Bollinger evidence.** `c4c9c098`'s config (`portfolio_value` 10,000,000, every
+      other parameter at its default, `1-DAY-LAST`, fill seed 42) is unchanged at strategies
+      `028db77` for equities. Rerun first over `c4c9c098`'s own window: run `a3c05b32` has the
+      same `config_hash` and identical trades and equity curve. Then:
+  - SPY **`614f5d10-d2d8-4f0b-9261-bef9de950686`**, 2001-01-31 (the first `sma200` label, after
+        the 272-session warm-up) → 2025-12-31: 241 closed trades, +16.40%. Reports: ground
+        truth `c4003851`, `sma200` `c94b9737`.
+  - QQQ **`0fb0d72f-0ecf-4e20-bf40-b9877909f0f1`**, 2001-03-27 (QQQ's first `sma200` label)
+        → 2025-12-31: 234 closed trades, −1.08%. Profiled against QQQ's own calendar.
+        Reports: ground truth `9b4aac7b`, `sma200` `f0fb40f0`.
+  - QQQ calendar: built ground truth v1 and detector v1 of the default definitions (the SPY
+        v2 / v1 hashes: ER < 0.2 over 21 centred sessions, 3 / 6 / 12 × ATR20 legs, realised
+        volatility against a frozen per-version median, here 0.1778). Append-only; a second
+        build is `up_to_date`. Legs (up / down, median sessions): minor 98 / 99, 22;
+        intermediate 37 / 38, 76; major 8 / 9, 289. Ranging 47.9%.
+  - **High − low volatility, mean daily return (90% interval):** SPY 2015-2025 +2.5 bp
+        [+0.6, +4.5] (reproduced); SPY 2001-2025 **+1.4 bp [+0.4, +2.4], holds**, smaller;
+        QQQ 2001-2025 **−0.1 bp [−1.2, +1.0], does not hold**.
+- [x] 2b.3 **Position-scaled drift** (`design.md` 5.6b): opt-in
+      `run_regime_attribution(drift_scaling="position")`. Tests: unit
+      `tests/unit/core/regimes/test_attribution.py` (weights, weekend close, only the drift
+      columns move, golden digest of the default output pinned from `b6581df`); integration
+      `tests/integration/mcp_server/test_regime_attribution_tool.py` (default payload is the
+      phase 2 payload, recorded in `params`, not an override, refused for another symbol, the
+      vault note). The six stored phase 2 reports rerun byte for byte. Position-scaled reports
+      (ground truth / `sma200`): `8a12e455` `b2e04372` / `35bb49f2`; `b9ead99e` `512f9a25` /
+      `f8eb8a39`; `c4c9c098` `49590e9c` / `a08cf7cb`; `614f5d10` `681b3e6e` / `daf68417`;
+      `0fb0d72f` `0f43c508` / `6958a2e4`. Reading: for runs that trade the reference, scaled
+      drift ≈ the bucket's return (|excess| ≤ 1.1% a year in every bucket, against up to
+      ±75% with ±1 drift), so every bucket's P&L is the exposure held there; see Q15.
+
 > ### ⛔ PHASE-2 STOP RULE
 >
 > Stop after 2.12 and report the ground-truth profiles of the trend and mean-reversion
@@ -310,6 +358,26 @@ are profiled and the stop-rule reading is recorded.
         add an instrument before calling it "no dependence" (Q12).
       - `sma200` (lag 1): SMA crossover `insufficient_evidence` (12 trades entered below the
         average); Bollinger `no_dependence`.
+
+      _Reading with the 2b evidence, 2026-11-27 (still awaiting Allay's go/stop):_
+      - **Trend, long-only `b9ead99e`: dependence** (circular, 2b.1). `strong_dependence` at
+        the major scale (up +1.6% / down −2.6% a year), ranging (not ranging +1.8% / ranging
+        −1.1%) and volatility (low +2.0% / high −1.4%; high − low −1.4 bp a day, [−1.8,
+        −0.9]). Minor and intermediate `insufficient_evidence` (10 and 15 trades entered in
+        down legs), though their up − down differences exclude zero (+3.8 bp [+3.3, +4.3],
+        +2.7 bp [+2.2, +3.3]). `cross` (major) and `sma200` `insufficient_evidence`.
+      - **Mean reversion, Bollinger: dependence only in the crossed family.** 2015-2025
+        `c4c9c098`: `no_dependence` in all six families (unchanged). SPY 2001-2025 `614f5d10`:
+        `no_dependence` in all five single families; `cross` (minor × volatility)
+        `strong_dependence` (up/high +5.7% a year, up/low −3.8%). QQQ 2001-2025 `0fb0d72f`:
+        `no_dependence` in all five single families; `cross` (major × volatility)
+        `strong_dependence` (up/high +3.2%, down/high −4.4%). The cross scale is picked from
+        the data and differs by instrument, and the volatility difference holds on SPY but
+        not on QQQ (2b.2). `sma200` `no_dependence` on all three.
+      - **Stop rule: does not fire.** Both trend baselines show dependence, and the
+        mean-reversion runs do too, in `cross` only (Q16). The long-only minor and
+        intermediate scales are `insufficient_evidence`: per Q12, extend its history (SPY
+        from 2001) or add an instrument before reading them as "no dependence".
 
 
 ## 3. Phase 3: detector panel and scorecard (gated on 2.13 = go)
