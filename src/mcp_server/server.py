@@ -17,6 +17,7 @@ from src.mcp_server.tools import (
     jobs,
     paper,
     portfolio,
+    regimes,
     research,
     robustness,
     runs,
@@ -37,6 +38,7 @@ REGISTERED_TOOLS: frozenset[str] = frozenset(
         *paper.TOOL_NAMES,
         *portfolio.TOOL_NAMES,
         *robustness.TOOL_NAMES,
+        *regimes.TOOL_NAMES,
     )
 )
 
@@ -63,6 +65,8 @@ scorecard's G2/G3 rows cite them. Portfolio, from stored curves only:
 get_sleeve_correlation across any runs (correlation, drawdown overlap, regimes side by
 side); run_portfolio_backtest judges a study's candidate inside the held sleeves,
 before and after, stored as a 'portfolio' analysis (no engine run, no gate yet).
+Regimes: build_regime_calendar stores SPY's versioned regime calendar and get_regime_labels
+reads it by date; ground-truth labels are hindsight, stamped and never used to trade.
 Ad-hoc runs without a study are allowed but never count as evidence. Failures come back as
 {ok: false, error: {code, message, fix}}. This server never trades, never starts,
 stops or creates sessions, and never fetches or imports data.
@@ -99,4 +103,5 @@ def build_server(ctx: ServerContext | None = None) -> MCPServer:
     paper.register(server, ctx)
     portfolio.register(server, ctx)
     robustness.register(server, ctx)
+    regimes.register(server, ctx)
     return server

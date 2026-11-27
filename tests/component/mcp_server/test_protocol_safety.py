@@ -59,6 +59,9 @@ PINNED_TOOLS = frozenset(
         # phase 5a: portfolio from stored runs (no engine run, no gate)
         "get_sleeve_correlation",
         "run_portfolio_backtest",
+        # regime attribution phase 1: the stored regime calendar
+        "build_regime_calendar",
+        "get_regime_labels",
     }
 )
 #: The only tools whose names may say "session": they read, never manage one.
