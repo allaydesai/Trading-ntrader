@@ -150,7 +150,7 @@ trading day (vendor FAQ); it matched neither the 16:00 nor the 17:00 hourly clos
 than 0.2% of days. **Stamp**: the importer stamps futures daily bars at **00:00 New York of
 the session date** (all 4,623 bars, Monday-Friday only), not `D-1 17:00` as first assumed
 here (that is the FX importer's stamp), so their UTC date already is the session date.
-`src/core/regimes/sessions.py` still maps the 17:00 session-open convention explicitly, and
+`src/core/regimes/sessions.py` still maps the 17:00 session-stamp convention explicitly, and
 refuses anything else (section 2). Range: 2008-01-02 → 2026-05-01, 4,623 sessions; the
 detector warm-up ends on 2009-01-29.
 
@@ -318,8 +318,9 @@ to `persistence.md`.
 
 - **Calendar key**: the reference's session date, mapped from the daily bar's stamp
   (`src/core/regimes/sessions.py`): a 00:00 New York stamp is the session date (FirstRate
-  ETF and futures daily bars, section 0(d)); a 17:00 New York stamp is the CME session open,
-  so the bar is the next calendar day's session (Sunday's open → Monday). One convention per
+  ETF and futures daily bars, section 0(d)); a 17:00 New York stamp, the importers'
+  session stamp, is the next calendar day's session (a Sunday stamp → Monday). The Globex
+  open itself, 18:00 New York, is not a supported stamp and is refused. One convention per
   series; anything else is refused (`unsupported_session_stamp`).
 - **Run key**: the UTC date of each stored equity point (`daily_equity`,
   `mark_to_market.py:179`). For US equity and ETF runs on daily or intraday bars, this is the

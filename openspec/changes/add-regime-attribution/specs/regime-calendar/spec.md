@@ -24,21 +24,24 @@ tools that read them.
 ### Requirement: Each daily bar is keyed by its trading-session date
 The system SHALL key every label row by the session date its daily bar belongs to, read from
 the bar's stamp on the New York wall clock. A bar stamped at 00:00 New York SHALL be its own
-session date. A bar stamped at 17:00 New York, the CME session open, SHALL be the next
-calendar day's session, so Sunday's open is Monday. A series SHALL use one convention. Any
-other stamp, a Friday or Saturday 17:00 open, a 00:00 stamp on a Saturday or Sunday, or a
+session date. A bar stamped at 17:00 New York SHALL be the next calendar day's session, so a
+Sunday stamp is Monday. 17:00 New York is the importers' session-stamp convention (the end of
+the previous trading day), not the exchange open: CME Globex opens ES and NQ at 18:00 New
+York, after the 17:00-18:00 maintenance break. A bar stamped at 18:00 New York SHALL be
+refused like any other unsupported stamp, since no importer writes it. A series SHALL use one convention. Any
+other stamp, a Friday or Saturday 17:00 stamp, a 00:00 stamp on a Saturday or Sunday, or a
 series mixing conventions SHALL be refused with `unsupported_session_stamp` and nothing
 written. Out-of-session bars are not dropped or remapped: the calendar is for exchange
 references (ETFs, CME futures), and FX keeps its own trade-day rule and has no calendar. ES and NQ SHALL each get their own
 versions in `firstrate-futures`, never SPY's labels.
 
-#### Scenario: futures session open across daylight saving
+#### Scenario: 17:00 session stamp across daylight saving
 - **WHEN** a series is stamped at 17:00 New York, including Sunday 2024-03-10 at 21:00 UTC
   after the spring change
 - **THEN** each bar is keyed to the next day, and the Sunday bar to Monday 2024-03-11
 
 #### Scenario: unknown stamp
-- **WHEN** a daily series is stamped at 10:00 New York
+- **WHEN** a daily series is stamped at 10:00 New York, or at the 18:00 New York Globex open
 - **THEN** the build is refused with `unsupported_session_stamp` naming the stamp
 
 #### Scenario: ES and NQ build

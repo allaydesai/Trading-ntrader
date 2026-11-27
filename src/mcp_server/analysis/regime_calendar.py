@@ -56,7 +56,8 @@ def load_reference_bars(catalog: str, symbol: str) -> pd.DataFrame:
     """Every daily OHLC bar of ``symbol``, indexed by its trading-session date.
 
     The session date comes from the bar's stamp (``src.core.regimes.sessions``): 00:00
-    New York is the session date itself, 17:00 New York is the next day's CME session open.
+    New York is the session date itself, 17:00 New York is the next day's session (the
+    importers' session stamp; the Globex open itself is 18:00).
     A series stamped any other way is refused, never keyed by its UTC date.
     """
     frame = read_bars(catalog, symbol, "1-DAY", _EARLIEST, _LATEST)
@@ -73,7 +74,7 @@ def load_reference_bars(catalog: str, symbol: str) -> pd.DataFrame:
             "unsupported_session_stamp",
             f"{symbol}'s daily bars in '{catalog}' have no known session date: {exc}.",
             fix="Use a catalog whose daily bars are stamped at 00:00 New York (the session "
-            "date) or at the 17:00 New York session open; other stamps are not guessed.",
+            "date) or at 17:00 New York the day before it; other stamps are not guessed.",
         ) from None
     frame = frame[["open", "high", "low", "close"]].copy()
     frame.index = pd.Index(sessions, name="session_date")

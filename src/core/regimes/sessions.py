@@ -5,13 +5,14 @@ its daily bars is. Two stamping conventions are supported, and one series must u
 
 - ``session_date``: 00:00 New York of the session date. FirstRate ETF and futures daily
   bars (``firstrate-etf``, ``firstrate-futures``) are stamped this way.
-- ``session_open``: 17:00 New York on the evening the CME session opens, which is the
-  previous calendar day (``D-1 17:00`` → ``D``; Sunday's open → Monday), for a CME daily
-  series stamped at its session open. No session opens on a Friday or Saturday evening, and
-  no session date is a Saturday or Sunday.
+- ``session_open``: 17:00 New York on the previous calendar day (``D-1 17:00`` → ``D``;
+  a Sunday stamp → Monday). This is the importers' session-stamp convention, the end of the
+  previous trading day; CME Globex itself opens at 18:00 New York after the maintenance
+  break, and an 18:00 stamp is refused because no importer writes it. No session follows a
+  Friday or Saturday 17:00, and no session date is a Saturday or Sunday.
 
 The hour is read on the New York wall clock, so the UTC hour moves with daylight saving
-and a 17:00 open is 21:00Z in summer and 22:00Z in winter. An exchange holiday has no
+and a 17:00 stamp is 21:00Z in summer and 22:00Z in winter. An exchange holiday has no
 bar, so it simply yields no date. Any other stamp is refused rather than guessed: keying
 labels one day off would silently misalign every report built on them. (FX trade days use
 their own rule, ``src.services.fx.sessions``, which keeps out-of-session bars; FX has no
@@ -46,7 +47,7 @@ def session_convention(stamps: pd.DatetimeIndex) -> str | None:
         if convention is None or stamp.second or stamp.microsecond or stamp.nanosecond:
             raise UnsupportedSessionStamp(
                 f"{stamp.isoformat()} fits no supported daily-bar stamp "
-                "(00:00 New York session date, or the 17:00 New York session open)"
+                "(00:00 New York session date, or 17:00 New York the day before the session)"
             )
         if convention == "session_open" and stamp.dayofweek in _NO_OPEN_DAYS:
             raise UnsupportedSessionStamp(
