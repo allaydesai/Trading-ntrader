@@ -147,7 +147,7 @@ class TestRanging:
         high = label_ground_truth(frame, loose, median)
         assert [{**r, "ranging": None} for r in low] == [{**r, "ranging": None} for r in high]
         # ER < 0.2 implies ER < 0.3, so the lower threshold flags a subset of the days.
-        assert all(h for lo, h in zip(low, high) if lo["ranging"])
+        assert all(h["ranging"] for lo, h in zip(low, high) if lo["ranging"])
         assert sum(bool(r["ranging"]) for r in low) < sum(bool(r["ranging"]) for r in high)
 
 
