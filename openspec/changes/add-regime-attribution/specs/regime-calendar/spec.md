@@ -112,7 +112,8 @@ The system SHALL label each SPY session with:
   20-day average true range (days between a confirmed trough and the next peak are `up`, and
   days between a peak and the next trough are `down`)
 - a ranging flag, true when the efficiency ratio over the 21 sessions centred on the day is
-  below 0.3
+  below 0.2 (SPY ground-truth version 1 used 0.3; the threshold is a definition parameter, so
+  the change is version 2 and version 1 is kept as stored)
 - a volatility label, `high` when the centred 21-session realised volatility is above the
   version's median
 

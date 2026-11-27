@@ -336,7 +336,8 @@ Pure functions over a DataFrame of daily `high`, `low`, `close` indexed by sessi
     it.
   - Days before the first confirmed turning point, and days after the last one, are `null`.
 - **Ranging**: efficiency ratio over the 21 sessions centred on *d* (closes *d−10* to *d+10*):
-  `|C(d+10) − C(d−10)| / Σ|ΔC|` < 0.3. `null` within 10 sessions of either end of the data.
+  `|C(d+10) − C(d−10)| / Σ|ΔC|` < 0.2 (`ranging_threshold`; 0.3 in SPY ground-truth v1, see
+  Q14). `null` within 10 sessions of either end of the data.
 - **Volatility**: annualised standard deviation of close-to-close returns over the same
   centred 21 sessions. It is `high` when above the median. The median is taken over the
   version's **frozen sample window**: the bars available when the version was created. Its
@@ -677,11 +678,11 @@ Allay answered these on 2026-11-26. Each entry keeps the question and records th
 6. **Baselines. RESOLVED (2026-11-26):** a new core `sma_crossover` run on SPY daily,
    2015-01-02 → 2025-12-31 (task 2.1), plus the existing Bollinger Reversal run `c4c9c098`.
    **Riptide is not a baseline.**
-7. **ORB runs.** Still open: none exist in the VPS DB. Where are the SPY ORB runs the spec
-   mentions, and should their alignment run come first in phase 4? (Needed only by phase 4.)
-8. **Wave thresholds.** Still open by design: Allay confirms 3 / 6 / 12 × ATR20 after seeing the
-   phase 1 leg chart, before phase 2 profiles any strategy (the spec fixes thresholds before
-   results are seen).
+7. **ORB runs. RESOLVED for phase 2 (2026-11-27): ORB is dropped from phase 2.** None exist in
+   the VPS DB. Whether their alignment run comes first in phase 4 is still open (needed only by
+   phase 4).
+8. **Wave thresholds. RESOLVED (2026-11-27): 3 / 6 / 12 × ATR20 unchanged**, after the phase 1
+   leg chart and before phase 2 profiles any strategy.
 9. **Ground-truth volatility median. RESOLVED (2026-11-26): frozen per version (D3).** A re-cut
    on longer history is an explicit new `input_revision` with reason `median_recut`.
 10. **Swing detector with mixed structure. RESOLVED (2026-11-26): keep the previous state.** A
@@ -695,3 +696,19 @@ Allay answered these on 2026-11-26. Each entry keeps the question and records th
 13. **Sync-only repository. RESOLVED (2026-11-26): approved.** The regime tables get a sync
     repository only, recorded as an exception in `docs/agent/persistence.md` (D13). No async
     repository is added.
+14. **Ranging threshold. RESOLVED (2026-11-27): ER < 0.2, as SPY ground-truth version 2.** At
+    0.3, v1 flagged 70% of SPY sessions as ranging, too many for a regime bucket. Share of the
+    6,602 SPY sessions (2000-01-03 → 2026-05-01) with a defined 21-session centred ER that each
+    threshold flags:
+
+    | ER threshold | days flagged | share |
+    |---|---|---|
+    | 0.15 | 2,431 / 6,602 | 36.8% |
+    | 0.20 | 3,194 / 6,602 | 48.4% |
+    | 0.25 | 3,961 / 6,602 | 60.0% |
+    | 0.30 | 4,598 / 6,602 | 69.6% (= stored v1) |
+
+    Everything else is unchanged (wave scales, ATR20, the volatility label and its frozen
+    median, data source and range). v1 stays stored as it is; the default definition is now
+    0.2, and v1 is reached with `definition_overrides={"ground_truth": {"ranging_threshold":
+    0.3}}`.
