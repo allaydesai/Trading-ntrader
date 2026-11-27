@@ -70,7 +70,7 @@ def test_same_seed_same_interval_and_another_seed_differs():
     two = bucket_intervals(returns, labels, ["up", "down"], samples=300, seed=4)
     other = bucket_intervals(returns, labels, ["up", "down"], samples=300, seed=5)
     assert one == two
-    assert one["up"]["low"] != other["up"]["low"]
+    assert one["buckets"]["up"]["low"] != other["buckets"]["up"]["low"]
 
 
 def test_interval_covers_the_true_mean_near_ninety_percent():
@@ -80,7 +80,7 @@ def test_interval_covers_the_true_mean_near_ninety_percent():
     for trial in range(trials):
         returns = rng.normal(0.001, 0.01, 400)
         labels = np.full(400, "all", dtype=object)
-        row = bucket_intervals(returns, labels, ["all"], samples=400, seed=trial)["all"]
+        row = bucket_intervals(returns, labels, ["all"], samples=400, seed=trial)["buckets"]["all"]
         hits += row["low"] <= 0.001 <= row["high"]
     assert 0.82 <= hits / trials <= 0.97
 
@@ -90,17 +90,17 @@ def test_a_bucket_missing_from_a_resample_is_redrawn_and_counted():
     returns[5] = 0.01
     labels = np.full(200, "other", dtype=object)
     labels[5] = "rare"  # one day: most resamples miss it
-    row = bucket_intervals(returns, labels, ["rare"], samples=50, seed=0)["rare"]
+    row = bucket_intervals(returns, labels, ["rare"], samples=50, seed=0)["buckets"]["rare"]
     assert row["redraws"] > 0
     assert row["low"] == row["high"] == pytest.approx(0.01)
 
 
 def test_short_run_and_empty_bucket_get_no_interval():
     short = bucket_intervals(np.zeros(9), np.full(9, "up", dtype=object), ["up"], samples=10)
-    assert short["up"] == {"low": None, "high": None, "redraws": 0}
+    assert short["buckets"]["up"] == {"low": None, "high": None, "redraws": 0}
     labels = np.full(50, "up", dtype=object)
     empty = bucket_intervals(np.zeros(50), labels, ["down"], samples=10)
-    assert empty["down"] == {"low": None, "high": None, "redraws": 0}
+    assert empty["buckets"]["down"] == {"low": None, "high": None, "redraws": 0}
 
 
 def _row(bucket, low, high, insufficient=False):
@@ -128,3 +128,35 @@ def test_insufficient_buckets_are_never_cited():
     assert out["outcome"] == "insufficient_evidence"
     assert out["sufficient"] == 1
     assert out["below_zero"] == [] and out["insufficient_buckets"] == ["down"]
+
+
+def test_difference_interval_pairs_the_same_resamples():
+    """Up minus down, from the same draws: covers a known gap, and the seed reproduces it."""
+    rng = np.random.default_rng(8)
+    n = 1500
+    labels = np.where((np.arange(n) // 40) % 2 == 0, "up", "down").astype(object)
+    returns = np.where(labels == "up", 0.001, -0.0005) + rng.normal(0, 0.004, n)
+    one = bucket_intervals(
+        returns, labels, ["up", "down"], samples=400, seed=2, pairs=[("up", "down")]
+    )
+    two = bucket_intervals(
+        returns, labels, ["up", "down"], samples=400, seed=2, pairs=[("up", "down")]
+    )
+    (diff,) = one["differences"]
+    assert diff == two["differences"][0]
+    assert (diff["a"], diff["b"]) == ("up", "down")
+    assert diff["point"] == pytest.approx(
+        returns[labels == "up"].mean() - returns[labels == "down"].mean()
+    )
+    assert 0 < diff["low"] < diff["point"] < diff["high"]
+    assert diff["excludes_zero"] is True
+    assert set(one) == {"buckets", "differences"}
+    assert one["buckets"]["up"]["low"] is not None
+
+
+def test_difference_with_an_empty_bucket_has_no_interval():
+    labels = np.full(100, "up", dtype=object)
+    out = bucket_intervals(
+        np.zeros(100), labels, ["up", "down"], samples=20, pairs=[("up", "down")]
+    )
+    assert out["differences"][0]["low"] is None and out["differences"][0]["excludes_zero"] is False

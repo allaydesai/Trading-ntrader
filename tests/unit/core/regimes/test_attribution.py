@@ -199,7 +199,11 @@ def test_row_metrics_and_the_insufficient_flag():
 
 def test_family_outcome_is_reported():
     _, result = _profile()
-    assert result["families"]["sma200"]["outcome"]["outcome"] == "strong_dependence"
+    family = result["families"]["sma200"]
+    assert family["outcome"]["outcome"] == "strong_dependence"
+    (diff,) = family["differences"]
+    assert (diff["a"], diff["b"]) == ("up", "down")
+    assert diff["low"] > 0 and diff["excludes_zero"] is True
 
 
 def test_benchmark_and_drift_cover_the_buckets_days():
@@ -246,6 +250,10 @@ def test_ground_truth_families_and_the_widest_gap_cross():
     gaps = cross["gaps"]
     assert cross["scale"] == max(gaps, key=lambda s: gaps[s]) == "major"
     assert [r["bucket"] for r in cross["rows"]] == ["up/high", "up/low", "down/high", "down/low"]
+    assert [(d["a"], d["b"]) for d in cross["differences"]] == [
+        ("up/high", "up/low"), ("down/high", "down/low"),
+        ("up/high", "down/high"), ("up/low", "down/low"),
+    ]  # fmt: skip
     for family in families.values():
         assert family["reconciliation"]["reconciles"] is True
 

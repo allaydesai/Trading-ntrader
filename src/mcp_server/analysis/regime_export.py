@@ -25,6 +25,10 @@ _DAILY = (
     ("ci_high", "90% CI high"), ("exposure", "Exposure"), ("benchmark_ann_return", "Bench"),
     ("drift_return", "Drift"), ("trades_entered", "Trades in"), ("insufficient", "Insufficient"),
 )  # fmt: skip
+_DIFFERENCES = (
+    ("pair", "Difference"), ("point", "Mean daily"), ("low", "90% CI low"),
+    ("high", "90% CI high"), ("excludes_zero", "Excludes 0"),
+)  # fmt: skip
 _TRADES = (
     ("bucket", "Bucket"), ("trades", "Trades"), ("win_rate", "Win rate"),
     ("avg_win", "Avg win"), ("avg_loss", "Avg loss"), ("expectancy", "Expectancy"),
@@ -54,6 +58,8 @@ def _family_lines(name: str, family: dict[str, Any]) -> list[str]:
     title = f"#### {name}" + (f" (scale: {family['scale']})" if "scale" in family else "")
     lines = [title, "", f"Outcome: **{outcome['outcome']}** ({outcome['sufficient']} sufficient)"]
     lines += ["", *_table([*family["rows"], family["unlabelled"], family["total"]], _DAILY), ""]
+    differences = [{**d, "pair": f"{d['a']} − {d['b']}"} for d in family["differences"]]
+    lines += ["Differences:", "", *_table(differences, _DIFFERENCES), ""]
     view = family["trades"]
     lines += [f"Trades (closed {view['closed_trades']}, open {view['open_trades']}):", ""]
     lines += [*_table([*view["rows"], view["unlabelled"]], _TRADES), ""]

@@ -232,10 +232,12 @@ def _family(
         "entry_buckets": entry_buckets,
         "labelled": int((names != UNLABELLED).sum()),
         "total_pnl": float(pnl.sum()),
-        "intervals": bucket_intervals(
-            ret, names, list(order), samples=params["samples"], seed=params["seed"]
-        ),
     }
+    resampled = bucket_intervals(
+        ret, names, list(order), samples=params["samples"], seed=params["seed"],
+        pairs=_pairs(order),
+    )  # fmt: skip
+    context["intervals"] = resampled["buckets"]
     rows = [_bucket_row(b, names == b, arrays, context, params) for b in order]
     unlabelled = {
         "bucket": UNLABELLED,
@@ -250,11 +252,29 @@ def _family(
         "total": {"bucket": "total", **_masked(arrays, np.ones(len(names), dtype=bool))},
         "reconciliation": _reconciliation(rows, unlabelled, change, context["labelled"]),
         "outcome": dependence_outcome(rows),
+        "differences": [_rounded_difference(d) for d in resampled["differences"]],
         "trades": trade_view(inputs["trades"], entry_buckets, order),
     }
     if name in TREND_FAMILIES:
         family["alignment"] = alignment(inputs["trades"], entry_buckets)
     return family
+
+
+def _pairs(order: tuple[str, ...]) -> list[tuple[str, str]]:
+    """The regime-conditional differences reported: the two buckets of a two-bucket
+    family, and for the crossed family each leg's high minus low and each volatility's up
+    minus down."""
+    if len(order) == 2:
+        return [(order[0], order[1])]
+    return [
+        ("up/high", "up/low"), ("down/high", "down/low"),
+        ("up/high", "down/high"), ("up/low", "down/low"),
+    ]  # fmt: skip
+
+
+def _rounded_difference(row: dict[str, Any]) -> dict[str, Any]:
+    keys = ("point", "low", "high")
+    return {**row, **{k: _rounded(row[k], 8) for k in keys}}
 
 
 def _excess(row: dict[str, Any]) -> float | None:
