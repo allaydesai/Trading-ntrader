@@ -281,3 +281,62 @@ async def test_refusals_carry_a_fix(server, store, bars, tool, args, code):
     assert data["ok"] is False
     assert data["error"]["code"] == code
     assert data["error"]["fix"]
+
+
+async def test_versions_record_the_building_commit(server, store, bars):
+    data = await _call(server, "build_regime_calendar")
+    commit = data["versions"]["detector"]["git_commit"]
+    assert commit and len(commit) == 40
+    read = await _call(server, "get_regime_labels", {"limit": 1})
+    assert read["calendar"]["git_commit"] == commit
+    assert read["calendar"]["build_git_commit"] == commit
+
+
+async def test_default_read_ignores_an_override_version(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    overrides = {"detector": {"sma200": {"window": 150}}}
+    await _call(server, "build_regime_calendar", {"definition_overrides": overrides})
+    default = await _call(server, "get_regime_labels", {"limit": 1})
+    pinned = await _call(server, "get_regime_labels", {"limit": 1, "version": 2})
+    assert default["calendar"]["version"] == 1
+    assert pinned["calendar"]["definition"]["sma200"] == {"window": 150}
+
+
+@pytest.mark.parametrize(("args", "code"), [({"version": 0}, "no_calendar"),
+                                            ({"as_of_build": 0}, "unknown_build")])  # fmt: skip
+async def test_zero_is_not_unset(server, store, bars, args, code):
+    await _call(server, "build_regime_calendar")
+    data = await _call(server, "get_regime_labels", args)
+    assert data["error"]["code"] == code
+
+
+async def test_median_recut_revises_ground_truth_only(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    data = await _call(
+        server, "build_regime_calendar", {"new_revision": True, "revision_reason": "median_recut"}
+    )
+    truth, detector = data["versions"]["ground_truth"], data["versions"]["detector"]
+    assert (truth["version"], truth["input_revision"], truth["action"]) == (2, 2, "created")
+    assert (detector["version"], detector["action"]) == (1, "up_to_date")
+
+
+def _stamped(hour_utc: int) -> pd.DataFrame:
+    times = pd.DatetimeIndex(["2024-01-02", "2024-01-03"], tz="UTC") + pd.Timedelta(hours=hour_utc)
+    return pd.DataFrame(
+        {"open": [1.0, 2.0], "high": [1.0, 2.0], "low": [1.0, 2.0], "close": [1.0, 2.0],
+         "volume": [0.0, 0.0]},
+        index=times,
+    )  # fmt: skip
+
+
+def test_session_date_is_the_new_york_midnight_stamp(monkeypatch):
+    monkeypatch.setattr(regime_calendar, "read_bars", lambda *a: _stamped(5))  # 00:00 EST
+    frame = regime_calendar.load_reference_bars("firstrate-etf", "SPY")
+    assert list(frame.index) == [date(2024, 1, 2), date(2024, 1, 3)]
+
+
+def test_bars_stamped_at_the_futures_open_are_refused(monkeypatch):
+    monkeypatch.setattr(regime_calendar, "read_bars", lambda *a: _stamped(22))  # 17:00 EST
+    with pytest.raises(regime_calendar.ToolFailure) as caught:
+        regime_calendar.load_reference_bars("firstrate-futures", "ES")
+    assert caught.value.code == "unsupported_session_stamp"

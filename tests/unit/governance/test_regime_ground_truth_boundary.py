@@ -8,6 +8,7 @@ to this list. The filter-test modules are named as forbidden, so they can never 
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,17 @@ pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODULE = "src.core.regimes.ground_truth"
 READER = "ground_truth_labels"
+#: Ways past the named reader: the repository's untyped reader, the label model and the
+#: table name in raw SQL. Only the model and repository files may use them.
+RAW_ACCESS = ("_read_labels", "RegimeLabel", "regime_labels")
+RAW_SQL = re.compile(r"\b(from|join|into|update|table)\s+regime_labels\b", re.IGNORECASE)
+RAW_OWNERS = frozenset(
+    {
+        "src/db/models/regime.py",
+        "src/db/models/__init__.py",  # re-export only
+        "src/db/repositories/regime_repository_sync.py",
+    }
+)
 
 #: The only files that may import the ground-truth module or read ground-truth rows.
 PERMITTED = frozenset(
@@ -78,11 +90,34 @@ def _uses_ground_truth(root: Path, path: Path) -> list[str]:
     return hits
 
 
+def _raw_access(path: Path) -> list[str]:
+    """Uses of the label table that bypass the named readers."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits = []
+    for node in ast.walk(tree):
+        name = (
+            node.attr if isinstance(node, ast.Attribute)
+            else node.id if isinstance(node, ast.Name)
+            else None
+        )  # fmt: skip
+        if name in RAW_ACCESS[:2]:
+            hits.append(name)
+        elif isinstance(node, ast.alias) and node.name == "RegimeLabel":
+            hits.append("import RegimeLabel")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if RAW_SQL.search(node.value):
+                hits.append("'regime_labels' in SQL")
+    return hits
+
+
 def scan(root: Path) -> dict[str, list[str]]:
-    """Every file under ``root/src`` that reaches ground truth, keyed by relative path."""
+    """Every file under ``root/src`` that reaches ground truth or the raw label table."""
     found = {}
     for path in sorted((root / "src").rglob("*.py")):
+        relative = path.relative_to(root).as_posix()
         hits = _uses_ground_truth(root, path)
+        if relative not in RAW_OWNERS:
+            hits += _raw_access(path)
         if hits:
             found[path.relative_to(root).as_posix()] = hits
     return found
@@ -130,6 +165,9 @@ def test_filter_modules_are_forbidden_not_permitted():
             "import importlib\nimportlib.import_module('src.core.regimes.ground_truth')\n",
         ),  # fmt: skip
         ("src/core/regimes/filter_test.py", "from .ground_truth import atr\n"),
+        ("src/mcp_server/sneaky.py", "def f(repo, v):\n    return repo._read_labels(v)\n"),
+        ("src/mcp_server/sneaky.py", "from src.db.models.regime import RegimeLabel\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM regime_labels'\n"),
     ],
 )
 def test_planted_modules_are_caught(tmp_path, relative, source):

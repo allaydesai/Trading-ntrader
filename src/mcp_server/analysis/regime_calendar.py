@@ -19,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from src.core.regimes.definition import (
     LABEL_SETS,
@@ -58,6 +59,15 @@ def load_reference_bars(catalog: str, symbol: str) -> pd.DataFrame:
             "no_benchmark_bars",
             f"No daily bars for {symbol} in '{catalog}'.",
             fix="Pass a benchmark_symbol with daily bars (catalog_availability).",
+        )
+    stamps = pd.DatetimeIndex(frame.index).tz_convert("America/New_York")
+    if ((stamps.hour != 0) | (stamps.minute != 0)).any():
+        raise ToolFailure(
+            "unsupported_session_stamp",
+            f"{symbol}'s daily bars in '{catalog}' are not stamped at 00:00 New York, so their "
+            "UTC date is not the session date (futures bars open at D-1 17:00).",
+            fix="Only catalogs whose daily bars carry the session date (firstrate-etf) are "
+            "supported until the futures session mapping lands (tasks.md 1b.1).",
         )
     frame = frame[["open", "high", "low", "close"]].copy()
     frame.index = pd.Index(pd.DatetimeIndex(frame.index).date, name="session_date")
@@ -99,8 +109,8 @@ def _revision_reason(new_revision: bool, reason: str | None, note: str | None) -
         if reason or note:
             raise ToolFailure(
                 "invalid_revision",
-                "revision_reason is only used with new_revision=true.",
-                fix="Drop revision_reason, or set new_revision=true.",
+                "revision_reason and revision_note are only used with new_revision=true.",
+                fix="Drop them, or set new_revision=true.",
             )
         return None
     if reason not in REVISION_REASONS:
@@ -159,7 +169,10 @@ def _plan_existing(
 ) -> None:
     version = plan.existing
     assert version is not None
-    diff = _first_difference(repo.stored_fingerprints(version.id), bars, hashes, version)
+    reader = repo.ground_truth_labels if plan.label_set == "ground_truth" else repo.detector_labels
+    stored = reader(version)
+    fingerprints = {row.session_date: row.bar_hash for row in stored}
+    diff = _first_difference(fingerprints, bars, hashes, version)
     if diff is not None:
         raise ToolFailure(
             "reference_bars_changed",
@@ -169,8 +182,7 @@ def _plan_existing(
             details={**diff, "label_set": plan.label_set, "version": version.version},
         )
     computed = dict(zip(bars.index, _labels_for(plan, bars, version.frozen_stats)))
-    reader = repo.ground_truth_labels if plan.label_set == "ground_truth" else repo.detector_labels
-    for row in reader(version):
+    for row in stored:
         fresh = computed[row.session_date]
         changed = [k for k, v in row.labels.items() if v is not None and fresh[k] != v]
         if changed or (plan.label_set == "detector" and fresh != row.labels):
@@ -202,6 +214,9 @@ def _plan(
     hash_ = definition_hash(definition)
     existing = repo.latest_revision(reference, catalog, label_set, hash_)
     plan = _Plan(label_set, definition, existing)
+    # A re-cut median only concerns ground truth; detectors then build as usual.
+    if reason is not None and reason.startswith("median_recut") and label_set != "ground_truth":
+        reason = None
     if reason is None and existing is not None:
         _plan_existing(repo, plan, bars, hashes)
         return plan
@@ -236,7 +251,8 @@ def _apply(repo: SyncRegimeRepository, plan: _Plan, commit: str | None) -> dict[
         version, action = plan.create, "created"
         repo.add_version(version, git_commit=commit)
     elif plan.appends or plan.fills:
-        version, action = plan.existing, "appended"  # type: ignore[assignment]
+        version = plan.existing  # type: ignore[assignment]
+        action = "appended" if plan.appends else "filled"
         end = plan.appends[-1]["day"] if plan.appends else version.data_end
         repo.advance_build(version, end, git_commit=commit)
     else:
@@ -297,13 +313,20 @@ def build_regime_calendar(
     bars = load_reference_bars(catalog, reference)
     hashes = [bar_hash(*row) for row in bars[["open", "high", "low", "close"]].itertuples(False)]
     commit = git_output(REPO_ROOT, "rev-parse", "HEAD")
-    with get_sync_session() as session:
-        repo = SyncRegimeRepository(session)
-        plans = [
-            _plan(repo, (reference, catalog), ls, definitions[ls], bars, hashes, reason)
-            for ls in LABEL_SETS
-        ]
-        versions = {plan.label_set: _apply(repo, plan, commit) for plan in plans}
+    try:
+        with get_sync_session() as session:
+            repo = SyncRegimeRepository(session)
+            plans = [
+                _plan(repo, (reference, catalog), ls, definitions[ls], bars, hashes, reason)
+                for ls in LABEL_SETS
+            ]
+            versions = {plan.label_set: _apply(repo, plan, commit) for plan in plans}
+    except IntegrityError:
+        raise ToolFailure(
+            "concurrent_build",
+            f"Another build of {reference} in '{catalog}' wrote the same version first.",
+            fix="Run build_regime_calendar again; it will extend what the other build stored.",
+        ) from None
     return to_jsonable(
         {
             "reference": reference,
@@ -318,9 +341,13 @@ def build_regime_calendar(
 def _version_for(
     repo: SyncRegimeRepository, key: tuple[str, str, str], number: int | None
 ) -> RegimeCalendarVersion:
-    version = repo.find_version(*key, number) if number else repo.latest_version(*key)
+    if number is not None:
+        version = repo.find_version(*key, number)
+    else:  # the default definition's newest revision, never an override's version
+        default = definition_hash(build_definition(key[2]))
+        version = repo.latest_revision(*key, default)
     if version is None:
-        what = f"version {number}" if number else "calendar"
+        what = f"version {number}" if number is not None else "default-definition calendar"
         raise ToolFailure(
             "no_calendar",
             f"No {key[2]} {what} for {key[0]} in '{key[1]}'.",
@@ -350,7 +377,7 @@ def get_regime_labels(
     with get_sync_session() as session:
         repo = SyncRegimeRepository(session)
         found = _version_for(repo, key, version)
-        build = as_of_build or found.build_no
+        build = found.build_no if as_of_build is None else as_of_build
         if not 1 <= build <= found.build_no:
             raise ToolFailure(
                 "unknown_build",
@@ -359,7 +386,9 @@ def get_regime_labels(
             )
         read = repo.ground_truth_labels if label_set == "ground_truth" else repo.detector_labels
         rows = read(found, start=start, end=end, as_of_build=build, limit=limit + 1)
-        described = _describe(found, build, repo.build_data_end(found.id, build))
+        record = repo.find_build(found.id, build)
+        described = _describe(found, build, record.data_end if record else None)
+        described["build_git_commit"] = record.git_commit if record else None
     hindsight = label_set == "ground_truth"
     page = rows[:limit]
     payload: dict[str, Any] = {"hindsight": hindsight}

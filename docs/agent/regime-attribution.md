@@ -45,9 +45,16 @@ for dividends** (closes match the raw prints, e.g. 222.95 on 2020-03-23), and SP
 split, so there is no split adjustment to check. Close-to-close returns therefore exclude
 dividends; the phase 2 benchmark return does too (design.md section 5.6).
 
+Only daily bars stamped at 00:00 New York are accepted (their UTC date is the session
+date). Futures daily bars open at `D-1 17:00` New York and are refused
+(`unsupported_session_stamp`) until the futures mapping lands (tasks.md 1b).
+
 ## Tools
 
 `build_regime_calendar(benchmark_symbol="SPY", catalog="firstrate-etf", ...)` and
 `get_regime_labels(..., label_set="detector"|"ground_truth", start, end, version,
-as_of_build, limit)`; `src/mcp_server/tools/regimes.py`, glue in
+as_of_build, limit)`; `src/mcp_server/tools/regimes.py`. Without `version`, reads use the
+newest revision of the **default** definition, never an override's version; pass `version`
+to read a declared robustness check. `revision_reason="median_recut"` revises ground truth
+only. Tool code: `src/mcp_server/tools/regimes.py`, glue in
 `src/mcp_server/analysis/regime_calendar.py`.

@@ -120,8 +120,9 @@ Days before the first confirmed turning point at a scale, and days after the las
 carry no direction at that scale.
 
 #### Scenario: leg after the last turning point
-- **WHEN** the latest confirmed major turning point is a trough and price has since risen less
-  than 12 × ATR20
+- **WHEN** the latest confirmed major turning point is a trough and no major peak has been
+  confirmed after it (no close has yet fallen 12 × ATR20 from the running high since the
+  trough)
 - **THEN** every day after that trough has a `null` major-scale direction
 
 #### Scenario: rebuild reproduces the stored labels

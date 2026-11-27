@@ -37,9 +37,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
+from src.core.regimes.definition import LABEL_SETS
 from src.db.base import Base, TimestampMixin
 
-LABEL_SETS = ("ground_truth", "detector")
 #: Why a same-definition version got a new input revision.
 REVISION_REASONS = ("reference_bars_changed", "median_recut")
 

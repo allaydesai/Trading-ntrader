@@ -132,7 +132,13 @@ with `benchmark_symbol` and `catalog` set.
       daily bar uses (the RTH close at 16:00 New York, or the Globex settle / 17:00 session
       end), from the bar timestamps and a comparison against the hourly bars of the same day.
       Record it in `design.md` section 0(d), with the back-adjustment method of the continuous
-      series and the session-date mapping (section 2).
+      series and the session-date mapping (section 2). Known before building: phase 1 keys a
+      session by the daily bar's **UTC date**, which is right for FirstRate ETF bars (stamped
+      00:00 New York) but not for futures daily bars, which the importer stamps `D-1 17:00`
+      New York (`docs/agent/data-pipeline.md`), so their UTC date is the day before the
+      session. `load_reference_bars` needs a per-catalog session-date rule before ES/NQ are
+      built; until then `build_regime_calendar` refuses bars not stamped at 00:00 New York
+      (`unsupported_session_stamp`) rather than key every label one day early.
 - [ ] 1b.2 Confirm the series is back-adjusted (no roll gaps in the closes) and that it has the
       272 sessions the detector warm-up needs; record the data range.
 - [ ] 1b.3 Build ES ground truth v1 and detector v1 with `build_regime_calendar(benchmark_symbol=

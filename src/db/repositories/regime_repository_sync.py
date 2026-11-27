@@ -92,6 +92,7 @@ class SyncRegimeRepository:
         latest = self.latest_version(row.reference, row.catalog, row.label_set)
         row.version = (latest.version + 1) if latest else 1
         row.build_no = 1
+        row.git_commit = git_commit
         self.session.add(row)
         self.session.flush()
         self._record_build(row, git_commit)
@@ -113,6 +114,10 @@ class SyncRegimeRepository:
             )
         )  # fmt: skip
         self.session.flush()
+
+    def find_build(self, version_id: int, build_no: int) -> RegimeCalendarBuild | None:
+        """One build's history row."""
+        return self.session.get(RegimeCalendarBuild, (version_id, build_no))
 
     def build_data_end(self, version_id: int, build_no: int) -> date | None:
         """The ``data_end`` a build recorded, from the append-only history."""
@@ -140,31 +145,24 @@ class SyncRegimeRepository:
             self.session.execute(update(RegimeLabel), values)
         return len(values)
 
-    def stored_fingerprints(self, version_id: int) -> dict[date, str]:
-        """``session_date`` → ``bar_hash`` for every stored row of a version."""
-        stmt = select(RegimeLabel.session_date, RegimeLabel.bar_hash).where(
-            RegimeLabel.version_id == version_id
-        )
-        return dict(self.session.execute(stmt).tuples().all())
-
     def count_labels(self, version_id: int) -> int:
         """Stored rows of a version."""
         stmt = select(func.count()).where(RegimeLabel.version_id == version_id)
         return int(self.session.scalar(stmt) or 0)
 
     def detector_labels(self, version: RegimeCalendarVersion, **window: Any) -> list[LabelRow]:
-        """Detector rows by date range (see ``_read``). Refuses a ground-truth version."""
+        """Detector rows by date range (see ``_read_labels``). Refuses a ground-truth version."""
         if version.label_set != "detector":
             raise ValueError("detector_labels reads detector versions only")
-        return self._read(version, **window)
+        return self._read_labels(version, **window)
 
     def ground_truth_labels(self, version: RegimeCalendarVersion, **window: Any) -> list[LabelRow]:
         """Ground-truth (hindsight) rows by date range. Permitted callers only."""
         if version.label_set != "ground_truth":
             raise ValueError("ground_truth_labels reads ground-truth versions only")
-        return self._read(version, **window)
+        return self._read_labels(version, **window)
 
-    def _read(
+    def _read_labels(
         self,
         version: RegimeCalendarVersion,
         *,
