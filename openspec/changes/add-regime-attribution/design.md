@@ -525,7 +525,8 @@ weigh nothing, as in 5.5. Each row also gets `mean_position_weight`.
   an FX pair is in its quote currency (and levered). Eligibility is read from
   `catalog_instruments` (the reference's row in the calendar's catalog and in the run's own:
   ETF, STOCK or CRYPTO, multiplier 1 or none, USD or no quote currency), never from a catalog
-  name. A run on another symbol, on futures, on FX or without an instrument row is refused
+  name. A run on another symbol, on futures, on FX, without an instrument row or not read
+  from a catalog is refused
   (`drift_scaling_unavailable`), and so is a trade without a quantity. `quantity` is the stored trade's, Nautilus's
   peak size, so a position scaled in or out is overweighted on its smaller days (none of the
   phase 2b baselines does; the report's definition says so).

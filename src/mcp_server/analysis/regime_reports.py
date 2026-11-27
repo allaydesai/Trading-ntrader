@@ -186,6 +186,8 @@ def _check_scalable(session: Session, sleeve: Sleeve, reference: str, catalog: s
     symbol = sleeve.run.instrument_symbol.upper()
     source = sleeve.run.data_source or ""
     reasons = [] if symbol == reference else [f"the run trades {symbol}, not {reference}"]
+    if not source.startswith("catalog:"):  # its own instrument record cannot be checked
+        reasons.append(f"its data source '{source}' has no instrument record to verify")
     catalogs = [catalog] + ([source.split(":", 1)[1]] if source.startswith("catalog:") else [])
     reasons += [r for c in dict.fromkeys(catalogs) if (r := _unscalable(session, reference, c))]
     if reasons:

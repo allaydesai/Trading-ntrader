@@ -164,8 +164,9 @@ only).
   pins it, and the six stored phase 2 reports rerun byte for byte). The run must trade the
   reference itself, unlevered (`drift_scaling_unavailable` otherwise): the reference's `catalog_instruments` row, in the
   calendar's catalog and in the run's own, must be ETF, STOCK or CRYPTO with multiplier 1 or
-  none and a USD (or no) quote currency. Futures, FX and instruments without a row are
-  refused, whatever the catalog is called. **Reading it:** for a strategy that trades the reference,
+  none and a USD (or no) quote currency. Futures, FX, instruments without a row and runs not
+  read from a catalog (their own record cannot be checked) are refused, whatever the catalog
+  is called. **Reading it:** for a strategy that trades the reference,
   carried notional × the reference's move *is* its close-to-close P&L, so position-scaled
   drift ≈ the bucket's return and `excess_vs_drift` ≈ 0 (fills and costs only) by
   construction. It shows that a bucket's P&L is the exposure held there; it cannot show

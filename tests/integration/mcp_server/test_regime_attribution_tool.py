@@ -428,8 +428,9 @@ async def test_position_scaled_drift_needs_the_reference_to_be_the_traded_symbol
 
 async def test_position_scaled_drift_refuses_fx_and_futures_runs(server, store, bars):
     """Quantity x close is not USD notional for a pair quoted in another currency, and no
-    futures multiplier is stored with a trade. A run from a catalog with no instrument row
-    is refused too: eligibility is never guessed from a name."""
+    futures multiplier is stored with a trade. A run from a catalog with no instrument row,
+    or from no catalog at all (its own instrument cannot be verified), is refused too:
+    eligibility is never guessed from a name."""
     await _call(server, "build_regime_calendar")
     with store() as session:
         session.add_all([
@@ -438,7 +439,7 @@ async def test_position_scaled_drift_refuses_fx_and_futures_runs(server, store, 
             CatalogInstrument(ticker="SPY", catalog_name="pairs", asset_class="FX",
                               multiplier=Decimal("1"), currency="JPY"),
         ])  # fmt: skip
-    for source in ("catalog:fut", "catalog:pairs", "catalog:unlisted"):
+    for source in ("catalog:fut", "catalog:pairs", "catalog:unlisted", "ibkr"):
         run_id = seed_run(store, _run_days(bars["frame"], 300), data_source=source)
         data = await _call(
             server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
