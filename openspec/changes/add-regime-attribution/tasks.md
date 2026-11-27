@@ -319,9 +319,12 @@ the cent.
       `tests/integration/mcp_server/test_regime_attribution_tool.py` (default payload is the
       phase 2 payload, recorded in `params`, not an override, refused for another symbol, the
       vault note). The six stored phase 2 reports rerun byte for byte. Position-scaled reports
-      (ground truth / `sma200`): `8a12e455` `b2e04372` / `35bb49f2`; `b9ead99e` `512f9a25` /
-      `f8eb8a39`; `c4c9c098` `49590e9c` / `a08cf7cb`; `614f5d10` `681b3e6e` / `daf68417`;
-      `0fb0d72f` `0f43c508` / `6958a2e4`. Reading: for runs that trade the reference, scaled
+      (ground truth / `sma200`, code at `fcab882`): `8a12e455` `68601fa0` / `a2413fcb`;
+      `b9ead99e` `16a778b7` / `3e022d17`; `c4c9c098` `647c2904` / `e968b3c2`; `614f5d10`
+      `b804f88c` / `06028f0d`; `0fb0d72f` `e3b9795d` / `2d31dda8`. Ten earlier position rows from the same day (`b2e04372` …
+      `6958a2e4`, code at `00eed48`) stay in the append-only table with the same numbers; only
+      the definitions text (the peak-quantity note added in review) differs. `quantity` is
+      the stored trade's peak size; none of the five baselines scales in or out. Reading: for runs that trade the reference, scaled
       drift ≈ the bucket's return (|excess| ≤ 1.1% a year in every bucket, against up to
       ±75% with ±1 drift), so every bucket's P&L is the exposure held there; see Q15.
 

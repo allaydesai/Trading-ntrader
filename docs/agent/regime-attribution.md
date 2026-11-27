@@ -158,11 +158,12 @@ only).
 - **Position-scaled drift (phase 2b, opt-in).** `drift_scaling="position"` multiplies each
   day's reference return by the position actually carried in, `Σ sign × quantity ×
   close(d−1) / E(d−1)`, and adds `mean_position_weight` (+0.10 = long 10% of equity, flat
-  days 0). Only the drift columns change. A default call stores exactly the phase 2 payload
+  days 0). `quantity` is the stored trade's, the peak size of a position scaled in or out,
+  which overweights its smaller days. Only the drift columns change. A default call stores exactly the phase 2 payload
   (no `drift_scaling` key; a golden digest in `tests/unit/core/regimes/test_attribution.py`
   pins it, and the six stored phase 2 reports rerun byte for byte). The run must trade the
-  reference itself, unlevered (`drift_scaling_unavailable` for another symbol or futures,
-  where no multiplier is known). **Reading it:** for a strategy that trades the reference,
+  reference itself, unlevered (`drift_scaling_unavailable` for another symbol, futures,
+  where no multiplier is known, or FX, where quantity × close is not USD notional). **Reading it:** for a strategy that trades the reference,
   carried notional × the reference's move *is* its close-to-close P&L, so position-scaled
   drift ≈ the bucket's return and `excess_vs_drift` ≈ 0 (fills and costs only) by
   construction. It shows that a bucket's P&L is the exposure held there; it cannot show

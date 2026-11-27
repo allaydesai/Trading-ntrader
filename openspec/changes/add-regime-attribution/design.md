@@ -521,8 +521,11 @@ weigh nothing, as in 5.5. Each row also gets `mean_position_weight`.
   drift definition, and shows a "Pos. weight" column in the vault note. It is not an override:
   no label, bucket, interval or outcome moves.
 - **Scope.** The quantity is marked at the reference's close, so the run must trade the
-  reference itself. A futures multiplier is not stored with the trade, so a run on another
-  symbol or on futures is refused (`drift_scaling_unavailable`).
+  reference itself. A futures multiplier is not stored with the trade, and quantity × close of
+  an FX pair is in its quote currency (and levered), so a run on another symbol, on futures or
+  on FX is refused (`drift_scaling_unavailable`). `quantity` is the stored trade's, Nautilus's
+  peak size, so a position scaled in or out is overweighted on its smaller days (none of the
+  phase 2b baselines does; the report's definition says so).
 - **What it can and cannot say.** For a strategy that trades the reference, `w(d) × r_ref(d)`
   *is* its close-to-close P&L on a carried day. Position-scaled drift therefore ≈ the
   bucket's own return, and `excess_vs_drift` ≈ 0 apart from entry/exit-day fills and costs

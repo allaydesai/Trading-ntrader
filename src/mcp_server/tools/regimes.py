@@ -115,7 +115,8 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         files it in the vault. drift_scaling='position' weights the drift by the position
         actually carried in (quantity x previous close / previous equity; adds
         mean_position_weight) instead of +1/-1/0 by side; it needs the run to trade the
-        reference itself, unlevered (drift_scaling_unavailable otherwise).
+        reference itself, unlevered and USD-quoted, so not futures or FX
+        (drift_scaling_unavailable otherwise).
         """
         return await call(
             regime_reports.run_regime_attribution,
