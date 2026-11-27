@@ -135,7 +135,9 @@ class TestRanging:
         labels = label_ground_truth(frame, DEFAULT, frozen_median=0.2)
         er = efficiency_ratio(frame["close"].to_numpy(), 21)
         for i, row in enumerate(labels):
-            assert row["ranging"] == (None if np.isnan(er[i]) else bool(er[i] < 0.2))
+            assert row["ranging"] == (
+                None if np.isnan(er[i]) else bool(er[i] < DEFAULT.ranging_threshold)
+            )
 
     def test_threshold_changes_only_the_ranging_flag(self):
         frame = random_walk(400, seed=3)

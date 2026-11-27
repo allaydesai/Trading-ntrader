@@ -22,10 +22,10 @@ READER = "ground_truth_labels"
 #: table name in raw SQL. Only the model and repository files may use them.
 RAW_ACCESS = ("_read_labels", "RegimeLabel", "regime_labels")
 #: The table right after a keyword, or later in a comma-separated FROM list
-#: (``FROM foo f, regime_labels l``), optionally schema-qualified and quoted.
+#: (``FROM foo f, regime_labels l``), optionally ``ONLY``, schema-qualified and quoted.
 RAW_SQL = re.compile(
     r"(?:\b(?:from|join|into|update|table)\s+|\bfrom\b[^;]*?,\s*)"
-    r'(?:"?\w+"?\s*\.\s*)?"?regime_labels\b',
+    r'(?:only\s+)?(?:"?\w+"?\s*\.\s*)?"?regime_labels\b',
     re.IGNORECASE,
 )
 RAW_OWNERS = frozenset(
@@ -177,6 +177,8 @@ def test_filter_modules_are_forbidden_not_permitted():
         ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM public.regime_labels'\n"),
         ("src/mcp_server/sneaky.py", 'Q = \'SELECT labels FROM "public"."regime_labels"\'\n'),
         ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM foo, regime_labels'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM ONLY regime_labels'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT 1 FROM foo f, ONLY public.regime_labels l'\n"),
         ("src/mcp_server/sneaky.py", "Q = 'SELECT l.labels FROM foo f, public.regime_labels l'\n"),
         ("src/mcp_server/sneaky.py", "Q = 'SELECT 1 FROM foo AS f,\\n  \"regime_labels\" AS l'\n"),
     ],
