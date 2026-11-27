@@ -70,9 +70,15 @@ class SyncRegimeRepository:
         return self.session.scalars(stmt).first()
 
     def latest_revision(
-        self, reference: str, catalog: str, label_set: str, definition_hash: str
+        self,
+        reference: str,
+        catalog: str,
+        label_set: str,
+        definition_hash: str,
+        *,
+        for_update: bool = False,
     ) -> RegimeCalendarVersion | None:
-        """The newest input revision of one definition."""
+        """The newest input revision of one definition; ``for_update`` locks its row."""
         stmt = (
             select(RegimeCalendarVersion)
             .where(
@@ -84,6 +90,8 @@ class SyncRegimeRepository:
             .order_by(RegimeCalendarVersion.input_revision.desc())
             .limit(1)
         )
+        if for_update:
+            stmt = stmt.with_for_update()
         return self.session.scalars(stmt).first()
 
     def add_version(self, row: RegimeCalendarVersion, *, git_commit: str | None) -> None:

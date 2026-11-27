@@ -62,8 +62,10 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         as_of_build: int | None = None,
         limit: int = 500,
     ) -> dict[str, Any]:
-        """Stored regime labels by session date, oldest first, from the latest version (or
-        `version`), optionally as of an earlier build. next_start pages on. label_set
+        """Stored regime labels by session date, oldest first, optionally as of an earlier
+        build; next_start pages on. Without `version` it reads the newest revision of the
+        DEFAULT definition, not the highest version number: pass `version` to read an
+        override (a declared robustness check). label_set
         'ground_truth' is hindsight: the payload carries hindsight: true and the stamp
         "hindsight, not tradeable"; never use it to trade or filter.
         """

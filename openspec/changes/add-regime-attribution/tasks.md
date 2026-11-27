@@ -88,7 +88,8 @@ updated or deleted. The wave-leg chart looks right to Allay.
       reader. `src/core/regimes/filter_test.py` and `src/mcp_server/analysis/regime_filter.py`
       are explicitly forbidden. The test starts red against planted fixture modules, one
       absolute import and one relative.
-- [x] 1.11 Component (failing first): `tests/component/mcp_server/test_regime_calendar_tools.py`:
+- [x] 1.11 Integration (failing first; Postgres, so moved from the component tier in review):
+      `tests/integration/mcp_server/test_regime_calendar_tools.py`:
   - `build_regime_calendar` on a fixture catalog creates both versions.
   - Running it again with the same definition is a no-op.
   - New bars append rows.

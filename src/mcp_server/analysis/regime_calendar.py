@@ -131,6 +131,13 @@ def _labels_for(plan: _Plan, bars: pd.DataFrame, frozen: dict[str, Any]) -> list
 def _frozen_stats(definition: Definition, bars: pd.DataFrame) -> dict[str, Any]:
     if not isinstance(definition, GroundTruthDefinition):
         return {}
+    if len(bars) < definition.volatility_window:
+        raise ToolFailure(
+            "too_few_sessions",
+            f"{len(bars)} daily sessions; the volatility median needs at least "
+            f"{definition.volatility_window} (the centred window).",
+            fix="Build again once more daily bars are loaded.",
+        )
     return {
         "volatility_median": volatility_median(bars, definition),
         "sample_start": bars.index[0].isoformat(),
@@ -212,7 +219,9 @@ def _plan(
 ) -> _Plan:
     reference, catalog = key
     hash_ = definition_hash(definition)
-    existing = repo.latest_revision(reference, catalog, label_set, hash_)
+    # Locked: a concurrent build of the same version waits here, then plans from the
+    # committed state instead of advancing a stale build number.
+    existing = repo.latest_revision(reference, catalog, label_set, hash_, for_update=True)
     plan = _Plan(label_set, definition, existing)
     # A re-cut median only concerns ground truth; detectors then build as usual.
     if reason is not None and reason.startswith("median_recut") and label_set != "ground_truth":

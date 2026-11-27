@@ -2,7 +2,9 @@
 
 Bars come from a fixture frame (the catalog read is stubbed). Storage is real Postgres in
 a throwaway schema, because the append-only rules live in PL/pgSQL triggers; the schema
-is built by ``create_all``, whose hooks install the migration's trigger SQL.
+is built by ``create_all``, whose hooks install the migration's trigger SQL. Integration
+tier (``--forked``), since it needs Postgres; the bar-stamp checks that need no database
+are ``tests/component/mcp_server/test_regime_reference_bars.py``.
 """
 
 from contextlib import contextmanager
@@ -23,8 +25,9 @@ from src.mcp_server.analysis import regime_calendar
 from src.mcp_server.context import ServerContext
 from src.mcp_server.server import build_server
 from src.mcp_server.settings import McpSettings
+from tests.integration.mcp_server.conftest import requires_postgres
 
-pytestmark = pytest.mark.component
+pytestmark = [pytest.mark.integration, requires_postgres]
 
 TABLES = [t.__table__ for t in (RegimeCalendarVersion, RegimeLabel, RegimeCalendarBuild)]
 
@@ -320,23 +323,8 @@ async def test_median_recut_revises_ground_truth_only(server, store, bars):
     assert (detector["version"], detector["action"]) == (1, "up_to_date")
 
 
-def _stamped(hour_utc: int) -> pd.DataFrame:
-    times = pd.DatetimeIndex(["2024-01-02", "2024-01-03"], tz="UTC") + pd.Timedelta(hours=hour_utc)
-    return pd.DataFrame(
-        {"open": [1.0, 2.0], "high": [1.0, 2.0], "low": [1.0, 2.0], "close": [1.0, 2.0],
-         "volume": [0.0, 0.0]},
-        index=times,
-    )  # fmt: skip
-
-
-def test_session_date_is_the_new_york_midnight_stamp(monkeypatch):
-    monkeypatch.setattr(regime_calendar, "read_bars", lambda *a: _stamped(5))  # 00:00 EST
-    frame = regime_calendar.load_reference_bars("firstrate-etf", "SPY")
-    assert list(frame.index) == [date(2024, 1, 2), date(2024, 1, 3)]
-
-
-def test_bars_stamped_at_the_futures_open_are_refused(monkeypatch):
-    monkeypatch.setattr(regime_calendar, "read_bars", lambda *a: _stamped(22))  # 17:00 EST
-    with pytest.raises(regime_calendar.ToolFailure) as caught:
-        regime_calendar.load_reference_bars("firstrate-futures", "ES")
-    assert caught.value.code == "unsupported_session_stamp"
+async def test_too_short_a_history_is_refused_with_a_fix(server, store, bars):
+    bars["frame"] = make_bars(15)
+    data = await _call(server, "build_regime_calendar")
+    assert data["error"]["code"] == "too_few_sessions"
+    assert "15" in data["error"]["message"] and data["error"]["fix"]

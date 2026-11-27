@@ -83,6 +83,12 @@ class TestTurningPoints:
         points = turning_points(close, atr_, 3)
         assert points == [TurningPoint(0, "trough"), TurningPoint(5, "peak")]
 
+    def test_flat_zero_range_series_has_no_points(self):
+        frame = frame_of(np.full(40, 100.0), spread=0.0)  # ATR is zero throughout
+        assert turning_points(frame["close"].to_numpy(), atr(frame, 20), 3) == []
+        labels = label_ground_truth(frame, DEFAULT, frozen_median=0.1)
+        assert {row["leg_minor"] for row in labels} == {None}
+
     def test_no_atr_no_points(self):
         assert turning_points(np.arange(5.0), np.full(5, np.nan), 3) == []
 

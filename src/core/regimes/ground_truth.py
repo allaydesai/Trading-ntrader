@@ -52,11 +52,15 @@ class _Wave:
         self.hi = self.lo = start
         self.points: list[TurningPoint] = []
 
+    # A move must be positive as well as reach the threshold: with a zero ATR (a flat,
+    # zero-range stretch) a zero move would otherwise "confirm" an extreme.
     def _fell(self, i: int) -> bool:
-        return self.close[self.hi] - self.close[i] >= self.k * self.atr[self.hi]
+        move = self.close[self.hi] - self.close[i]
+        return move > 0 and move >= self.k * self.atr[self.hi]
 
     def _rose(self, i: int) -> bool:
-        return self.close[i] - self.close[self.lo] >= self.k * self.atr[self.lo]
+        move = self.close[i] - self.close[self.lo]
+        return move > 0 and move >= self.k * self.atr[self.lo]
 
     def _confirm(self, kind: str, i: int) -> None:
         extreme = self.hi if kind == "peak" else self.lo

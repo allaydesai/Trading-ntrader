@@ -21,7 +21,9 @@ READER = "ground_truth_labels"
 #: Ways past the named reader: the repository's untyped reader, the label model and the
 #: table name in raw SQL. Only the model and repository files may use them.
 RAW_ACCESS = ("_read_labels", "RegimeLabel", "regime_labels")
-RAW_SQL = re.compile(r"\b(from|join|into|update|table)\s+regime_labels\b", re.IGNORECASE)
+RAW_SQL = re.compile(
+    r'\b(from|join|into|update|table)\s+(?:"?\w+"?\s*\.\s*)?"?regime_labels\b', re.IGNORECASE
+)
 RAW_OWNERS = frozenset(
     {
         "src/db/models/regime.py",
@@ -168,6 +170,8 @@ def test_filter_modules_are_forbidden_not_permitted():
         ("src/mcp_server/sneaky.py", "def f(repo, v):\n    return repo._read_labels(v)\n"),
         ("src/mcp_server/sneaky.py", "from src.db.models.regime import RegimeLabel\n"),
         ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM regime_labels'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM public.regime_labels'\n"),
+        ("src/mcp_server/sneaky.py", 'Q = \'SELECT labels FROM "public"."regime_labels"\'\n'),
     ],
 )
 def test_planted_modules_are_caught(tmp_path, relative, source):
