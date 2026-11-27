@@ -160,3 +160,32 @@ def test_difference_with_an_empty_bucket_has_no_interval():
         np.zeros(100), labels, ["up", "down"], samples=20, pairs=[("up", "down")]
     )
     assert out["differences"][0]["low"] is None and out["differences"][0]["excludes_zero"] is False
+
+
+def test_difference_pairs_only_rows_drawn_together():
+    """A row redrawn for one bucket alone is not paired with the other bucket's row."""
+    returns = np.linspace(-0.01, 0.01, 300)
+    labels = np.full(300, "common", dtype=object)
+    labels[150] = "rare"
+    out = bucket_intervals(
+        returns, labels, ["common", "rare"], samples=200, seed=1, pairs=[("rare", "common")]
+    )
+    (diff,) = out["differences"]
+    assert out["buckets"]["rare"]["redraws"] > 0
+    assert 0 < diff["paired_rows"] < 200
+
+
+def test_draws_are_chunked_so_memory_does_not_scale_with_samples(monkeypatch):
+    import src.core.regimes.bootstrap as bootstrap
+
+    seen = []
+    real = bootstrap.draw_blocks
+
+    def spy(n, *, samples, mean_block, rng):
+        seen.append(samples)
+        return real(n, samples=samples, mean_block=mean_block, rng=rng)
+
+    monkeypatch.setattr(bootstrap, "draw_blocks", spy)
+    labels = np.full(500, "up", dtype=object)
+    bucket_intervals(np.zeros(500), labels, ["up"], samples=1000, seed=0)
+    assert max(seen) <= bootstrap.CHUNK and sum(seen) == 1000

@@ -83,7 +83,8 @@ def daily_frame(equity: pd.Series, initial_capital: float) -> pd.DataFrame:
     return frame
 
 
-def _bucket(key: str, value: Any) -> str | None:
+def bucket_name(key: str, value: Any) -> str | None:
+    """The bucket a label value falls in (``ranging`` true/false → ranging / not_ranging)."""
     if value is None:
         return None
     if key == "ranging":
@@ -169,7 +170,7 @@ def _metrics(pnl: np.ndarray, ret: np.ndarray, bench: np.ndarray, sides: np.ndar
 
 def _entry_buckets(trades: list[TradeRecord], calendar: Calendar, key: str, lag: int) -> list:
     entries = [_utc_date(t.entry) for t in trades]
-    return [_bucket(key, v) for v in labels_in_force(entries, calendar, key, lag=lag)]
+    return [bucket_name(key, v) for v in labels_in_force(entries, calendar, key, lag=lag)]
 
 
 def _masked(arrays: tuple[np.ndarray, ...], mask: np.ndarray) -> dict[str, Any]:
@@ -283,7 +284,8 @@ def _excess(row: dict[str, Any]) -> float | None:
     return _rounded(row["ann_return"] - row["drift_return"])
 
 
-def _families(label_set: str) -> dict[str, tuple[str, ...]]:
+def families_of(label_set: str) -> dict[str, tuple[str, ...]]:
+    """Each label family of a label set, with its bucket order."""
     return GROUND_TRUTH_FAMILIES if label_set == "ground_truth" else DETECTOR_FAMILIES
 
 
@@ -298,14 +300,21 @@ def _cross_labels(
     return joined(days), joined(entries)
 
 
-def _widest_gap(families: dict[str, dict[str, Any]]) -> tuple[str, dict[str, float | None]]:
+def _widest_gap(families: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The scale to cross with volatility: the widest |up - down| annualised return among
+    the scales whose two buckets are both sufficient (all scales when none is), so a gap
+    resting on a bucket no rule may cite never picks it."""
     gaps: dict[str, float | None] = {}
+    eligible = []
     for scale in SCALES:
         up, down = families[f"leg_{scale}"]["rows"]
         both = up["ann_return"] is not None and down["ann_return"] is not None
         gaps[scale] = _rounded(abs(up["ann_return"] - down["ann_return"])) if both else None
-    ranked = {s: g for s, g in gaps.items() if g is not None}
-    return (max(ranked, key=ranked.__getitem__) if ranked else SCALES[-1]), gaps
+        if both and not (up["insufficient"] or down["insufficient"]):
+            eligible.append(scale)
+    pool = {s: gaps[s] for s in (eligible or SCALES) if gaps[s] is not None}
+    scale = max(pool, key=lambda s: pool[s] or 0.0) if pool else SCALES[-1]
+    return {"scale": scale, "gaps": gaps, "eligible_scales": eligible}
 
 
 def profile(
@@ -339,14 +348,15 @@ def profile(
     }
     params = {"min_days": min_days, "min_trades": min_trades, "samples": samples, "seed": seed}
     families: dict[str, dict[str, Any]] = {}
-    for name, order in _families(calendar.label_set).items():
-        day_buckets = [_bucket(name, v) for v in labels_in_force(days, calendar, name, lag=lag)]
+    for name, order in families_of(calendar.label_set).items():
+        day_buckets = [bucket_name(name, v) for v in labels_in_force(days, calendar, name, lag=lag)]
         entry_buckets = _entry_buckets(trades, calendar, name, lag)
         families[name] = _family(name, order, day_buckets, entry_buckets, inputs, params)
     if calendar.label_set == "ground_truth":
-        scale, gaps = _widest_gap(families)
+        choice = _widest_gap(families)
+        scale = choice["scale"]
         entries = [_utc_date(t.entry) for t in trades]
         day_buckets, entry_buckets = _cross_labels(days, calendar, scale, lag, entries)
         cross = _family("cross", CROSS_BUCKETS, day_buckets, entry_buckets, inputs, params)
-        families["cross"] = {**cross, "scale": scale, "gaps": gaps}
+        families["cross"] = {**cross, **choice}
     return {"label_set": calendar.label_set, "lag_days": lag, "families": families}

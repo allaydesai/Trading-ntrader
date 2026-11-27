@@ -26,11 +26,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.regimes.attribution import (
-    DETECTOR_FAMILIES,
-    GROUND_TRUTH_FAMILIES,
     Calendar,
     TradeRecord,
+    bucket_name,
     daily_frame,
+    families_of,
     labels_in_force,
     profile,
 )
@@ -223,14 +223,11 @@ def _correlations(frames: dict[str, pd.DataFrame], read: _Read, params: dict) ->
     """Per family: the runs' correlation overall and inside each bucket (shared days)."""
     returns = {run_id: frame["ret"] for run_id, frame in frames.items()}
     days = sorted(set().union(*(set(f.index) for f in frames.values())))
-    label_set = read.calendar.label_set
-    order = GROUND_TRUTH_FAMILIES if label_set == "ground_truth" else DETECTOR_FAMILIES
     out = {}
-    for family, buckets in order.items():
+    for family, buckets in families_of(read.calendar.label_set).items():
         values = labels_in_force(days, read.calendar, family, lag=params["lag_days"])
-        if family == "ranging":
-            values = [None if v is None else ("ranging" if v else "not_ranging") for v in values]
-        out[family] = correlation(returns, dict(zip(days, values)), buckets, params["min_days"])
+        named = {d: bucket_name(family, v) for d, v in zip(days, values)}
+        out[family] = correlation(returns, named, buckets, params["min_days"])
     return out
 
 

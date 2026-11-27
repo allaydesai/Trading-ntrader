@@ -284,3 +284,23 @@ def test_every_family_has_a_trade_view_and_trend_families_an_alignment():
     assert {r["group"] for r in detector["alignment"]} == {
         "with_trend", "counter_trend", "unclassified",
     }  # fmt: skip
+
+
+def test_the_cross_scale_is_chosen_among_scales_whose_buckets_are_sufficient():
+    """A scale whose widest gap rests on an insufficient bucket does not pick the cross."""
+    days, equity, trades, _, closes = _run()
+    sessions = _sessions(320)
+    calendar = _gt_calendar(sessions)
+    for i, row in enumerate(calendar.labels):  # minor: a 5-day down bucket on the worst days
+        row["leg_minor"] = "down" if 165 <= i < 170 else "up"
+        row["leg_major"] = "up" if (i // 2) % 2 else "down"  # small gap, both sufficient
+    frame = daily_frame(equity, INITIAL)
+    result = profile(frame, calendar, trades, closes, lag=0, samples=20, seed=0)
+    cross = result["families"]["cross"]
+    minor_down = result["families"]["leg_minor"]["rows"][1]
+    assert minor_down["insufficient"] is True
+    gaps = cross["gaps"]
+    assert gaps["minor"] > max(gaps["intermediate"], gaps["major"])
+    assert cross["eligible_scales"] == ["intermediate", "major"]
+    expected = max(("intermediate", "major"), key=lambda s: gaps[s])
+    assert cross["scale"] == expected

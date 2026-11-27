@@ -18,6 +18,7 @@ Ten sessions (two weeks) is the spec's block size; geometric lengths make the re
 series stationary, which a fixed block length does not.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -25,6 +26,8 @@ import numpy as np
 MEAN_BLOCK = 10
 CONFIDENCE = 0.90
 BOOTSTRAP_SAMPLES = 1000
+#: Resamples drawn at once: memory is ``CHUNK x n`` per array, whatever the sample count.
+CHUNK = 200
 #: Redraw budget per bucket, as a multiple of the sample count, before it is given up.
 _MAX_REDRAW_FACTOR = 200
 
@@ -63,6 +66,15 @@ def _redraw(
     return None, limit
 
 
+@dataclass(frozen=True)
+class _Means:
+    """One bucket's resampled means; ``original`` marks rows drawn with every bucket."""
+
+    values: np.ndarray
+    redraws: int
+    original: np.ndarray
+
+
 def _resampled_means(
     returns: np.ndarray,
     labels: np.ndarray,
@@ -71,28 +83,36 @@ def _resampled_means(
     samples: int,
     seed: int,
     mean_block: int,
-) -> dict[str, tuple[np.ndarray | None, int]]:
+) -> dict[str, _Means | None]:
     """Per bucket: each resample's mean over its drawn bucket days, and the redraw count.
 
-    Every bucket reads the same draws, so the means of two buckets pair row by row (a
-    redrawn row is the exception: it is a fresh draw for that bucket alone).
+    Resamples are drawn ``CHUNK`` at a time, so memory stays at ``CHUNK x n`` whatever the
+    sample count. Every bucket reads the same draws, so two buckets' means pair row by row,
+    except a row redrawn for one bucket alone: ``original`` marks the rows that pair.
     """
     rng = np.random.default_rng(seed)
-    idx, _ = draw_blocks(len(returns), samples=samples, mean_block=mean_block, rng=rng)
-    drawn_returns = returns[idx]
-    out: dict[str, tuple[np.ndarray | None, int]] = {}
-    for bucket in buckets:
-        mask = np.asarray(labels == bucket, dtype=bool)
+    masks = {b: np.asarray(labels == b, dtype=bool) for b in buckets}
+    chunks: dict[str, list[np.ndarray]] = {b: [] for b in buckets}
+    for start in range(0, samples, CHUNK):
+        size = min(CHUNK, samples - start)
+        idx, _ = draw_blocks(len(returns), samples=size, mean_block=mean_block, rng=rng)
+        drawn_returns = returns[idx]
+        for bucket, mask in masks.items():
+            if mask.any():
+                chunks[bucket].append(_bucket_means(drawn_returns, mask[idx]))
+    out: dict[str, _Means | None] = {}
+    for bucket, mask in masks.items():
         if not mask.any():
-            out[bucket] = (None, 0)
+            out[bucket] = None
             continue
-        means = _bucket_means(drawn_returns, mask[idx])
+        means = np.concatenate(chunks[bucket])
+        original = np.isfinite(means)
         redraws = 0
-        for row in np.flatnonzero(np.isnan(means)):
+        for row in np.flatnonzero(~original):
             value, used = _redraw(returns, mask, rng, mean_block, samples * _MAX_REDRAW_FACTOR)
             redraws += used
             means[row] = np.nan if value is None else value
-        out[bucket] = (means, redraws)
+        out[bucket] = _Means(means, redraws, original)
     return out
 
 
@@ -107,19 +127,22 @@ def _percentiles(values: np.ndarray, confidence: float) -> tuple[float, float] |
 
 def _difference(
     pair: tuple[str, str],
-    means: dict[str, tuple[np.ndarray | None, int]],
+    means: dict[str, _Means | None],
     returns: np.ndarray,
     labels: np.ndarray,
     confidence: float,
 ) -> dict[str, Any]:
+    """``mean(a) - mean(b)`` over the rows both buckets drew together (redraws excluded)."""
     a, b = pair
     row: dict[str, Any] = {"a": a, "b": b, "point": None, "low": None, "high": None}
-    row["excludes_zero"] = False
-    first, second = means.get(a, (None, 0))[0], means.get(b, (None, 0))[0]
+    row |= {"excludes_zero": False, "paired_rows": 0}
+    first, second = means.get(a), means.get(b)
     if first is None or second is None:
         return row
     row["point"] = float(returns[labels == a].mean() - returns[labels == b].mean())
-    bounds = _percentiles(first - second, confidence)
+    paired = first.original & second.original
+    row["paired_rows"] = int(paired.sum())
+    bounds = _percentiles(first.values[paired] - second.values[paired], confidence)
     if bounds is not None:
         row["low"], row["high"] = bounds
         row["excludes_zero"] = bounds[0] > 0 or bounds[1] < 0
@@ -149,14 +172,15 @@ def bucket_intervals(
     labels = np.asarray(labels, dtype=object)
     empty = {"low": None, "high": None, "redraws": 0}
     if len(returns) < mean_block:
-        means: dict[str, tuple[np.ndarray | None, int]] = {b: (None, 0) for b in buckets}
+        means: dict[str, _Means | None] = {b: None for b in buckets}
     else:
         means = _resampled_means(
             returns, labels, buckets, samples=samples, seed=seed, mean_block=mean_block
         )
     out: dict[str, dict[str, Any]] = {}
-    for bucket, (values, redraws) in means.items():
-        bounds = None if values is None else _percentiles(values, confidence)
+    for bucket, found in means.items():
+        bounds = None if found is None else _percentiles(found.values, confidence)
+        redraws = 0 if found is None else found.redraws
         out[bucket] = (
             {**empty, "redraws": redraws}
             if bounds is None
