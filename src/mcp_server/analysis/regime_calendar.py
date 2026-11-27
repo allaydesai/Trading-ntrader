@@ -42,7 +42,7 @@ from src.services.provenance import REPO_ROOT, git_output
 
 STAMP = "hindsight, not tradeable"
 MAX_LABEL_ROWS = 5000
-_EARLIEST = datetime(1900, 1, 1, tzinfo=timezone.utc)
+_EARLIEST = datetime(1970, 1, 1, tzinfo=timezone.utc)  # Nautilus times are unsigned ns
 _LATEST = datetime(2100, 1, 1, tzinfo=timezone.utc)
 _REBUILD_FIX = (
     "Label the changed bars as a new input revision: build_regime_calendar(new_revision=true, "
