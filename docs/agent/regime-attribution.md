@@ -70,6 +70,15 @@ for dividends** (closes match the raw prints, e.g. 222.95 on 2020-03-23), and SP
 split, so there is no split adjustment to check. Close-to-close returns therefore exclude
 dividends; the phase 2 benchmark return does too (design.md section 5.6).
 
+## QQQ data
+
+`firstrate-etf` QQQ daily bars run 2000-02-28 → 2026-05-01 (6,585 sessions, stamped like
+SPY's). QQQ ground truth v1 and detector v1 (built 2026-11-27) are the default definitions,
+the same hashes as SPY ground truth v2 and detector v1 (ER < 0.2, 3 / 6 / 12 × ATR20), with
+QQQ's own frozen volatility median 0.1778 (SPY 0.1372). Detector labels start 2001-03-27.
+Legs (up / down, median sessions): minor 98 / 99, 22; intermediate 37 / 38, 76; major 8 / 9,
+289. Ranging share 47.9%.
+
 ## Futures data (ES, NQ)
 
 `firstrate-futures` holds FirstRate's **back-adjusted continuous** series only (no
@@ -146,6 +155,19 @@ only).
   reference's annualised return on the same days, drift (that return × the side held, +1 /
   −1 / 0, **not scaled by position size**), trades entered, `insufficient` (< `min_days` 60
   days or < `min_trades` 20 trades).
+- **Position-scaled drift (phase 2b, opt-in).** `drift_scaling="position"` multiplies each
+  day's reference return by the position actually carried in, `Σ sign × quantity ×
+  close(d−1) / E(d−1)`, and adds `mean_position_weight` (+0.10 = long 10% of equity, flat
+  days 0). Only the drift columns change. A default call stores exactly the phase 2 payload
+  (no `drift_scaling` key; a golden digest in `tests/unit/core/regimes/test_attribution.py`
+  pins it, and the six stored phase 2 reports rerun byte for byte). The run must trade the
+  reference itself, unlevered (`drift_scaling_unavailable` for another symbol or futures,
+  where no multiplier is known). **Reading it:** for a strategy that trades the reference,
+  carried notional × the reference's move *is* its close-to-close P&L, so position-scaled
+  drift ≈ the bucket's return and `excess_vs_drift` ≈ 0 (fills and costs only) by
+  construction. It shows that a bucket's P&L is the exposure held there; it cannot show
+  timing skill inside a bucket. The ±1 drift overstates a 10%-of-equity strategy's drift
+  about tenfold.
 - **Intervals.** Stationary bootstrap (Politis and Romano) of the run's whole daily timeline:
   1,000 resamples (`bootstrap_samples`), geometric blocks of mean 10 sessions, uniform starts,
   circular wrap, `seed` 0. Blocks are cut before a bucket is picked, so every day has the same
@@ -166,7 +188,8 @@ only).
   overall and per bucket (`null` + `insufficient` under `min_days`).
 - **Stored and exported.** One `regime_reports` row per call, with `calendar_version_ids`
   (version and build), `labels_hash`, every parameter and the non-default ones under
-  `overrides` (`label_set` and `as_of_build` are selectors, not overrides).
+  `overrides` (`label_set` and `as_of_build` are selectors, and `drift_scaling` moves no
+  label, bucket or interval, so none of the three is an override).
   `export_results(slug, regime_report=<id>)` writes `<slug>.regime.json` and `.regime.md`;
   ground truth carries `hindsight: true` and the stamp.
 
