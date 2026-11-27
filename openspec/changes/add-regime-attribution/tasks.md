@@ -175,17 +175,33 @@ Acceptance: `run_regime_attribution` profiles one run under ground truth and und
 Bucket P&L sums to the run's total. Reports are stored, stamped and exportable. Both baselines
 are profiled and the stop-rule reading is recorded.
 
-- [ ] 2.1 Prerequisite runs (no code; `design.md` section 0(e), Q6), made from a clean tree:
+- [x] 2.1 Prerequisite runs (no code; `design.md` section 0(e), Q6), made from a clean tree:
   - a trend baseline: core `sma_crossover`, SPY, `1-DAY-LAST`, `firstrate-etf`,
     2015-01-02 → 2025-12-31
   - Bollinger Reversal: keep the existing run `c4c9c098` (decided 2026-11-26). Riptide is
     not a baseline.
 
       Both must have `metrics_basis = mark_to_market`. Record the run ids here.
-- [ ] 2.2 Before any new code, run the existing `get_regime_breakdown` and
+      _Done 2026-11-27:_ trend run **`8a12e455-0641-40e4-b11c-7df30a3aa59d`**, made through the
+      CLI (`backtest run --symbol SPY --strategy sma_crossover --catalog firstrate-etf
+      --timeframe 1-day --start 2015-01-01 --end 2025-12-31`) from a clean tree at `01ecacf`,
+      defaults throughout: SMA 10 / 20, `portfolio_value` 10,000,000 (CLI default balance, the
+      same as `c4c9c098`), `position_size_pct` 10, `1-DAY-LAST`, fill seed 42,
+      `mark_to_market`. The window starts 2015-01-01, as `c4c9c098` does, so both share 2,766
+      daily points. 63 closed trades + 1 open; total return -7.52%. **Every trade is short**:
+      the core strategy takes the side of its first cross (bearish, 2015-03-11) and keeps it
+      (its docstring points at `sma_crossover_long_only` for a long baseline).
+      Mean reversion: `c4c9c098-1062-47cc-a1f5-6d969264a31e` (117 closed + 1 open, both sides),
+      read only.
+- [x] 2.2 Before any new code, run the existing `get_regime_breakdown` and
       `get_sleeve_correlation` on both baselines (spec: "they give a rough answer today") and
       keep the output for comparison.
-- [ ] 2.3 Unit (failing first): `tests/unit/core/regimes/test_attribution.py`:
+      _Done 2026-11-27_ (benchmark SPY; trend lagged, terciles cut over the run's days).
+      Compounded return by trend label, above / below SMA200 (2,226 / 539 days): SMA crossover
+      -3.6% / -4.0%; Bollinger -4.5% / -2.0%. By volatility tercile low / mid / high: SMA
+      +0.4% / -3.8% / -4.2%; Bollinger +0.03% / -5.4% / -1.2%. Full-period correlation of the
+      two baselines' daily returns: -0.30.
+- [x] 2.3 Unit (failing first): `tests/unit/core/regimes/test_attribution.py`:
   - Daily P&L is the change in equity, with the first day measured from initial capital.
   - **Reconciliation**: Σ bucket P&L (with `unlabelled`) = last equity − initial, and bucket
     days sum to labelled days.
@@ -200,7 +216,7 @@ are profiled and the stop-rule reading is recorded.
   - Benchmark return covers the bucket's days.
   - Insufficient flag below 60 days or 20 trades.
   - Crossing chooses the widest-gap scale and records it.
-- [ ] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a stationary
+- [x] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a stationary
       bootstrap (geometric block lengths with mean 10 days, start days uniform over the whole
       run timeline, circular wrap; decided 2026-11-26) drawn before the bucket mask is applied.
       On a fixture with two bucket spells years apart, no block joins days of the two spells
@@ -210,15 +226,16 @@ are profiled and the stop-rule reading is recorded.
       The three-way family outcome is
       tested: `strong_dependence`, `no_dependence`, and `insufficient_evidence` when fewer
       than two buckets are sufficient (`design.md` section 5.4).
-- [ ] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and the stationary
+- [x] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and the stationary
       bootstrap in `src/core/regimes/bootstrap.py`. Take `sharpe` and the seeded interval
       helpers from `src/core/robustness/bootstrap.py` rather than reimplementing them.
-- [ ] 2.6 Integration (failing first, Postgres): the `regime_reports` repository, append-only
+- [x] 2.6 Integration (failing first, Postgres): the `regime_reports` repository, append-only
       (the trigger rejects `UPDATE` and `DELETE`), with a non-empty `calendar_version_ids`
       (version and `build_no`) and `labels_hash`, and unknown ids refused.
-- [ ] 2.7 Migration: `regime_reports` (`design.md` section 8). Update persistence docs and the
+- [x] 2.7 Migration: `regime_reports` (`design.md` section 8). Update persistence docs and the
       single-head note.
-- [ ] 2.8 Component (failing first): `tests/component/mcp_server/test_regime_attribution_tool.py`:
+- [x] 2.8 Integration (failing first; Postgres, so moved from the component tier as 1.11 was):
+      `tests/integration/mcp_server/test_regime_attribution_tool.py`:
   - A realised-basis run is refused with `curve_missing`.
   - `lag_days` defaults to unset: ground truth without it runs at lag 0, and ground truth
     with any explicit `lag_days` (0 included) is refused with `lag_not_allowed`. Detectors
@@ -234,18 +251,31 @@ are profiled and the stop-rule reading is recorded.
   - `export_results(slug, regime_report=...)` writes `<slug>.regime.json` and
     `<slug>.regime.md` only inside `NTRADER_MCP_EXPORT_FOLDERS`, and both carry the stamp
     when ground truth was used.
-- [ ] 2.9 Implement `src/mcp_server/analysis/regime_reports.py` and the `run_regime_attribution`
+- [x] 2.9 Implement `src/mcp_server/analysis/regime_reports.py` and the `run_regime_attribution`
       tool. Add the `regime_report` option to `export_results`. Pin the new tool in
       `REGISTERED_TOOLS` and `PINNED_TOOLS`.
-- [ ] 2.10 Component (failing first): the `definitions` text of `get_regime_breakdown` and
+- [x] 2.10 Component (failing first): the `definitions` text of `get_regime_breakdown` and
       `get_sleeve_correlation` states that the tercile cut is hindsight. Their cells are
       unchanged (the existing e2e tests stay green). Then make the text change.
-- [ ] 2.11 Integration (failing first): `tests/integration/mcp_server/test_regime_attribution.py`
+- [x] 2.11 Integration (failing first): `tests/integration/mcp_server/test_regime_attribution.py`
       profiles a stored SPY run: reconciliation to the cent, lag 0 ≠ lag 1, and the report
       round-trips.
-- [ ] 2.12 **Exit check**: profile both baselines under ground truth (every scale, ranging,
+- [x] 2.12 **Exit check**: profile both baselines under ground truth (every scale, ranging,
       volatility, and the widest-gap scale × volatility) and under `sma200`. Bucket P&L sums to
       each run's total. File both profiles in the vault with `export_results`.
+      _Done 2026-11-27_ against SPY ground truth v2 (build 1) and detector v1 (build 1), seed 0,
+      1,000 resamples, all defaults. Every family reconciles to the cent (SMA -743,523.72,
+      Bollinger -645,621.22 = last equity point − 10,000,000). Stored reports: SMA ground
+      truth `b0319d05`, SMA `sma200` `acfa7f9e`, Bollinger ground truth `58bfd550`, Bollinger
+      `sma200` `49ae8c57`, both runs together (correlation) `ffc763b3` and `9d7a4075`. (Six
+      earlier rows from the same day, made before the difference intervals were added, stay in
+      the append-only table: `aa1fbf4e`, `4d979cb2`, `806d86b4`, `9f3e451d`, `46c6b95b`,
+      `23eea761`.) No vault is configured on the VPS, so the files were exported to
+      `~/.ntrader/regime/vault/Lab/results/` there (`<slug>.regime.{json,md}`); Allay's vault
+      copy is one `export_results(regime_report=...)` call on the Mac.
+      Added beside the spec's per-bucket intervals, on Allay's phase 2 brief: a paired 90%
+      interval on each regime-conditional difference (same resamples), and descriptive trade
+      view, alignment and correlation tables (no verdict reads them before phase 4).
 
 > ### ⛔ PHASE-2 STOP RULE
 >
@@ -263,6 +293,24 @@ are profiled and the stop-rule reading is recorded.
 > reading and Allay's decision (date, outcome) in this file before ticking 2.13.
 
 - [ ] 2.13 Stop-rule decision recorded: _outcome_, _date_, _Allay's go/stop_.
+      _Reading, 2026-11-27 (awaiting Allay's go/stop):_
+      - **Trend, SMA crossover `8a12e455` (short-only): dependence.** `strong_dependence` at
+        the minor and intermediate scales (up-leg interval below zero, down-leg above; minor
+        up −3.5% / down +5.3% a year). Major, ranging and volatility `no_dependence`; `cross`
+        (minor × volatility) `insufficient_evidence` (three of four buckets under 20 trades).
+        The up − down difference excludes zero at all three scales. Partly circular: a
+        short-only trend follower earns in down legs by construction.
+      - **Mean reversion, Bollinger `c4c9c098`: no dependence by the fixed rule, on thin
+        evidence.** `no_dependence` in all six ground-truth families. But the high − low
+        volatility difference excludes zero (+0.025% a day, 90% interval +0.006% to +0.045%),
+        `cross` up/high is entirely above zero, and the bucket intervals (about ±3-6% a year)
+        are wide against a strategy that returns −0.6% a year.
+      - **Stop rule: does not fire** (the trend baseline shows dependence). Recommendation for
+        the mean-reversion reading: extend the history (SPY detector labels start in 2001) or
+        add an instrument before calling it "no dependence" (Q12).
+      - `sma200` (lag 1): SMA crossover `insufficient_evidence` (12 trades entered below the
+        average); Bollinger `no_dependence`.
+
 
 ## 3. Phase 3: detector panel and scorecard (gated on 2.13 = go)
 

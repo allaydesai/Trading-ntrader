@@ -55,6 +55,12 @@ bucket it SHALL report:
 - the reference's annualised return on the same days
 - trades entered
 
+Beside the buckets it SHALL report, for each regime-conditional difference (a two-bucket
+family's first bucket minus its second; for the crossed family each leg's high minus low and
+each volatility level's up minus down), the difference in mean daily return and its 90%
+interval from the same resamples. The difference intervals SHALL NOT change the family's
+stop-rule outcome.
+
 #### Scenario: reconciliation on the mean-reversion baseline
 - **WHEN** run `c4c9c098` (Bollinger Reversal, SPY, 2015-2025) is profiled
 - **THEN** the sum of bucket P&L equals its last equity point minus 10,000,000.00 to the cent,

@@ -55,6 +55,26 @@ from a hand-written DDL (`test_catalog_instrument_repository.py`,
 `test_qualification_sync_repo.py`, `test_instrument_mapper.py`): a new column must be added
 to all three.
 
+## Regime Calendar and Reports
+
+Regime attribution (`openspec/changes/add-regime-attribution/`, `docs/agent/regime-attribution.md`).
+Models in `src/db/models/regime.py`; repository `src/db/repositories/regime_repository_sync.py`.
+All four tables are append-only, enforced by PL/pgSQL triggers (the migrations copy the trigger
+SQL; `tests/unit/db/test_regime_migration.py` pins it equal to the models', whose
+`after_create` hooks build the same triggers in test schemas).
+
+| Table | Migration | Rule |
+|---|---|---|
+| `regime_calendar_versions` | `a7c3e91d5b20` | one definition per (reference, catalog, label set, hash, input revision); only `data_end` (forward) and `build_no` (+1) change |
+| `regime_labels` | `a7c3e91d5b20` | one row per version and session; detector rows never change, a ground-truth value goes `null` → value once |
+| `regime_calendar_builds` | `a7c3e91d5b20` | one row per build (its `data_end`); never changes |
+| `regime_reports` | `c81e5a4d9f27` | one stored reading (`kind` profile / scorecard / filter_test); no `UPDATE` or `DELETE`; on insert `calendar_version_ids` must be a non-empty list of (`version_id`, `build_no`) pairs that exist in `regime_calendar_builds`; a ground-truth report must have `hindsight` true |
+
+**Exception, sync only** (approved by Allay 2026-11-26, design.md Q13): the regime tables have a
+sync repository only (`SyncRegimeRepository`, `SyncRegimeReportRepository`). Their only reader is
+the research MCP server, which is sync; the web UI does not read them. A new DB feature
+elsewhere still updates both repositories.
+
 ## Repository Pattern
 
 Async methods, constructor-injected `AsyncSession`.
