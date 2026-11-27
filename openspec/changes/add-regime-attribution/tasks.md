@@ -265,12 +265,12 @@ are profiled and the stop-rule reading is recorded.
       each run's total. File both profiles in the vault with `export_results`.
       _Done 2026-11-27_ against SPY ground truth v2 (build 1) and detector v1 (build 1), seed 0,
       1,000 resamples, all defaults. Every family reconciles to the cent (SMA -743,523.72,
-      Bollinger -645,621.22 = last equity point − 10,000,000). Stored reports: SMA ground
-      truth `b0319d05`, SMA `sma200` `acfa7f9e`, Bollinger ground truth `58bfd550`, Bollinger
-      `sma200` `49ae8c57`, both runs together (correlation) `ffc763b3` and `9d7a4075`. (Six
-      earlier rows from the same day, made before the difference intervals were added, stay in
-      the append-only table: `aa1fbf4e`, `4d979cb2`, `806d86b4`, `9f3e451d`, `46c6b95b`,
-      `23eea761`.) No vault is configured on the VPS, so the files were exported to
+      Bollinger -645,621.22 = last equity point − 10,000,000). Stored reports (code at
+      `874efd3`): SMA ground truth `1edb7f51`, SMA `sma200` `5b424794`, Bollinger ground truth
+      `2f08d4b4`, Bollinger `sma200` `5a114af5`, both runs together (correlation) `58001bc2`
+      and `780710ba`. Twelve earlier rows from the same day stay in the append-only table,
+      superseded by the review fixes (paired differences, chunked draws); their outcomes are
+      the same. No vault is configured on the VPS, so the files were exported to
       `~/.ntrader/regime/vault/Lab/results/` there (`<slug>.regime.{json,md}`); Allay's vault
       copy is one `export_results(regime_report=...)` call on the Mac.
       Added beside the spec's per-bucket intervals, on Allay's phase 2 brief: a paired 90%
