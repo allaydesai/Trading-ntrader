@@ -27,7 +27,7 @@ def test_session_date_is_the_new_york_midnight_stamp(monkeypatch):
 
 def test_bars_stamped_at_the_session_open_key_the_next_day(monkeypatch):
     monkeypatch.setattr(regime_calendar, "read_bars", lambda *a: _stamped(22))  # 17:00 EST
-    frame = regime_calendar.load_reference_bars("firstrate-fx", "EURUSD")
+    frame = regime_calendar.load_reference_bars("firstrate-futures", "ES")
     assert list(frame.index) == [date(2024, 1, 3), date(2024, 1, 4)]
     assert list(frame["close"]) == [1.0, 2.0]
 

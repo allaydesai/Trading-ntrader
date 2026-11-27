@@ -6,13 +6,16 @@ its daily bars is. Two stamping conventions are supported, and one series must u
 - ``session_date``: 00:00 New York of the session date. FirstRate ETF and futures daily
   bars (``firstrate-etf``, ``firstrate-futures``) are stamped this way.
 - ``session_open``: 17:00 New York on the evening the CME session opens, which is the
-  previous calendar day (``D-1 17:00`` → ``D``; Sunday's open → Monday). The FirstRate FX
-  importer stamps this way (decision D5). No session opens on a Friday or Saturday evening.
+  previous calendar day (``D-1 17:00`` → ``D``; Sunday's open → Monday), for a CME daily
+  series stamped at its session open. No session opens on a Friday or Saturday evening, and
+  no session date is a Saturday or Sunday.
 
 The hour is read on the New York wall clock, so the UTC hour moves with daylight saving
 and a 17:00 open is 21:00Z in summer and 22:00Z in winter. An exchange holiday has no
 bar, so it simply yields no date. Any other stamp is refused rather than guessed: keying
-labels one day off would silently misalign every report built on them.
+labels one day off would silently misalign every report built on them. (FX trade days use
+their own rule, ``src.services.fx.sessions``, which keeps out-of-session bars; FX has no
+regime calendar.)
 """
 
 from datetime import date, timedelta
@@ -24,6 +27,8 @@ NEW_YORK = "America/New_York"
 CONVENTIONS: dict[tuple[int, int], str] = {(0, 0): "session_date", (17, 0): "session_open"}
 #: Friday and Saturday (pandas: Monday = 0): the CME is shut from Friday 17:00 to Sunday 17:00.
 _NO_OPEN_DAYS = (4, 5)
+#: Saturday and Sunday: no US equity or CME session is dated on a weekend.
+_WEEKEND = (5, 6)
 
 
 class UnsupportedSessionStamp(ValueError):
@@ -46,6 +51,10 @@ def session_convention(stamps: pd.DatetimeIndex) -> str | None:
         if convention == "session_open" and stamp.dayofweek in _NO_OPEN_DAYS:
             raise UnsupportedSessionStamp(
                 f"{stamp.isoformat()}: no CME session opens on a {stamp.day_name()} evening"
+            )
+        if convention == "session_date" and stamp.dayofweek in _WEEKEND:
+            raise UnsupportedSessionStamp(
+                f"{stamp.isoformat()}: no session falls on a {stamp.day_name()}"
             )
         found.add(convention)
     if len(found) > 1:

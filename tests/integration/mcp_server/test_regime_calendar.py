@@ -164,7 +164,8 @@ def test_futures_rebuild_reproduces_and_leaves_spy_alone(monkeypatch, root):
     """ES/NQ from the back-adjusted continuous daily series: their own versions (v1 of the
     default definition, the one SPY v2 uses), keyed by session date, rebuilt identically in a
     second schema; a SPY calendar in the same schema is untouched by them."""
-    with scratch("test_regime_e") as first, scratch("test_regime_f") as second:
+    schemas = (f"test_regime_{root.lower()}_a", f"test_regime_{root.lower()}_b")  # xdist-safe
+    with scratch(schemas[0]) as first, scratch(schemas[1]) as second:
         monkeypatch.setattr(regime_calendar, "get_sync_session", first)
         regime_calendar.build_regime_calendar("SPY", CATALOG)
         spy = _stored(first)

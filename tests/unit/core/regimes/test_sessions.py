@@ -94,3 +94,9 @@ def test_naive_stamps_are_refused():
 
 def test_empty_series_has_no_sessions():
     assert session_dates(utc()) == []
+
+
+@pytest.mark.parametrize("stamp", ["2024-01-06 00:00", "2024-01-07 00:00"])
+def test_a_weekend_session_date_is_refused(stamp):
+    with pytest.raises(UnsupportedSessionStamp, match="no session falls on a"):
+        session_dates(new_york(stamp))
