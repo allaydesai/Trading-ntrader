@@ -129,23 +129,35 @@ the phase-1 rules on the back-adjusted continuous futures daily series in `first
 No new code path is expected beyond what phase 1 builds; each is a `build_regime_calendar` call
 with `benchmark_symbol` and `catalog` set.
 
-- [ ] 1b.1 Data check (no code): find out which session close the `firstrate-futures` ES and NQ
+- [x] 1b.1 Data check (no code): find out which session close the `firstrate-futures` ES and NQ
       daily bar uses (the RTH close at 16:00 New York, or the Globex settle / 17:00 session
       end), from the bar timestamps and a comparison against the hourly bars of the same day.
       Record it in `design.md` section 0(d), with the back-adjustment method of the continuous
-      series and the session-date mapping (section 2). Known before building: phase 1 keys a
-      session by the daily bar's **UTC date**, which is right for FirstRate ETF bars (stamped
-      00:00 New York) but not for futures daily bars, which the importer stamps `D-1 17:00`
-      New York (`docs/agent/data-pipeline.md`), so their UTC date is the day before the
-      session. `load_reference_bars` needs a per-catalog session-date rule before ES/NQ are
-      built; until then `build_regime_calendar` refuses bars not stamped at 00:00 New York
-      (`unsupported_session_stamp`) rather than key every label one day early.
-- [ ] 1b.2 Confirm the series is back-adjusted (no roll gaps in the closes) and that it has the
+      series and the session-date mapping (section 2).
+      _Done 2026-11-27:_ the close is the CME settlement; the series is FirstRate's ratio
+      back-adjusted continuous contract. The bars turned out to be stamped 00:00 New York of
+      the session date (the `D-1 17:00` stamp assumed here is the FX importer's), so phase 1
+      already keyed them right. `src/core/regimes/sessions.py` now maps both conventions
+      explicitly (17:00 New York → next day's session) and refuses any other stamp.
+- [x] 1b.2 Confirm the series is back-adjusted (no roll gaps in the closes) and that it has the
       272 sessions the detector warm-up needs; record the data range.
-- [ ] 1b.3 Build ES ground truth v1 and detector v1 with `build_regime_calendar(benchmark_symbol=
+      _Done:_ no roll gaps, all closes positive; 2008-01-02 → 2026-05-01, 4,623 sessions,
+      detector labels from 2009-01-29.
+- [x] 1b.3 Build ES ground truth v1 and detector v1 with `build_regime_calendar(benchmark_symbol=
       "ES", catalog="firstrate-futures")`, then NQ. Check that a rebuild reproduces both.
+      _Done 2026-11-27:_ both v1 of the default definitions (the SPY v2 ones); a second build
+      is `up_to_date`, and `tests/integration/mcp_server/test_regime_calendar.py` rebuilds
+      each into a second schema row for row and leaves a SPY calendar in the same schema
+      unchanged.
 - [ ] 1b.4 Leg chart and leg counts per scale for ES and NQ, as in 1.14. Allay confirms the
       thresholds read sensibly on futures.
+      _Done 2026-11-27 except Allay's confirmation:_ charts at
+      `~/.ntrader/regime/charts/{es,nq}_legs_{minor,intermediate,major}.png` on the VPS.
+      Legs (up / down, median sessions): ES minor 68 / 69, 25.0; intermediate 25 / 26, 63.0;
+      major 6 / 7, 208.0. NQ minor 62 / 62, 24.0; intermediate 25 / 25, 70.0; major 6 / 7,
+      277.0. Ranging (ER < 0.2) ES 46.3%, NQ 46.5%; frozen volatility median ES 0.1352, NQ
+      0.1693. Minor legs are fewer than SPY's over the same 2008-2026 window (87 / 88)
+      because the Globex bar's range widens ATR20 (`docs/agent/regime-attribution.md`).
 
 ## 2. Phase 2: regime profile, daily view (the stop-or-continue point)
 

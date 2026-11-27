@@ -33,6 +33,7 @@ from src.core.regimes.definition import (
 )
 from src.core.regimes.detectors import label_detectors
 from src.core.regimes.ground_truth import label_ground_truth, volatility_median
+from src.core.regimes.sessions import UnsupportedSessionStamp, session_dates
 from src.db.models.regime import REVISION_REASONS, RegimeCalendarVersion
 from src.db.repositories.regime_repository_sync import SyncRegimeRepository
 from src.db.session_sync import get_sync_session
@@ -52,7 +53,13 @@ _REBUILD_FIX = (
 
 
 def load_reference_bars(catalog: str, symbol: str) -> pd.DataFrame:
-    """Every daily OHLC bar of ``symbol``, indexed by session date (the bar's UTC date)."""
+    """Every daily OHLC bar of ``symbol``, indexed by its trading-session date.
+
+    The session date comes from the bar's stamp (``src.core.regimes.sessions``): 00:00
+    New York is the session date itself, 17:00 New York is the next day's session (the
+    importers' session stamp; the Globex open itself is 18:00).
+    A series stamped any other way is refused, never keyed by its UTC date.
+    """
     frame = read_bars(catalog, symbol, "1-DAY", _EARLIEST, _LATEST)
     if frame.empty:
         raise ToolFailure(
@@ -60,17 +67,17 @@ def load_reference_bars(catalog: str, symbol: str) -> pd.DataFrame:
             f"No daily bars for {symbol} in '{catalog}'.",
             fix="Pass a benchmark_symbol with daily bars (catalog_availability).",
         )
-    stamps = pd.DatetimeIndex(frame.index).tz_convert("America/New_York")
-    if ((stamps.hour != 0) | (stamps.minute != 0)).any():
+    try:
+        sessions = session_dates(pd.DatetimeIndex(frame.index))
+    except UnsupportedSessionStamp as exc:
         raise ToolFailure(
             "unsupported_session_stamp",
-            f"{symbol}'s daily bars in '{catalog}' are not stamped at 00:00 New York, so their "
-            "UTC date is not the session date (futures bars open at D-1 17:00).",
-            fix="Only catalogs whose daily bars carry the session date (firstrate-etf) are "
-            "supported until the futures session mapping lands (tasks.md 1b.1).",
-        )
+            f"{symbol}'s daily bars in '{catalog}' have no known session date: {exc}.",
+            fix="Use a catalog whose daily bars are stamped at 00:00 New York (the session "
+            "date) or at 17:00 New York the day before it; other stamps are not guessed.",
+        ) from None
     frame = frame[["open", "high", "low", "close"]].copy()
-    frame.index = pd.Index(pd.DatetimeIndex(frame.index).date, name="session_date")
+    frame.index = pd.Index(sessions, name="session_date")
     return frame[~frame.index.duplicated(keep="last")].sort_index()
 
 
