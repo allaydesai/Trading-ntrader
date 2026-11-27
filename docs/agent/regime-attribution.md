@@ -2,7 +2,8 @@
 
 The design and plan are the OpenSpec change `openspec/changes/add-regime-attribution/`
 (`design.md`, `tasks.md`). This page is the working summary of what is built. Phase 1 (the
-calendar) is built; attribution (phase 2 on) is not yet.
+calendar) and phase 2 (the daily-view regime profile, `run_regime_attribution`) are built;
+phases 3-6 wait on Allay's go-ahead at the phase 2 stop rule.
 
 ## Calendar
 
@@ -10,7 +11,7 @@ One **version** per (reference, catalog, label set, definition hash, input revis
 per (reference, catalog, label set). One **label row** per version and reference session
 date, mapped from the daily bar's stamp by `src/core/regimes/sessions.py` (see "Session
 dates" below).
-Storage: `docs/agent/persistence.md`, "Regime Calendar".
+Storage: `docs/agent/persistence.md`, "Regime Calendar and Reports".
 
 | Label set | Keys | Rule | Code |
 |---|---|---|---|
@@ -116,3 +117,57 @@ newest revision of the **default** definition, never an override's version; pass
 to read a declared robustness check. `revision_reason="median_recut"` revises ground truth
 only. Tool code: `src/mcp_server/tools/regimes.py`, glue in
 `src/mcp_server/analysis/regime_calendar.py`.
+
+## Attribution (phase 2): `run_regime_attribution`
+
+Code: core `src/core/regimes/attribution.py` (daily view), `bootstrap.py` (intervals and the
+stop-rule outcome), `trade_view.py` (trade view, alignment, correlation); glue
+`src/mcp_server/analysis/regime_reports.py`; vault files `regime_export.py`. It computes no
+labels: it reads one calendar version as of one build and the reference's closes (benchmark
+only).
+
+- **Inputs.** Runs with a stored `mark_to_market` curve (else `curve_missing`), their trades,
+  the version's rows as of the build (`as_of_build`, default current; rows inserted and values
+  set later are hidden, and that build's `data_end` bounds the as-of lookup).
+- **Daily P&L.** `E(d) − E(d−1)`, the first day from initial capital, one point per UTC date.
+  Every family's rows plus `unlabelled` sum to the last equity point minus initial capital;
+  when a position is open at the end the report says how far that is from `final_balance`.
+- **Alignment.** Ground truth: the label dated exactly *d*, lag 0, any `lag_days` refused
+  (`lag_not_allowed`). Detector: the label of the *k*-th session strictly before *d*
+  (`lag_days`, default 1; 0 = on or before *d*), weekends carry the earlier label, a day past
+  `data_end` is `unlabelled`.
+- **Families.** Ground truth: `leg_minor`, `leg_intermediate`, `leg_major` (up / down),
+  `ranging` (ranging / not_ranging), `volatility` (high / low) and `cross`: the scale with the
+  widest |up − down| annualised return × volatility (scale and gaps recorded). Detector:
+  `sma200`.
+- **Per bucket.** Days, time share (of labelled days), P&L and share, mean daily return,
+  annualised return (×252) and volatility (×√252), Sharpe, worst day, 90% interval, exposure
+  (position carried in from the previous close, or a round trip inside the day), the
+  reference's annualised return on the same days, drift (that return × the side held, +1 /
+  −1 / 0, **not scaled by position size**), trades entered, `insufficient` (< `min_days` 60
+  days or < `min_trades` 20 trades).
+- **Intervals.** Stationary bootstrap (Politis and Romano) of the run's whole daily timeline:
+  1,000 resamples (`bootstrap_samples`), geometric blocks of mean 10 sessions, uniform starts,
+  circular wrap, `seed` 0. Blocks are cut before a bucket is picked, so every day has the same
+  inclusion probability and no block joins two separate spells except through the wrap. Mean
+  10: regime spells and volatility cluster over days to weeks; ten sessions is the spec's block
+  size, and geometric lengths keep the resampled series stationary. Each bucket gets a
+  percentile interval on its mean daily return (a resample missing the bucket is redrawn and
+  counted), and each regime-conditional difference (a two-bucket family's first minus second;
+  for `cross`, each leg's high − low and each volatility's up − down) an interval from the
+  same resamples.
+- **Outcome per family** (the stop rule, design.md 5.4): `strong_dependence` when one
+  sufficient bucket's interval is entirely below zero and another's entirely above;
+  `no_dependence` with ≥ 2 sufficient buckets otherwise; `insufficient_evidence` with < 2.
+  The difference intervals are reported beside it; they do not change the outcome.
+- **Descriptive extras** (no verdict reads them in phase 2; the fixed verdicts are phase 4):
+  trade view (closed trades by entry-day label, open counted apart), with / counter-trend /
+  unclassified split for trend families, and for 2+ runs Pearson correlation on shared days,
+  overall and per bucket (`null` + `insufficient` under `min_days`).
+- **Stored and exported.** One `regime_reports` row per call, with `calendar_version_ids`
+  (version and build), `labels_hash`, every parameter and the non-default ones under
+  `overrides` (`label_set` and `as_of_build` are selectors, not overrides).
+  `export_results(slug, regime_report=<id>)` writes `<slug>.regime.json` and `.regime.md`;
+  ground truth carries `hindsight: true` and the stamp.
+
+The phase 2 baseline profiles and the stop-rule reading are recorded in `tasks.md` (2.12-2.13).

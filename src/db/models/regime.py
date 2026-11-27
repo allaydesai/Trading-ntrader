@@ -14,16 +14,24 @@ schema, so every test sees the real rules):
   ``updated_at`` may change. ``DELETE`` raises.
 - ``regime_calendar_builds_append_only``: no ``UPDATE`` or ``DELETE``.
 
+A **report** (``regime_reports``, phase 2, migration ``c81e5a4d9f27``) is one stored
+reading built from the calendar. ``regime_reports_append_only`` refuses ``UPDATE`` and
+``DELETE`` and, on insert, a ``calendar_version_ids`` list that is empty or names a
+(version, build) pair with no row in ``regime_calendar_builds``: a JSON list carries no
+foreign key, so the trigger is the key.
+
 The SQL avoids ``%`` (``DDL`` formats it) and ``::`` casts, so it runs unchanged
 through ``DDL``, ``op.execute`` and every driver the tests use.
 """
 
 from datetime import date, datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import (
     DDL,
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     ForeignKey,
@@ -35,6 +43,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.regimes.definition import LABEL_SETS
@@ -147,6 +156,42 @@ TRIGGER_DDL: tuple[tuple[str, tuple[str, str]], ...] = (
     ("regime_labels", (LABELS_FUNCTION, LABELS_TRIGGER)),
     ("regime_calendar_builds", (BUILDS_FUNCTION, BUILDS_TRIGGER)),
 )
+REPORTS_FUNCTION = """
+CREATE OR REPLACE FUNCTION regime_reports_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    entry jsonb;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'regime_reports is append-only: a new reading is a new row';
+    END IF;
+    IF jsonb_typeof(NEW.calendar_version_ids) IS DISTINCT FROM 'array'
+       OR jsonb_array_length(NEW.calendar_version_ids) = 0 THEN
+        RAISE EXCEPTION 'regime_reports: calendar_version_ids must be a non-empty list';
+    END IF;
+    FOR entry IN SELECT jsonb_array_elements(NEW.calendar_version_ids) LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM regime_calendar_builds b
+             WHERE b.version_id = CAST(entry ->> 'version_id' AS bigint)
+               AND b.build_no = CAST(entry ->> 'build_no' AS integer)
+        ) THEN
+            RAISE EXCEPTION USING MESSAGE =
+                'regime_reports: unknown calendar version or build ' || entry;
+        END IF;
+    END LOOP;
+    RETURN NEW;
+END $$
+"""
+REPORTS_TRIGGER = """
+CREATE TRIGGER regime_reports_append_only BEFORE INSERT OR UPDATE OR DELETE ON regime_reports
+FOR EACH ROW EXECUTE FUNCTION regime_reports_append_only()
+"""
+#: Phase 2's trigger, created by migration ``c81e5a4d9f27`` (the phase 1 list stays as is).
+REPORTS_TRIGGER_DDL: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("regime_reports", (REPORTS_FUNCTION, REPORTS_TRIGGER)),
+)
+#: What a stored report is.
+REPORT_KINDS = ("profile", "scorecard", "filter_test")
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -241,6 +286,43 @@ class RegimeCalendarBuild(Base):
     )
 
 
-for _table_name, _statements in TRIGGER_DDL:
+class RegimeReport(Base):
+    """One stored regime reading (a profile in phase 2), never rewritten."""
+
+    __tablename__ = "regime_reports"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    report_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, unique=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    run_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    #: ``[{"version_id", "build_no"}, ...]``: the snapshot each version was read at.
+    calendar_version_ids: Mapped[list[dict[str, int]]] = mapped_column(JSONB, nullable=False)
+    labels_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    label_set: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hindsight: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    git_commit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        CheckConstraint(_in("kind", REPORT_KINDS), name="ck_regime_reports_kind"),
+        CheckConstraint(
+            f"label_set IS NULL OR {_in('label_set', LABEL_SETS)}",
+            name="ck_regime_reports_label_set",
+        ),
+        CheckConstraint(
+            "label_set IS DISTINCT FROM 'ground_truth' OR hindsight",
+            name="ck_regime_reports_hindsight",
+        ),
+    )
+
+
+for _table_name, _statements in (*TRIGGER_DDL, *REPORTS_TRIGGER_DDL):
     for _statement in _statements:
         event.listen(Base.metadata.tables[_table_name], "after_create", DDL(_statement))

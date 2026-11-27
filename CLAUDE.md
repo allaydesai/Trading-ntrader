@@ -65,7 +65,7 @@ make web                                # Web UI (http://127.0.0.1:8000)
 3. **Strategies submodule**: `src/core/strategies/custom/` is a git submodule
    (`git submodule update --remote`). Never import `src.core.strategies.custom.*` from core code
 4. **BacktestEngine is single-use**: create a fresh instance for every run
-5. **Alembic**: run `alembic upgrade head` before first use; single head (`3f56b46c78eb`)
+5. **Alembic**: run `alembic upgrade head` before first use; single head (`c81e5a4d9f27`)
 
 ## Guard lists and pinned constants
 

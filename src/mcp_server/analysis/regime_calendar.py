@@ -46,7 +46,7 @@ STAMP = "hindsight, not tradeable"
 MAX_LABEL_ROWS = 5000
 _EARLIEST = datetime(1970, 1, 1, tzinfo=timezone.utc)  # Nautilus times are unsigned ns
 _LATEST = datetime(2100, 1, 1, tzinfo=timezone.utc)
-_REBUILD_FIX = (
+REBUILD_FIX = (
     "Label the changed bars as a new input revision: build_regime_calendar(new_revision=true, "
     "revision_reason='reference_bars_changed'). The stored version is kept as it is."
 )
@@ -192,7 +192,7 @@ def _plan_existing(
             "reference_bars_changed",
             f"{version.reference} {plan.label_set} v{version.version}: the catalog's bars no "
             f"longer match the stored range ({diff['kind']} on {diff['date']}).",
-            fix=_REBUILD_FIX,
+            fix=REBUILD_FIX,
             details={**diff, "label_set": plan.label_set, "version": version.version},
         )
     computed = dict(zip(bars.index, _labels_for(plan, bars, version.frozen_stats)))
@@ -354,7 +354,7 @@ def build_regime_calendar(
     )
 
 
-def _version_for(
+def calendar_version_for(
     repo: SyncRegimeRepository, key: tuple[str, str, str], number: int | None
 ) -> RegimeCalendarVersion:
     if number is not None:
@@ -370,6 +370,18 @@ def _version_for(
             fix="Run build_regime_calendar first (or pick a stored version).",
         )
     return version
+
+
+def resolve_build(version: RegimeCalendarVersion, as_of_build: int | None) -> int:
+    """The build to read: the current one, or a recorded one that exists."""
+    build = version.build_no if as_of_build is None else as_of_build
+    if not 1 <= build <= version.build_no:
+        raise ToolFailure(
+            "unknown_build",
+            f"v{version.version} has builds 1-{version.build_no}, not {build}.",
+            fix="Pass an as_of_build a report recorded, or leave it unset.",
+        )
+    return build
 
 
 def get_regime_labels(
@@ -392,14 +404,8 @@ def get_regime_labels(
     key = (benchmark_symbol.strip().upper(), catalog, label_set)
     with get_sync_session() as session:
         repo = SyncRegimeRepository(session)
-        found = _version_for(repo, key, version)
-        build = found.build_no if as_of_build is None else as_of_build
-        if not 1 <= build <= found.build_no:
-            raise ToolFailure(
-                "unknown_build",
-                f"v{found.version} has builds 1-{found.build_no}, not {build}.",
-                fix="Pass an as_of_build a report recorded, or leave it unset.",
-            )
+        found = calendar_version_for(repo, key, version)
+        build = resolve_build(found, as_of_build)
         read = repo.ground_truth_labels if label_set == "ground_truth" else repo.detector_labels
         rows = read(found, start=start, end=end, as_of_build=build, limit=limit + 1)
         record = repo.find_build(found.id, build)

@@ -617,7 +617,8 @@ class TestNoParallelResultsVocabulary:
         # research and per-run equity curves — none of them is specific to paper results.
         # research_analyses (MCP phase 4, 2026-10-13) holds a study's robustness analyses.
         # The regime calendar tables (regime attribution phase 1, 2026-11-26) hold market
-        # regime labels per reference session; nothing paper-specific either.
+        # regime labels per reference session; nothing paper-specific either. regime_reports
+        # (phase 2, 2026-11-27) stores regime profiles of backtest runs.
         assert set(Base.metadata.tables) == {
             "backtest_runs",
             "catalog_dividends",
@@ -632,6 +633,7 @@ class TestNoParallelResultsVocabulary:
             "regime_calendar_builds",
             "regime_calendar_versions",
             "regime_labels",
+            "regime_reports",
             "research_trials",
             "run_equity_curves",
             "trades",
@@ -645,11 +647,12 @@ class TestNoParallelResultsVocabulary:
         (2026-10-19) to ``72a945ca06f5`` (the portfolio analysis kind); MCP phase 5b
         (2026-10-21) to ``dc41856246ad`` (``trades.strategy_id``); futures M1 (2026-11-21)
         to ``3f56b46c78eb`` (futures columns on ``catalog_instruments``); regime attribution phase 1
-        (2026-11-26) to ``a7c3e91d5b20`` (the regime calendar tables); still one head."""
+        (2026-11-26) to ``a7c3e91d5b20`` (the regime calendar tables); regime attribution
+        phase 2 (2026-11-27) to ``c81e5a4d9f27`` (``regime_reports``); still one head."""
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
         script = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini")))
 
-        assert script.get_heads() == ["a7c3e91d5b20"]
+        assert script.get_heads() == ["c81e5a4d9f27"]
         assert "85c949ac0374" in {rev.revision for rev in script.walk_revisions()}

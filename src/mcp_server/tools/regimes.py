@@ -1,4 +1,4 @@
-"""Regime calendar tools: build the stored calendar, read its labels (regime attribution phase 1).
+"""Regime tools: build the stored calendar, read its labels (phase 1), profile runs (phase 2).
 
 Labels are computed only by ``build_regime_calendar`` and only ever read by date
 afterwards. Ground-truth output is hindsight: it carries ``hindsight: true`` and
@@ -10,11 +10,11 @@ from typing import Any
 
 from mcp.server import MCPServer
 
-from src.mcp_server.analysis import regime_calendar
+from src.mcp_server.analysis import regime_calendar, regime_reports
 from src.mcp_server.context import ServerContext
 from src.mcp_server.tools import call
 
-TOOL_NAMES = ("build_regime_calendar", "get_regime_labels")
+TOOL_NAMES = ("build_regime_calendar", "get_regime_labels", "run_regime_attribution")
 
 
 def register(server: MCPServer, ctx: ServerContext) -> None:
@@ -79,4 +79,51 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             version,
             as_of_build,
             limit,
+        )
+
+    @server.tool()
+    async def run_regime_attribution(
+        run_ids: list[str],
+        label_set: str = "detector",
+        benchmark_symbol: str = "SPY",
+        catalog: str = "firstrate-etf",
+        lag_days: int | None = None,
+        min_days: int = 60,
+        min_trades: int = 20,
+        bootstrap_samples: int = 1000,
+        seed: int = 0,
+        calendar_version: int | None = None,
+        as_of_build: int | None = None,
+    ) -> dict[str, Any]:
+        """Profile 1-10 stored runs by regime against the stored calendar; stores the report.
+
+        Daily view per label family (ground_truth: leg_minor/intermediate/major up vs down,
+        ranging, volatility, and the widest-gap scale x volatility as 'cross'; detector:
+        sma200): days, time share, P&L and share, annualised return and volatility, Sharpe,
+        worst day, a 90% stationary-bootstrap interval on the mean daily return (mean block
+        10 days, seeded), exposure, the reference's return and the drift it explains, trades
+        entered and an insufficient flag (< min_days days or < min_trades trades). Each
+        family has an outcome: strong_dependence, no_dependence or insufficient_evidence.
+        Plus a trade view (closed trades by entry-day label), with/counter-trend alignment
+        and, for 2+ runs, correlation overall and per bucket. Every family's rows sum to
+        the run's P&L. lag_days: detector default 1; ground_truth takes none (refused).
+        Runs must have a mark-to-market curve (curve_missing otherwise). Ground-truth
+        output is hindsight: hindsight: true and stamp "hindsight, not tradeable". The
+        report records calendar version, build_no and labels_hash; pass calendar_version
+        and as_of_build to rerun it as of that snapshot. export_results(regime_report=...)
+        files it in the vault.
+        """
+        return await call(
+            regime_reports.run_regime_attribution,
+            run_ids,
+            label_set,
+            benchmark_symbol,
+            catalog,
+            lag_days,
+            min_days,
+            min_trades,
+            bootstrap_samples,
+            seed,
+            calendar_version,
+            as_of_build,
         )

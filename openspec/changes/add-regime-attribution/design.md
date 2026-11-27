@@ -455,6 +455,13 @@ first days never enters it. An explicit `seed` (default 0) makes a report reprod
 with no observation in the bucket is redrawn, and the redraw count is reported. A run shorter
 than 10 days gets no interval and is insufficient anyway.
 
+Added in phase 2 on Allay's brief (2026-11-27): each regime-conditional difference (a
+two-bucket family's first minus second bucket; in the crossed family each leg's high − low and
+each volatility's up − down) gets a 90% interval on the difference of the two buckets' means,
+taken row by row from the same resamples. It is reported beside the stop-rule outcome and does
+not change it. The trade view, alignment and correlation tables (5.7, 6) are also reported in
+phase 2, descriptively; the verdicts that read them stay in phase 4.
+
 ### 5.4 Insufficient flag
 
 A bucket with fewer than `min_days` (60) days **or** fewer than `min_trades` (20) trades entered

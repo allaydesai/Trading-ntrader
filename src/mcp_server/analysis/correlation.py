@@ -52,7 +52,9 @@ DEFINITIONS = {
     "equity is back at it (or the window's end)",
     "trend": "benchmark close above/below its 200-day average, as of the prior close",
     "volatility": "benchmark 21-day realised volatility (annualised), terciles cut once over "
-    "the shared days, as of the prior close",
+    "the shared days, as of the prior close; the cut points use volatility from later in the "
+    "window, so this split is a partial hindsight view (run_regime_attribution reads the "
+    "stored calendar instead)",
 }
 
 

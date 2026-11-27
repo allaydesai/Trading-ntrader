@@ -26,6 +26,17 @@ from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.runs import parse_run_ids
 
 CATALOG_PREFIX = "catalog:"
+_HINDSIGHT = (
+    "; the cut points use volatility from later in the run, so this split is a partial "
+    "hindsight view (run_regime_attribution reads the stored calendar instead)"
+)
+BREAKDOWN_DEFINITIONS = {
+    "trend": "benchmark close above/below its 200-day average, as of the prior close",
+    "volatility": "benchmark 21-day realised volatility (annualised), terciles over the "
+    "run's own days, as of the prior close" + _HINDSIGHT,
+    "return": "compounded daily return of the run's equity on the cell's days",
+    "trades": "trades entered in the cell; win_rate and pnl over closed ones",
+}
 
 
 def load_run(session: Session, run_id: str) -> BacktestRun:
@@ -161,12 +172,6 @@ def get_regime_breakdown(run_id: str, benchmark_symbol: str | None, periods: int
             "start": run.start_date,
             "end": run.end_date,
             **result,
-            "definitions": {
-                "trend": "benchmark close above/below its 200-day average, as of the prior close",
-                "volatility": "benchmark 21-day realised volatility (annualised), terciles over "
-                "the run's days, as of the prior close",
-                "return": "compounded daily return of the run's equity on the cell's days",
-                "trades": "trades entered in the cell; win_rate and pnl over closed ones",
-            },
+            "definitions": BREAKDOWN_DEFINITIONS,
         }
     )

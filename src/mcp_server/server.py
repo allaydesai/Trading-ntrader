@@ -67,6 +67,7 @@ side); run_portfolio_backtest judges a study's candidate inside the held sleeves
 before and after, stored as a 'portfolio' analysis (no engine run, no gate yet).
 Regimes: build_regime_calendar stores SPY's versioned regime calendar and get_regime_labels
 reads it by date; ground-truth labels are hindsight, stamped and never used to trade.
+run_regime_attribution profiles runs against that calendar and stores the report.
 Ad-hoc runs without a study are allowed but never count as evidence. Failures come back as
 {ok: false, error: {code, message, fix}}. This server never trades, never starts,
 stops or creates sessions, and never fetches or imports data.

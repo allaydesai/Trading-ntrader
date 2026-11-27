@@ -5,7 +5,12 @@ from src.db.models.catalog_dividend import CatalogDividend
 from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.catalog_stock_split import CatalogStockSplit
 from src.db.models.instrument_metadata import InstrumentMetadata
-from src.db.models.regime import RegimeCalendarBuild, RegimeCalendarVersion, RegimeLabel
+from src.db.models.regime import (
+    RegimeCalendarBuild,
+    RegimeCalendarVersion,
+    RegimeLabel,
+    RegimeReport,
+)
 from src.db.models.research import (
     ResearchAnalysis,
     ResearchCandidate,
@@ -26,6 +31,7 @@ __all__ = [
     "RegimeCalendarBuild",
     "RegimeCalendarVersion",
     "RegimeLabel",
+    "RegimeReport",
     "ResearchAnalysis",
     "ResearchCandidate",
     "ResearchStudy",

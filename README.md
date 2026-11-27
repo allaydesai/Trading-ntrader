@@ -700,6 +700,19 @@ fills ground-truth values once final; a changed definition is a new version.
 `get_regime_labels` reads labels by date, optionally as of an earlier build; ground-truth
 output is stamped "hindsight, not tradeable". See `docs/agent/regime-attribution.md`.
 
+**Tool (regime attribution phase 2, the regime profile):** `run_regime_attribution` profiles
+1-10 stored mark-to-market runs against one stored calendar version (`label_set="detector"`,
+lag 1 by default, or `"ground_truth"`, which takes no lag). Per label family it reports the
+daily view (days, P&L and shares, annualised return and volatility, Sharpe, worst day, a 90%
+stationary-bootstrap interval on each bucket's mean daily return and on each regime-conditional
+difference, exposure, the reference's return and drift), the stop-rule outcome
+(`strong_dependence` / `no_dependence` / `insufficient_evidence`), a trade view, the
+with/counter-trend split and, for several runs, correlation overall and per bucket. Every
+family's P&L sums to the run's. The report is stored append-only (`regime_reports`) with the
+calendar version, build and `labels_hash`, so `calendar_version` + `as_of_build` rerun it
+exactly; `export_results(slug, regime_report=<id>)` writes `<slug>.regime.json` and
+`<slug>.regime.md`.
+
 A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
 for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
 `export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the

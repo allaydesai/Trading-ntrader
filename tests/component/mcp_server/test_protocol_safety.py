@@ -62,6 +62,8 @@ PINNED_TOOLS = frozenset(
         # regime attribution phase 1: the stored regime calendar
         "build_regime_calendar",
         "get_regime_labels",
+        # regime attribution phase 2: stored regime profiles of runs
+        "run_regime_attribution",
     }
 )
 #: The only tools whose names may say "session": they read, never manage one.
