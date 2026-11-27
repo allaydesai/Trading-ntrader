@@ -217,22 +217,40 @@ catalogs" is this option. The catalogs themselves stay files.
 | `version_id` | FK → versions, `ON DELETE RESTRICT` | |
 | `session_date` | Date | the reference's session date; PK (`version_id`, `session_date`) |
 | `labels` | JSONB | see below; validated by a pydantic model on write |
+| `inserted_in_build` | Integer | the `build_no` that inserted the row. Set on insert, never changed |
 | `set_in_build` | JSONB | for each label key, the `build_no` that set its value (`null` while unset) |
 | `bar_hash` | String(32) | truncated sha256 of that session's OHLC as read. Set on insert, never changed |
 
+`regime_calendar_builds` (append-only, same trigger pattern): one row per build, holding
+`version_id`, `build_no` (PK together), that build's `data_end`, `git_commit` and
+`built_at`. It is the history behind the version row's current `build_no` and `data_end`.
+
 **Bar fingerprint.** Each label row carries the hash of its own session's bar. A build
-recomputes `bar_hash` for every stored date it reads and refuses (`reference_bars_changed`,
-naming the first differing date) when one differs, for example after a re-import with
-back-adjusted prices. New dates simply add rows with their own hash. Extending the data
-mid-year, or by a single day, therefore never touches a stored fingerprint. Re-labelling on
-changed bars needs a new `input_revision`.
+compares, over the version's stored range (`data_start` to `data_end`):
+
+- the **set of session dates** in the catalog against the stored rows. A session missing
+  from the catalog, or a new historical session inserted into it, is a difference.
+- each stored date's recomputed `bar_hash`.
+
+Any difference refuses the build (`reference_bars_changed`, naming the first differing date),
+for example after a re-import with back-adjusted prices. New dates after `data_end` simply
+add rows with their own hash. Extending the data mid-year, or by a single day, therefore
+never touches a stored fingerprint. Re-labelling on changed bars needs a new
+`input_revision`.
 
 **Report snapshots.** A report reads a version at its current `build_no` and records
 `(version_id, build_no)` for each version used, together with a sha256 of the label rows it
-read. Reading "as of build *n*" treats any value whose `set_in_build` is greater than *n* as
-`null`, and ignores rows inserted after build *n*. A rerun with the recorded pair therefore
-recovers the original inputs exactly, even after later builds fill in null ground-truth
-values. The stored hash proves it.
+read. Reading "as of build *n*" uses that build's state:
+
+- rows whose `inserted_in_build` is greater than *n* are ignored, including rows whose labels
+  are all `null`
+- values whose `set_in_build` is greater than *n* are treated as `null`
+- the alignment boundary is the `data_end` recorded for build *n* in
+  `regime_calendar_builds`, not the version's current `data_end` (section 2)
+
+A rerun with the recorded pair therefore recovers the original inputs and alignment exactly,
+even after later builds extend the data or fill in null ground-truth values. The stored hash
+proves it.
 
 Label payloads:
 
@@ -284,8 +302,9 @@ adds `regime_repository.py` (async) with the same insert-only surface and the sa
   *k*-th reference session strictly before *d* (*k* = 0: the label dated on or before *d*).
   Run days with no reference session of their own, such as weekends or exchange holidays,
   take the most recent earlier label. That is the label "in force". The as-of lookup is
-  **bounded by the version's `data_end`**: a run day after the last reference session is
-  `unlabelled`, never filled from an older label.
+  **bounded by the `data_end` of the build being read** (the current one, or the recorded
+  one on a rerun, section 1): a run day after the last reference session is `unlabelled`,
+  never filled from an older label.
 - **Ground-truth labels** (lag fixed at 0): the run's day *d* takes the label dated exactly
   *d*. A day with no reference session is **unlabelled**.
 - **`lag_days` default**: the parameter is `lag_days: int | None = None`, resolved per label
@@ -390,13 +409,15 @@ The bucket families:
 
 The 90% interval is in phase 2, not phase 4 as the spec's phase list has it, because the stop
 rule's test ("strong dependence": one bucket's interval entirely below zero and another's
-entirely above) cannot be evaluated without it. It uses a circular block bootstrap of the
-run's **whole daily timeline**: 1,000 resamples of 10-consecutive-day blocks, each block
-carrying its days' bucket labels, with an explicit `seed` (default 0) so a report
-reproduces. Each resample's statistic is the mean return of the observations in the bucket.
-Blocks are drawn before the bucket filter, so a block never joins two spells of a bucket that
-are years apart. A resample with no observation in the bucket is redrawn, and the redraw count
-is reported.
+entirely above) cannot be evaluated without it. It uses a **moving (non-wrapping) block
+bootstrap** of the run's **whole daily timeline**: 1,000 resamples of 10-consecutive-day
+blocks, with start days drawn uniformly from the first *N* − 9 days, each block carrying its
+days' bucket labels. An explicit `seed` (default 0) makes a report reproduce. Each resample's
+statistic is the mean return of the observations in the bucket. Blocks are drawn before the
+bucket filter and never wrap from the last day to the first, so a block never joins two
+spells of a bucket that are apart in time. A resample with no observation in the bucket is
+redrawn, and the redraw count is reported. A run shorter than 10 days gets no interval and is
+insufficient anyway.
 
 ### 5.4 Insufficient flag
 
@@ -443,7 +464,7 @@ report states which.
   factor. Open trades are counted separately.
 - **Reuse**: point statistics (`sharpe`, `profit_factor`, `win_rate`) and the seeded i.i.d.
   interval helpers come from `src/core/robustness/bootstrap.py`, so a bucket's numbers use the
-  same definitions as the run's stored metrics and `run_monte_carlo`. Only the circular block
+  same definitions as the run's stored metrics and `run_monte_carlo`. Only the moving block
   bootstrap (5.3) is new code.
 - **Exit check**: Σ bucket closed trades, `unlabelled` included, =
   `performance_metrics.total_trades`, and closed plus open = trade rows.
@@ -500,7 +521,9 @@ labels are refused.**
    drawdown.
 3. Baseline: 1,000 versions of the second half, each scaling the same number of days, chosen
    at random in contiguous runs. The run length is the median spell length of that bucket in
-   the **first** half, so nothing from the second half shapes the baseline. The total
+   the **first** half, so nothing from the second half shapes the baseline. A fractional
+   median (an even number of spells) is rounded half up to an integer, with a minimum of 1:
+   spells of 2 and 3 days give a median of 2.5, so runs are 3 days long. The total
    number of days removed is always exactly the filter's day count. Every run is full length
    except possibly the last, which is shortened to make the total exact (for example, a
    2-day median spell and 3 flagged days give one run of 2 and one of 1). Runs never

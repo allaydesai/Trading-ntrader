@@ -66,8 +66,11 @@ SHALL be created only on an explicit request that records its reason (changed re
 or a re-cut frozen median).
 
 Each label row SHALL store the hash of its own session's bar, and that hash SHALL never
-change. A build SHALL verify every stored date it re-reads against that hash. Extending the
-data by any number of new sessions SHALL NOT alter any stored hash.
+change. Each label row SHALL record the build that inserted it, and each build SHALL be
+recorded with its data end in an append-only build history. A build SHALL verify, over the
+version's stored range, that the catalog's session dates equal the stored dates and that every
+stored date's bar matches its hash. Extending the data by any number of new sessions SHALL
+NOT alter any stored hash.
 
 #### Scenario: version row cannot be rewritten
 - **WHEN** any statement tries to change a stored version's definition, definition hash,
@@ -79,6 +82,12 @@ data by any number of new sessions SHALL NOT alter any stored hash.
   hashes stored with that version, and `build_regime_calendar` runs with the same definition
 - **THEN** it appends nothing and refuses with `reference_bars_changed`, naming the first date
   that differs
+
+#### Scenario: a historical session disappears or appears
+- **WHEN** a session inside a version's stored range is missing from the catalog, or a new
+  session appears inside that range, while every remaining bar matches its hash
+- **THEN** `build_regime_calendar` appends nothing and refuses with `reference_bars_changed`,
+  naming the first differing date
 
 #### Scenario: relabelling the same definition on changed bars
 - **WHEN** `build_regime_calendar` is then called with the same definition, a new-revision

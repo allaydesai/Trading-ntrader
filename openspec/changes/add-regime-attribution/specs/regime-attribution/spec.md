@@ -48,8 +48,9 @@ bucket it SHALL report:
 - Sharpe
 - worst day
 - a 90% block-bootstrap interval on mean daily return (`bootstrap_samples` resamples of
-  10-consecutive-day blocks drawn from the run's whole daily timeline before the bucket's
-  days are selected, so a block never joins separate spells, and a recorded `seed`)
+  non-wrapping 10-consecutive-day blocks drawn from the run's whole daily timeline before the
+  bucket's days are selected, so a block never joins separate spells or the run's last and
+  first days, and a recorded `seed`)
 - exposure
 - the reference's annualised return on the same days
 - trades entered
@@ -95,8 +96,15 @@ Every regime report SHALL be stored append-only in `regime_reports` with:
 - the code commit
 
 A stored report SHALL never be rewritten, and a new reading SHALL be a new row. Rerunning a
-report as of its recorded build numbers SHALL reproduce its inputs exactly, even after later
-builds fill in null ground-truth values.
+report as of its recorded build numbers SHALL reproduce its inputs and alignment exactly, even
+after later builds extend the data or fill in null ground-truth values. It SHALL ignore rows
+inserted after the recorded build, and it SHALL use that build's recorded data end as the
+as-of boundary.
+
+#### Scenario: rerun after the data is extended
+- **WHEN** a detector profile is stored at a build whose data ends on a Friday, leaving the
+  run's Saturday unlabelled, and a later build extends the data through Monday
+- **THEN** a rerun as of the recorded build still leaves that Saturday unlabelled
 
 #### Scenario: report reproduces after ground truth fills in
 - **WHEN** a ground-truth profile is stored at build 3, a later build fills the last ten
@@ -184,8 +192,9 @@ window, the combination SHALL be reported as `null` with `insufficient: true` an
 bucket on the first half of the run's labelled days. It SHALL apply the half-size (default) or
 off filter to the second half. It SHALL compare the filtered Sharpe and max drawdown against
 1,000 seeded random removals of exactly the same number of days, in non-overlapping contiguous
-runs whose length is the bucket's median spell length in the first half. Only the final run
-of each removal MAY be shorter, so that the total matches exactly. It SHALL pass only when
+runs whose length is the bucket's median spell length in the first half, rounded half up to
+an integer with a minimum of 1. Only the final run of each removal MAY be shorter, so that the
+total matches exactly. It SHALL pass only when
 both metrics beat
 the 95th percentile of the random versions. A pass SHALL be reported as a candidate until a
 second instrument or period also passes.
@@ -198,6 +207,12 @@ second instrument or period also passes.
 - **WHEN** the first-half median spell length is 2 days and the filter flags 3 second-half
   days
 - **THEN** every random removal takes exactly 3 days, as one 2-day run and one 1-day run
+
+#### Scenario: fractional median spell length
+- **WHEN** the bucket's first-half spells last 2 and 3 days (median 2.5) and the filter flags 7
+  second-half days
+- **THEN** the run length is 3, and every random removal takes exactly 7 days as runs of 3, 3
+  and 1
 
 #### Scenario: single pass
 - **WHEN** the filter passes on one run only

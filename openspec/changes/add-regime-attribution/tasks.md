@@ -69,9 +69,12 @@ updated or deleted. The wave-leg chart looks right to Allay.
     `build_no` to increment.
   - Version numbering and the "latest" lookup are scoped to (`reference`, `catalog`,
     `label_set`).
-  - Reading as of build *n* hides values set later and rows inserted later.
-- [ ] 1.9 Migration (off `3f56b46c78eb`): `regime_calendar_versions`, `regime_labels`, and the
-      `regime_labels_append_only` and `regime_versions_immutable` triggers. Add
+  - Reading as of build *n* hides values set later and rows inserted later
+    (`inserted_in_build` > *n*, including all-null ground-truth rows), and returns build
+    *n*'s `data_end` from the append-only `regime_calendar_builds`.
+- [ ] 1.9 Migration (off `3f56b46c78eb`): `regime_calendar_versions`, `regime_labels`,
+      `regime_calendar_builds`, and the `regime_labels_append_only`,
+      `regime_versions_immutable` and append-only builds triggers. Add
       `src/db/models/regime.py` and `src/db/repositories/regime_repository_sync.py` (insert
       and append only, no update or delete method). If Allay does not approve the sync-only
       exception (`design.md` Q13), also add the async `regime_repository.py` with the same
@@ -91,6 +94,8 @@ updated or deleted. The wave-leg chart looks right to Allay.
   - A changed past bar is refused with `reference_bars_changed`, and a new-revision request
     with that reason then creates `input_revision` 2 of the same definition.
   - A mid-year extension appends rows and changes no stored `bar_hash`.
+  - A historical session missing from, or newly inserted into, the stored range is refused
+    with `reference_bars_changed`.
   - A changed definition creates version 2 and leaves version 1 untouched.
   - `get_regime_labels` returns dated labels for a range.
   - `label_set="ground_truth"` output carries `hindsight: true` and
@@ -141,14 +146,15 @@ are profiled and the stop-rule reading is recorded.
   - Benchmark return covers the bucket's days.
   - Insufficient flag below 60 days or 20 trades.
   - Crossing chooses the widest-gap scale and records it.
-- [ ] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a circular block
-      bootstrap with 10-day blocks drawn from the whole run timeline before the bucket mask is
-      applied. On a fixture with two bucket spells years apart, no resampled block contains
-      days from both spells. The same seed gives the same interval. On i.i.d. data it
+- [ ] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a moving
+      (non-wrapping) block bootstrap with 10-day blocks drawn from the whole run timeline
+      before the bucket mask is applied. On a fixture with two bucket spells years apart, or a
+      bucket covering both the first and the last day, no resampled block contains days from
+      both spells or wraps around the end. The same seed gives the same interval. On i.i.d. data it
       covers the true mean near 90% (seeded Monte Carlo). The three-way family outcome is
       tested: `strong_dependence`, `no_dependence`, and `insufficient_evidence` when fewer
       than two buckets are sufficient (`design.md` section 5.4).
-- [ ] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and the circular block
+- [ ] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and the moving block
       bootstrap in `src/core/regimes/bootstrap.py`. Take `sharpe` and the seeded interval
       helpers from `src/core/robustness/bootstrap.py` rather than reimplementing them.
 - [ ] 2.6 Integration (failing first, Postgres): the `regime_reports` repository, append-only
@@ -165,7 +171,8 @@ are profiled and the stop-rule reading is recorded.
     `overrides`.
   - **Snapshot**: a profile stored at build *n*, rerun as of build *n* after a later build
     filled ground-truth values, reads identical label rows (hash match) and gives identical
-    buckets.
+    buckets. A detector profile at build *n* whose Saturday was past `data_end` stays
+    unlabelled on a rerun after a later build extended the data.
   - Ground truth gets `hindsight: true` and the stamp; detectors get `hindsight: false`.
   - A stored report is written.
   - `export_results(slug, regime_report=...)` writes `<slug>.regime.json` and
@@ -295,7 +302,8 @@ removals, on detector labels only.
   - Half and off scaling.
   - Random removals of exactly the same day count, in non-overlapping runs of the
     first-half median spell length, seeded. Only the last run may be shorter (a 2-day spell
-    with 3 flagged days gives runs of 2 and 1).
+    with 3 flagged days gives runs of 2 and 1). A fractional median rounds half up (spells
+    of 2 and 3 → runs of 3; 7 flagged days → 3, 3, 1).
   - Pass only when both Sharpe and max drawdown beat the 95th percentile.
   - `candidate` until a second instrument or period passes.
 - [ ] 6.2 Implement `src/core/regimes/filter_test.py`. It must not import `ground_truth`; the
