@@ -43,6 +43,7 @@ from src.core.regimes.definition import (
     definition_hash,
 )
 from src.core.regimes.trade_view import correlation
+from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.regime import RegimeCalendarVersion, RegimeReport
 from src.db.models.trade import Trade
 from src.db.repositories.regime_repository_sync import (
@@ -153,24 +154,58 @@ def _check_drift_scaling(drift_scaling: str) -> None:
         )
 
 
-#: Catalog kinds whose quantity x close is not the position's USD notional: futures (the
-#: multiplier is not stored with a trade) and FX (a pair quoted in another currency, and
-#: leverage).
-_UNSCALABLE = ("futures", "fx")
+#: Instruments whose quantity x close is the position's USD notional (an instrument row in
+#: ``catalog_instruments`` with one of these classes, multiplier 1 or none, USD or no quote
+#: currency). Futures (the multiplier is not applied to a trade's quantity), FX (quoted in
+#: another currency, levered) and anything without a row are refused, whatever the catalog
+#: is called.
+_SCALABLE_CLASSES = ("ETF", "STOCK", "CRYPTO")
 
 
-def _check_scalable(sleeve: Sleeve, reference: str, catalog: str) -> None:
+def _unscalable(session: Session, ticker: str, catalog: str) -> str | None:
+    """Why ``ticker`` in ``catalog`` cannot be position-scaled, or ``None`` when it can."""
+    row = session.scalars(
+        select(CatalogInstrument).where(
+            CatalogInstrument.ticker == ticker, CatalogInstrument.catalog_name == catalog
+        )
+    ).one_or_none()
+    if row is None:
+        return f"no instrument row for {ticker} in '{catalog}'"
+    multiplier = 1 if row.multiplier is None else float(row.multiplier)
+    if row.asset_class.upper() not in _SCALABLE_CLASSES or multiplier != 1:
+        return f"{ticker} in '{catalog}' is {row.asset_class} (multiplier {multiplier:g})"
+    if (row.currency or "USD").upper() != "USD":
+        return f"{ticker} in '{catalog}' is quoted in {row.currency}"
+    return None
+
+
+def _check_scalable(session: Session, sleeve: Sleeve, reference: str, catalog: str) -> None:
     """Position-scaled drift marks the carried quantity at the reference's close, so the
-    reference must be the instrument traded, in an unlevered, USD-quoted catalog."""
+    reference must be the instrument traded, an unlevered, USD-quoted one, in the calendar's
+    catalog and in the run's own."""
+    symbol = sleeve.run.instrument_symbol.upper()
     source = sleeve.run.data_source or ""
-    kinds = {k for k in _UNSCALABLE for where in (catalog, source) if f"-{k}" in where}
-    if sleeve.run.instrument_symbol.upper() != reference or kinds:
+    reasons = [] if symbol == reference else [f"the run trades {symbol}, not {reference}"]
+    catalogs = [catalog] + ([source.split(":", 1)[1]] if source.startswith("catalog:") else [])
+    reasons += [r for c in dict.fromkeys(catalogs) if (r := _unscalable(session, reference, c))]
+    if reasons:
         raise ToolFailure(
             "drift_scaling_unavailable",
-            f"Run {sleeve.run_id} trades {sleeve.run.instrument_symbol} from "
-            f"'{sleeve.run.data_source}'; position-scaled drift marks its quantity at "
-            f"{reference}'s close in '{catalog}', which needs the same, unlevered instrument.",
-            fix="Profile it against its own symbol's calendar, or leave drift_scaling unset.",
+            f"Run {sleeve.run_id} cannot be position-scaled against {reference} in "
+            f"'{catalog}': {'; '.join(reasons)}. Quantity x close must be its USD notional.",
+            fix="Profile it against its own symbol's calendar (an ETF, stock or USD crypto "
+            "catalog), or leave drift_scaling unset.",
+        )
+
+
+def _check_sized(sleeve: Sleeve, trades: list[TradeRecord]) -> None:
+    unsized = sum(1 for t in trades if not t.quantity > 0)
+    if unsized:
+        raise ToolFailure(
+            "drift_scaling_unavailable",
+            f"Run {sleeve.run_id} has {unsized} trade(s) with no quantity, so its position "
+            "weight is not known.",
+            fix="Leave drift_scaling unset (side drift needs no quantity).",
         )
 
 
@@ -391,8 +426,11 @@ def run_regime_attribution(
         sleeves = load_sleeves(session, run_ids, minimum=1, maximum=MAX_RUNS)
         if drift_scaling == "position":  # refuse before any calendar or catalog read
             for sleeve in sleeves:
-                _check_scalable(sleeve, reference, catalog)
+                _check_scalable(session, sleeve, reference, catalog)
         inputs = {s.run_id: (_run_fields(s), _trades(session, s)) for s in sleeves}
+        if drift_scaling == "position":
+            for sleeve in sleeves:
+                _check_sized(sleeve, inputs[sleeve.run_id][1])
         read = _read_calendar(
             SyncRegimeRepository(session), (reference, catalog, label_set),
             calendar_version, as_of_build,

@@ -522,8 +522,11 @@ weigh nothing, as in 5.5. Each row also gets `mean_position_weight`.
   no label, bucket, interval or outcome moves.
 - **Scope.** The quantity is marked at the reference's close, so the run must trade the
   reference itself. A futures multiplier is not stored with the trade, and quantity × close of
-  an FX pair is in its quote currency (and levered), so a run on another symbol, on futures or
-  on FX is refused (`drift_scaling_unavailable`). `quantity` is the stored trade's, Nautilus's
+  an FX pair is in its quote currency (and levered). Eligibility is read from
+  `catalog_instruments` (the reference's row in the calendar's catalog and in the run's own:
+  ETF, STOCK or CRYPTO, multiplier 1 or none, USD or no quote currency), never from a catalog
+  name. A run on another symbol, on futures, on FX or without an instrument row is refused
+  (`drift_scaling_unavailable`), and so is a trade without a quantity. `quantity` is the stored trade's, Nautilus's
   peak size, so a position scaled in or out is overweighted on its smaller days (none of the
   phase 2b baselines does; the report's definition says so).
 - **What it can and cannot say.** For a strategy that trades the reference, `w(d) × r_ref(d)`

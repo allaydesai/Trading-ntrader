@@ -133,8 +133,8 @@ quantity carried in × the reference's previous close / the previous equity, wit
 `mean_position_weight`). Only the drift columns SHALL differ between the two. A default call
 SHALL store exactly the payload phase 2 stored, so earlier reports reproduce. `"position"` SHALL
 be recorded in `params` without declaring a robustness check, and SHALL be refused with
-`drift_scaling_unavailable` for a run that does not trade the reference itself or trades
-futures or FX.
+`drift_scaling_unavailable` for a run that does not trade the reference itself, or whose
+instrument record (not its catalog name) is futures, FX, non-USD or missing.
 
 #### Scenario: a phase 2 report reruns unchanged
 - **WHEN** a stored phase 2 report is rerun with its recorded parameters and no `drift_scaling`

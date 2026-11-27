@@ -8,6 +8,7 @@ from it by ``build_regime_calendar``.
 """
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -21,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from src.config import get_settings
 from src.db.base import Base
 from src.db.models.backtest import BacktestRun, PerformanceMetrics, RunEquityCurve
+from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.regime import (
     RegimeCalendarBuild,
     RegimeCalendarVersion,
@@ -43,6 +45,7 @@ TABLES = [
     for t in (
         BacktestRun, PerformanceMetrics, TradingSession, Trade, RunEquityCurve,
         RegimeCalendarVersion, RegimeLabel, RegimeCalendarBuild, RegimeReport,
+        CatalogInstrument,
     )
 ]  # fmt: skip
 INITIAL = 1_000_000.0
@@ -58,6 +61,10 @@ def store(request, monkeypatch):
         conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
         conn.execute(text(f"CREATE SCHEMA {schema}"))
         Base.metadata.create_all(conn, tables=TABLES, checkfirst=False)
+        conn.execute(  # SPY as the real catalog records it: an ETF, no multiplier
+            CatalogInstrument.__table__.insert(),
+            {"ticker": "SPY", "catalog_name": "firstrate-etf", "asset_class": "ETF"},
+        )
     maker = sessionmaker(engine, expire_on_commit=False)
 
     @contextmanager
@@ -421,14 +428,56 @@ async def test_position_scaled_drift_needs_the_reference_to_be_the_traded_symbol
 
 async def test_position_scaled_drift_refuses_fx_and_futures_runs(server, store, bars):
     """Quantity x close is not USD notional for a pair quoted in another currency, and no
-    futures multiplier is stored with a trade."""
+    futures multiplier is stored with a trade. A run from a catalog with no instrument row
+    is refused too: eligibility is never guessed from a name."""
     await _call(server, "build_regime_calendar")
-    for source in ("catalog:firstrate-fx", "catalog:firstrate-futures"):
+    with store() as session:
+        session.add_all([
+            CatalogInstrument(ticker="SPY", catalog_name="fut", asset_class="FUTURES",
+                              multiplier=Decimal("50"), currency="USD"),
+            CatalogInstrument(ticker="SPY", catalog_name="pairs", asset_class="FX",
+                              multiplier=Decimal("1"), currency="JPY"),
+        ])  # fmt: skip
+    for source in ("catalog:fut", "catalog:pairs", "catalog:unlisted"):
         run_id = seed_run(store, _run_days(bars["frame"], 300), data_source=source)
         data = await _call(
             server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
         )
         assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
+
+
+async def test_a_futures_reference_is_refused_whatever_its_catalog_is_called(server, store, bars):
+    """The calendar's own catalog is judged by its instrument row, not by a '-futures'
+    suffix: here 'firstrate-etf' records SPY as a 50x future."""
+    await _call(server, "build_regime_calendar")
+    with store() as session:
+        row = session.scalars(select(CatalogInstrument)).one()
+        row.asset_class, row.multiplier = "FUTURES", Decimal("50")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    data = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+    )
+    assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
+
+
+async def test_an_unsized_trade_is_a_structured_refusal(server, store, bars, monkeypatch):
+    """The trades table refuses a non-positive quantity (CHECK positive_quantity), so an
+    unsized record is simulated at the reader; the tool still answers with a code and fix."""
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    read = regime_reports._trades
+    monkeypatch.setattr(
+        regime_reports,
+        "_trades",
+        lambda session, sleeve: [replace(t, quantity=0.0) for t in read(session, sleeve)],
+    )
+    data = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+    )
+    assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
+    assert data["error"]["fix"]
+    plain = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
+    assert plain["ok"] is True
 
 
 async def test_an_unknown_drift_scaling_is_refused_with_a_fix(server, store, bars):
