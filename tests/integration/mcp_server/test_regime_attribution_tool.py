@@ -289,3 +289,41 @@ async def test_export_writes_both_files_with_the_stamp(server, store, bars, tmp_
         server, "export_results", {"slug": "gt-fixture", "regime_report": truth["report_id"]}
     )
     assert again["ok"] is False and again["error"]["code"] == "file_exists"
+
+
+async def test_a_rerun_pinned_to_the_default_version_is_no_override(server, store, bars):
+    """The documented rerun (calendar_version + as_of_build of the default definition's
+    version) reproduces the report: same hash, families and no override."""
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    first = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
+    (calendar,) = first["calendar"]
+    again = await _call(
+        server,
+        "run_regime_attribution",
+        {"run_ids": [run_id], "calendar_version": calendar["version"], "as_of_build": 1},
+    )
+    assert again["overrides"] == {} and again["declared_robustness_check"] is False
+    assert again["labels_hash"] == first["labels_hash"]
+    assert again["runs"] == first["runs"]
+
+
+async def test_a_pinned_non_default_version_is_a_declared_override(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    await _call(
+        server,
+        "build_regime_calendar",
+        {"definition_overrides": {"ground_truth": {"ranging_threshold": 0.3}}},
+    )
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    args = {"run_ids": [run_id], "label_set": "ground_truth", "calendar_version": 2}
+    data = await _call(server, "run_regime_attribution", args)
+    assert data["overrides"] == {"calendar_version": 2}
+    assert data["declared_robustness_check"] is True
+
+
+async def test_a_negative_seed_is_refused_with_a_fix(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    data = await _call(server, "run_regime_attribution", {"run_ids": [run_id], "seed": -1})
+    assert data["ok"] is False and data["error"]["code"] == "invalid_seed"

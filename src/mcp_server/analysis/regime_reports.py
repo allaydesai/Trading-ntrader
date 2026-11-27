@@ -35,7 +35,7 @@ from src.core.regimes.attribution import (
     profile,
 )
 from src.core.regimes.bootstrap import CONFIDENCE, MEAN_BLOCK
-from src.core.regimes.definition import LABEL_SETS
+from src.core.regimes.definition import LABEL_SETS, build_definition, definition_hash
 from src.core.regimes.trade_view import correlation
 from src.db.models.regime import RegimeCalendarVersion, RegimeReport
 from src.db.models.trade import Trade
@@ -48,6 +48,7 @@ from src.mcp_server.analysis.regime_calendar import (
     STAMP,
     calendar_version_for,
     load_reference_bars,
+    resolve_build,
 )
 from src.mcp_server.analysis.sleeves import Sleeve, load_sleeves
 from src.mcp_server.errors import ToolFailure
@@ -106,7 +107,7 @@ def _resolve_lag(label_set: str, lag_days: int | None) -> int:
     return lag_days
 
 
-def _check_params(min_days: int, min_trades: int, samples: int) -> None:
+def _check_params(min_days: int, min_trades: int, samples: int, seed: int) -> None:
     if min_days < 1 or min_trades < 0:
         raise ToolFailure(
             "invalid_minimum", "min_days must be ≥ 1 and min_trades ≥ 0.", fix="Use 60 and 20."
@@ -115,6 +116,8 @@ def _check_params(min_days: int, min_trades: int, samples: int) -> None:
         raise ToolFailure(
             "invalid_samples", "bootstrap_samples must be 100-10,000.", fix="Use 1000."
         )
+    if seed < 0:
+        raise ToolFailure("invalid_seed", "seed must be 0 or more.", fix="Use 0 (the default).")
 
 
 def labels_hash(rows: list[tuple[date, dict[str, Any]]]) -> str:
@@ -132,13 +135,7 @@ def _read_calendar(
     as_of_build: int | None,
 ) -> _Read:
     version = calendar_version_for(repo, key, number)
-    build = version.build_no if as_of_build is None else as_of_build
-    if not 1 <= build <= version.build_no:
-        raise ToolFailure(
-            "unknown_build",
-            f"v{version.version} has builds 1-{version.build_no}, not {build}.",
-            fix="Pass an as_of_build a report recorded, or leave it unset.",
-        )
+    build = resolve_build(version, as_of_build)
     data_end = repo.build_data_end(version.id, build)
     assert data_end is not None, "every build has a history row"
     reader = repo.ground_truth_labels if key[2] == "ground_truth" else repo.detector_labels
@@ -182,6 +179,11 @@ def _closing_note(fields: dict[str, Any], frame: pd.DataFrame, open_trades: int)
     gap = float(frame["equity"].iloc[-1]) - fields["final_balance"]
     if abs(gap) < 0.005:
         return None
+    if not open_trades:
+        return (
+            f"Last equity point minus final_balance = {gap:,.2f} with no position open at the "
+            "end. Bucket P&L reconciles to the last equity point."
+        )
     return (
         f"Last equity point minus final_balance = {gap:,.2f}: the unrealised P&L of "
         f"{open_trades} position(s) still open at the end. Bucket P&L reconciles to the last "
@@ -213,10 +215,21 @@ def _run_profile(
     notes = [n for n in (_closing_note(fields, frame, sum(t.exit is None for t in trades)),) if n]
     if fields["symbol"].upper() != read.version.reference:
         notes.append(f"{fields['symbol']} is profiled against {read.version.reference}'s labels.")
+    if _intraday_futures(sleeve):
+        notes.append(
+            "Intraday futures bars: run days are UTC dates, so the evening session after "
+            "00:00 UTC counts toward the next session's label (an approximation, design.md 2)."
+        )
     after = sum(1 for d in frame.index if d > read.calendar.data_end)
     if after:
         notes.append(f"{after} run day(s) after the calendar's data_end are unlabelled.")
     return {**fields, "families": result["families"], "notes": notes}, frame
+
+
+def _intraday_futures(sleeve: Sleeve) -> bool:
+    snapshot = sleeve.run.config_snapshot or {}
+    futures = (sleeve.run.data_source or "").endswith("firstrate-futures")
+    return futures and "DAY" not in str(snapshot.get("bar_type", "")).upper()
 
 
 def _correlations(frames: dict[str, pd.DataFrame], read: _Read, params: dict) -> dict:
@@ -232,10 +245,14 @@ def _correlations(frames: dict[str, pd.DataFrame], read: _Read, params: dict) ->
 
 
 def _params(
-    run_ids: list[str], label_set: str, lag: int, given: dict[str, Any]
+    run_ids: list[str], label_set: str, lag: int, given: dict[str, Any], read: _Read
 ) -> tuple[dict, dict]:
     params = {**given, "label_set": label_set, "lag_days": lag, "run_ids": run_ids}
     overrides = {k: v for k, v in given.items() if v != DEFAULTS[k] and k not in _NOT_OVERRIDES}
+    # Pinning the default definition's own version (a rerun) changes nothing; pinning any
+    # other version reads a different definition, a declared robustness check.
+    if read.version.definition_hash == definition_hash(build_definition(label_set)):
+        overrides.pop("calendar_version", None)
     if label_set == "detector" and given["lag_days"] == DETECTOR_LAG:
         overrides.pop("lag_days", None)
     return params, overrides
@@ -270,7 +287,7 @@ def run_regime_attribution(
 ) -> dict[str, Any]:
     """Profile runs against one stored calendar version; store and return the report."""
     lag = _resolve_lag(label_set, lag_days)
-    _check_params(min_days, min_trades, bootstrap_samples)
+    _check_params(min_days, min_trades, bootstrap_samples, seed)
     reference = benchmark_symbol.strip().upper()
     given = {
         "label_set": label_set, "benchmark_symbol": reference, "catalog": catalog,
@@ -287,7 +304,7 @@ def run_regime_attribution(
         )  # fmt: skip
     closes = load_reference_bars(catalog, reference)["close"]
     closes = closes[closes.index <= read.calendar.data_end]
-    params, overrides = _params([s.run_id for s in sleeves], label_set, lag, given)
+    params, overrides = _params([s.run_id for s in sleeves], label_set, lag, given, read)
     runs, frames = [], {}
     for sleeve in sleeves:
         run, frames[sleeve.run_id] = _run_profile(

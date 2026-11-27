@@ -372,6 +372,18 @@ def calendar_version_for(
     return version
 
 
+def resolve_build(version: RegimeCalendarVersion, as_of_build: int | None) -> int:
+    """The build to read: the current one, or a recorded one that exists."""
+    build = version.build_no if as_of_build is None else as_of_build
+    if not 1 <= build <= version.build_no:
+        raise ToolFailure(
+            "unknown_build",
+            f"v{version.version} has builds 1-{version.build_no}, not {build}.",
+            fix="Pass an as_of_build a report recorded, or leave it unset.",
+        )
+    return build
+
+
 def get_regime_labels(
     benchmark_symbol: str = "SPY",
     catalog: str = "firstrate-etf",
@@ -393,13 +405,7 @@ def get_regime_labels(
     with get_sync_session() as session:
         repo = SyncRegimeRepository(session)
         found = calendar_version_for(repo, key, version)
-        build = found.build_no if as_of_build is None else as_of_build
-        if not 1 <= build <= found.build_no:
-            raise ToolFailure(
-                "unknown_build",
-                f"v{found.version} has builds 1-{found.build_no}, not {build}.",
-                fix="Pass an as_of_build a report recorded, or leave it unset.",
-            )
+        build = resolve_build(found, as_of_build)
         read = repo.ground_truth_labels if label_set == "ground_truth" else repo.detector_labels
         rows = read(found, start=start, end=end, as_of_build=build, limit=limit + 1)
         record = repo.find_build(found.id, build)
