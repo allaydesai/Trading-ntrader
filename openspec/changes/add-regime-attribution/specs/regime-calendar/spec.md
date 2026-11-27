@@ -55,7 +55,23 @@ delete.
 The system SHALL treat any change to a calendar definition parameter (wave multiples, ATR
 window, efficiency-ratio window or threshold, volatility windows, detector windows, warm-up)
 as a new version with the next version number. It SHALL leave every earlier version and its
-labels untouched, so that earlier reports stay reproducible.
+labels untouched, so that earlier reports stay reproducible. The hashed definition SHALL hold
+parameters only. Values derived from data (the frozen ground-truth volatility median and its
+window) SHALL be stored apart from it and set once. The database SHALL reject any update of a
+version row other than moving its data end forward and adding new bar-fingerprint chunks.
+Version numbers and "latest" lookups SHALL be scoped to reference, catalog and label set.
+
+#### Scenario: version row cannot be rewritten
+- **WHEN** any statement tries to change a stored version's definition, definition hash,
+  frozen statistics, reference, catalog, label set or version number
+- **THEN** the database raises an error and the row is unchanged
+
+#### Scenario: reference history changed under a version
+- **WHEN** the catalog's SPY bars for dates already covered by a version differ from the
+  fingerprint stored with that version, and `build_regime_calendar` runs with the same
+  definition
+- **THEN** it appends nothing and refuses with `reference_bars_changed`, naming the first date
+  that differs
 
 #### Scenario: declared robustness check on the trend window
 - **WHEN** `build_regime_calendar` is called for `SPY` with a definition override setting the

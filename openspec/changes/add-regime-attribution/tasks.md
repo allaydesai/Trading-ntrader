@@ -47,7 +47,10 @@ updated or deleted. The wave-leg chart looks right to Allay.
 - [ ] 1.5 Implement `src/core/regimes/detectors.py` (`sma200` only).
 - [ ] 1.6 Unit (failing first): `tests/unit/core/regimes/test_definition.py`: the default
       definition's canonical JSON and sha256 hash are pinned. Any changed parameter changes
-      the hash. Unknown keys are refused.
+      the hash. Unknown keys are refused. The definition holds no data-derived value: the
+      frozen volatility median lives in `frozen_stats`, so building on more bars leaves the
+      hash unchanged. The per-year bar fingerprint is stable, and it changes when one past
+      close changes.
 - [ ] 1.7 Implement `src/core/regimes/definition.py` (pydantic definitions, label payload models,
       hashing).
 - [ ] 1.8 Integration (failing first, Postgres): `tests/integration/db/test_regime_repository.py`:
@@ -57,20 +60,29 @@ updated or deleted. The wave-leg chart looks right to Allay.
   - On a ground-truth row the trigger allows `null` → value, and rejects value → other value
     and `DELETE`.
   - Deleting a version is rejected.
+  - `regime_versions_immutable` rejects changes to `definition`, `definition_hash`,
+    `frozen_stats`, `reference`, `catalog`, `label_set`, `version` and `data_start`, and
+    changes to existing fingerprint chunks. It allows `data_end` to move forward with new
+    chunks.
+  - Version numbering and the "latest" lookup are scoped to (`reference`, `catalog`,
+    `label_set`).
 - [ ] 1.9 Migration (off `3f56b46c78eb`): `regime_calendar_versions`, `regime_labels`, and the
-      `regime_labels_append_only` trigger. Add `src/db/models/regime.py` and
+      `regime_labels_append_only` and `regime_versions_immutable` triggers. Add `src/db/models/regime.py` and
       `src/db/repositories/regime_repository_sync.py` (insert and append only, no update or
       delete method). Update the single-head note in `CLAUDE.md` and the table in
       `docs/agent/persistence.md` (with the sync-only note).
 - [ ] 1.10 Unit (failing first): `tests/unit/governance/test_regime_ground_truth_boundary.py`
-      scans the AST of `src/**`, plus `src/core/strategies/custom/**` when it is present. Only
-      the permitted modules (`design.md` section 9) may import
-      `src.core.regimes.ground_truth` or call the repository's ground-truth reader. The test
-      starts red against a planted fixture module.
+      scans the AST of `src/**`, plus `src/core/strategies/custom/**` when it is present,
+      resolving relative imports. Only the **named** permitted files (`design.md` section 9; no
+      globs) may import `src.core.regimes.ground_truth` or call the repository's ground-truth
+      reader. `src/core/regimes/filter_test.py` and `src/mcp_server/analysis/regime_filter.py`
+      are explicitly forbidden. The test starts red against planted fixture modules, one
+      absolute import and one relative.
 - [ ] 1.11 Component (failing first): `tests/component/mcp_server/test_regime_calendar_tools.py`:
   - `build_regime_calendar` on a fixture catalog creates both versions.
   - Running it again with the same definition is a no-op.
   - New bars append rows.
+  - A changed past bar is refused with `reference_bars_changed`.
   - A changed definition creates version 2 and leaves version 1 untouched.
   - `get_regime_labels` returns dated labels for a range.
   - `label_set="ground_truth"` output carries `hindsight: true` and
@@ -113,15 +125,19 @@ are profiled and the stop-rule reading is recorded.
   - Ground truth uses lag 0 by exact date. Detectors use lag *k* by reference session, with
     as-of fill for non-session days.
   - **Lag matters**: lag 0 ≠ lag 1 on a synthetic series.
-  - Exposure follows `design.md` section 5.5.
+  - Exposure follows `design.md` section 5.5: carried in from the previous close. A
+    position opened at *d*'s own bar does not count; an intraday round trip inside *d* does.
   - Benchmark return covers the bucket's days.
   - Insufficient flag below 60 days or 20 trades.
   - Crossing chooses the widest-gap scale and records it.
 - [ ] 2.4 Unit (failing first): `tests/unit/core/regimes/test_bootstrap.py`: a circular block
       bootstrap with 10-day blocks. The same seed gives the same interval. On i.i.d. data it
-      covers the true mean near 90% (seeded Monte Carlo). The strong-dependence predicate is
-      tested.
-- [ ] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and `bootstrap.py`.
+      covers the true mean near 90% (seeded Monte Carlo). The three-way family outcome is
+      tested: `strong_dependence`, `no_dependence`, and `insufficient_evidence` when fewer
+      than two buckets are sufficient (`design.md` section 5.4).
+- [ ] 2.5 Implement `src/core/regimes/attribution.py` (daily view) and the circular block
+      bootstrap in `src/core/regimes/bootstrap.py`. Take `sharpe` and the seeded interval
+      helpers from `src/core/robustness/bootstrap.py` rather than reimplementing them.
 - [ ] 2.6 Integration (failing first, Postgres): the `regime_reports` repository, append-only
       (the trigger rejects `UPDATE` and `DELETE`), with a non-empty `calendar_version_ids` and
       unknown ids refused.
@@ -129,7 +145,9 @@ are profiled and the stop-rule reading is recorded.
       single-head note.
 - [ ] 2.8 Component (failing first): `tests/component/mcp_server/test_regime_attribution_tool.py`:
   - A realised-basis run is refused with `curve_missing`.
-  - `lag_days` with `label_set="ground_truth"` is refused.
+  - `lag_days` defaults to unset: ground truth without it runs at lag 0, and ground truth
+    with any explicit `lag_days` (0 included) is refused with `lag_not_allowed`. Detectors
+    without it run at lag 1.
   - The payload records versions, params and `overrides`.
   - Ground truth gets `hindsight: true` and the stamp; detectors get `hindsight: false`.
   - A stored report is written.
@@ -152,10 +170,13 @@ are profiled and the stop-rule reading is recorded.
 > ### ⛔ PHASE-2 STOP RULE
 >
 > Stop after 2.12 and report the ground-truth profiles of the trend and mean-reversion
-> baselines to Allay, with each family's strong-dependence flag.
+> baselines to Allay, with each family's outcome (`strong_dependence`, `no_dependence` or
+> `insufficient_evidence`).
 >
 > **If neither baseline shows dependence under the ground-truth labels, the build stops
-> here.** Phases 3-6 would not pay for themselves.
+> here.** Phases 3-6 would not pay for themselves. A family reported as
+> `insufficient_evidence` is not "no dependence". Report it as such and let Allay decide
+> (`design.md` Q12).
 >
 > **Phases 3-6 are gated on Allay's explicit go-ahead**, whatever the result. Record the
 > reading and Allay's decision (date, outcome) in this file before ticking 2.13.
@@ -202,13 +223,17 @@ Acceptance: trade counts sum to the run's trade count. The alignment table, the 
 and the fixed verdicts are reported.
 
 - [ ] 4.1 Unit (failing first): extend `test_attribution.py`:
-  - Closed trades are bucketed by the label in force on the entry day (same lag rule); open
-    trades are counted apart.
+  - Closed trades are bucketed by the label in force on the entry day (same lag rule).
+    Trades entered on unlabelled days (warm-up, ground truth not yet final, past the catalog
+    end) go in an `unlabelled` row. Open trades are counted apart.
   - Win rate, average win and loss, expectancy, profit factor.
-  - **Reconciliation**: Σ closed trades = `total_trades`, and closed + open = trade rows.
+  - **Reconciliation**: Σ closed trades, `unlabelled` included, = `total_trades`, and closed
+    + open = trade rows.
   - With-trend / counter-trend tags for `BUY` and `SELL`.
   - The trade-view expectancy interval.
-- [ ] 4.2 Implement the trade view and alignment in `attribution.py`.
+- [ ] 4.2 Implement the trade view and alignment in `attribution.py`. Take `profit_factor`,
+      `win_rate` and the i.i.d. interval helpers from `src/core/robustness/bootstrap.py`; do
+      not redefine them.
 - [ ] 4.3 Unit (failing first): `tests/unit/core/regimes/test_verdicts.py`. Each rule in the
       spec's "Reading the results" tables gets a positive and a negative case:
   - `no_regime_harm`, `reliable_loss_bucket`
@@ -253,10 +278,13 @@ removals, on detector labels only.
     seeded.
   - Pass only when both Sharpe and max drawdown beat the 95th percentile.
   - `candidate` until a second instrument or period passes.
-- [ ] 6.2 Implement `src/core/regimes/filter_test.py`.
+- [ ] 6.2 Implement `src/core/regimes/filter_test.py`. It must not import `ground_truth`; the
+      boundary test from 1.10 already forbids it.
 - [ ] 6.3 Component (failing first): `label_set="ground_truth"` is refused (hard rule). The
       result is stored as `kind = filter_test` with the limits text from `design.md`
-      section 7. Then implement the tool and pin it in `REGISTERED_TOOLS` and `PINNED_TOOLS`.
+      section 7. Then implement the glue in `src/mcp_server/analysis/regime_filter.py`
+      (detector versions only) and the tool, and pin it in `REGISTERED_TOOLS` and
+      `PINNED_TOOLS`.
 - [ ] 6.4 Integration: run the test on the flagged bucket from phase 4. Repeat on a second
       instrument or period (spec step 6). File the result.
 

@@ -199,9 +199,11 @@ catalogs" is this option. The catalogs themselves stay files.
 | `reference` | String(20) | `SPY` |
 | `catalog` | String(100) | `firstrate-etf` |
 | `label_set` | String(20) | CHECK in (`ground_truth`, `detector`) |
-| `version` | Integer | 1, 2, ... per (`reference`, `label_set`); UNIQUE together |
-| `definition` | JSONB | every parameter: scales and ATR multiples, ER window and threshold, vol windows, frozen vol median, detector list and windows, warm-up |
-| `definition_hash` | String(64) | sha256 of canonical JSON. UNIQUE with (`reference`, `catalog`, `label_set`), so the same definition is never stored twice |
+| `version` | Integer | 1, 2, ... per (`reference`, `catalog`, `label_set`); UNIQUE together. "Latest" lookups always filter on all three, so a second catalog can never silently replace the price series |
+| `definition` | JSONB | **parameters only**: scales and ATR multiples, ER window and threshold, vol windows, detector list and windows, warm-up. Nothing derived from data |
+| `definition_hash` | String(64) | sha256 of canonical `definition` JSON. UNIQUE with (`reference`, `catalog`, `label_set`), so the same definition is never stored twice. The default definition is a constant, so its hash can be pinned by test |
+| `frozen_stats` | JSONB | values derived from data at version creation and never recomputed: the ground-truth volatility median and the sample window it was cut over (section 3). Not hashed. Set once on insert |
+| `bars_fingerprint` | JSONB | sha256 of the per-date OHLC the version was built from, kept per year-chunk with the overall hash. A build checks the overlapping history against it and refuses (`reference_bars_changed`) when past bars differ, for example after a re-import with back-adjusted prices. Re-labelling then needs a new version |
 | `data_start`, `data_end` | Date | the bar range the latest build read |
 | `git_commit` | String(40) | code that built it |
 | `created_at`, `updated_at` | timestamptz | `updated_at` moves only when a build appends days |
@@ -229,6 +231,11 @@ and a PL/pgSQL trigger `regime_labels_append_only` enforces the same rules in th
 - A ground-truth row may change a `null` value to a value (the future it needed has arrived).
   It may never change a set value. Any other change raises.
 - `DELETE` on either table raises. Versions are never removed.
+- A second trigger, `regime_versions_immutable`, rejects any `UPDATE` of a version row except
+  one that moves `data_end` forward, extends `bars_fingerprint` with new chunks (existing
+  chunks unchanged), and touches `updated_at`. `definition`, `definition_hash`,
+  `frozen_stats`, `reference`, `catalog`, `label_set`, `version` and `data_start` can never
+  change.
 - A changed definition gets a new `definition_hash`, so `build_regime_calendar` creates a
   **new version**. It never edits an old one.
 
@@ -257,8 +264,11 @@ exists (the web UI is out of scope). The doc gains that note.
   Run days with no reference session of their own, such as weekends or exchange holidays,
   take the most recent earlier label. That is the label "in force".
 - **Ground-truth labels** (lag fixed at 0): the run's day *d* takes the label dated exactly
-  *d*. A day with no reference session is **unlabelled**. `lag_days` is refused for
-  `label_set="ground_truth"`.
+  *d*. A day with no reference session is **unlabelled**.
+- **`lag_days` default**: the parameter is `lag_days: int | None = None`, resolved per label
+  set (detector → 1, ground truth → 0). An explicit `lag_days` with
+  `label_set="ground_truth"` is refused (`lag_not_allowed`), even when it is 0, so a caller
+  can never believe a lag was applied to hindsight labels.
 - **Unlabelled days** (warm-up, ground truth not yet final, no reference session, bars past
   the catalog end) form their own `unlabelled` row. Their P&L is reported, so the totals
   reconcile. Time share is over labelled days only (spec).
@@ -281,8 +291,10 @@ Pure functions over a DataFrame of daily `high`, `low`, `close` indexed by sessi
   `|C(d+10) − C(d−10)| / Σ|ΔC|` < 0.3. `null` within 10 sessions of either end of the data.
 - **Volatility**: annualised standard deviation of close-to-close returns over the same
   centred 21 sessions. It is `high` when above the median. The median is taken over the
-  version's **frozen sample window**: the bars available when the version was created, stored
-  in `definition` as `vol_median_window` with the median's value. Without the freeze, every
+  version's **frozen sample window**: the bars available when the version was created. Its
+  value and window are stored in the version's `frozen_stats`, not in the hashed
+  `definition` (section 1), so the default definition stays a constant and a build over new
+  bars appends to the same version. Without the freeze, every
   extension of the data would move the median and silently rewrite old labels, breaking the
   "rebuild reproduces" check and the append-only rule. Re-cutting the median on longer history
   is a new version. (Section 13, Q9: Allay may prefer a re-cut on every extension, each as a
@@ -364,10 +376,29 @@ bucket's daily returns in date order: 1,000 resamples, 10-day blocks, and an exp
 A bucket with fewer than `min_days` (60) days **or** fewer than `min_trades` (20) trades entered
 is `insufficient: true`. It is reported, but no verdict rule may cite it.
 
+The phase 2 stop-rule reading has **three** outcomes per ground-truth label family, not two:
+
+- `strong_dependence`: one sufficient bucket's interval is entirely below zero and another's
+  is entirely above.
+- `no_dependence`: at least two buckets in the family are sufficient and neither pattern
+  holds.
+- `insufficient_evidence`: fewer than two buckets in the family are sufficient.
+
+Only `no_dependence` at every family and for both baselines supports "stop after phase 2".
+`insufficient_evidence` is reported as such, with the counts that fell short. A low-frequency
+strategy (for example `c4c9c098`, 117 trades in 11 years) can then never read as "regime does
+not matter" just because it trades rarely. Allay decides what to do with it: more history,
+more instruments, or a judgement on the daily-only numbers (section 13, Q12).
+
 ### 5.5 Exposure
 
-A day counts as exposed when any trade was open at some point during it: `entry_timestamp` ≤
-the end of *d*, and `exit_timestamp` is NULL or ≥ the start of *d*.
+A day *d* counts as exposed when a position was **carried into it**: some trade has
+`entry_timestamp` before the session close of the previous run day, and an `exit_timestamp`
+that is NULL or after that close. That matches `pnl(d)`, which is measured from the previous
+close. A position opened at *d*'s own bar earned none of *d*'s return, so it does not count,
+and it does not inflate exposure × benchmark in the drift rule. Positions opened and closed
+inside *d* (intraday strategies) count *d* as exposed through a second test: entry and exit
+both fall within *d*.
 
 ### 5.6 Benchmark return
 
@@ -379,10 +410,16 @@ report states which.
 ### 5.7 Trade view and alignment (phase 4)
 
 - **Trade view**: closed trades bucketed by the label in force on the entry day, using the
-  same lag rule as section 2. Metrics: trades, win rate, average win and loss, expectancy and
-  profit factor. Open trades are counted separately.
-- **Exit check**: Σ bucket closed trades = `performance_metrics.total_trades`, and closed plus
-  open = trade rows.
+  same lag rule as section 2. A trade entered on a day with no label (warm-up, ground truth
+  not yet final, past the catalog end, no reference session) goes in an `unlabelled` row, as
+  in the daily view. Metrics: trades, win rate, average win and loss, expectancy and profit
+  factor. Open trades are counted separately.
+- **Reuse**: point statistics (`sharpe`, `profit_factor`, `win_rate`) and the seeded i.i.d.
+  interval helpers come from `src/core/robustness/bootstrap.py`, so a bucket's numbers use the
+  same definitions as the run's stored metrics and `run_monte_carlo`. Only the circular block
+  bootstrap (5.3) is new code.
+- **Exit check**: Σ bucket closed trades, `unlabelled` included, =
+  `performance_metrics.total_trades`, and closed plus open = trade rows.
 - **Alignment**: `BUY` entered under `up`, or `SELL` under `down`, is **with-trend**. Anything
   else with a label is counter-trend. It is computed per trend definition.
 - **Intervals**: the trade-view expectancy interval is an i.i.d. bootstrap over trades, used
@@ -458,7 +495,7 @@ job). The benchmark parameter is `benchmark_symbol` plus `catalog`, as in
 | `reference` | `benchmark_symbol` (default `SPY`) + `catalog` (default `firstrate-etf`) | 1 | existing parameter names |
 | `trend_window`, `vol_window`, `vol_lookback` | **not attribution parameters**. They live in the calendar `definition` (`build_regime_calendar(definition_overrides=...)`) | 1/3 | The spec says every tool reads labels from the calendar and computes none of its own. A different window is a different calendar version, declared as a robustness check |
 | `label_set` | `label_set`: `"detector"` (default) or `"ground_truth"` | 2 | kept |
-| `lag_days`, `min_days`, `min_trades`, `bootstrap_samples` | kept, defaults 1, 60, 20, 1000 | 2 | kept. `seed` (default 0) added for reproducible intervals, as `run_monte_carlo` has |
+| `lag_days`, `min_days`, `min_trades`, `bootstrap_samples` | kept. `lag_days: int \| None = None` (detector → 1; refused if given with ground truth, section 2). Others default 60, 20, 1000 | 2 | kept. `seed` (default 0) added for reproducible intervals, as `run_monte_carlo` has |
 | (new) `calendar_version` | optional int; latest by default | 2 | a report can pin an older version |
 | (vault file) | `export_results(slug, regime_report=<report_id>)` writes `<slug>.regime.json` and `<slug>.regime.md` | 2 | additive option on the existing vault writer, so `NTRADER_MCP_EXPORT_FOLDERS` still governs writes |
 
@@ -493,7 +530,7 @@ pointing at the regime tools.
 
 | Rule (spec) | Enforcement |
 |---|---|
-| Ground-truth labels are **never** exported to a strategy, config, sweep or filter | (1) Governance unit test `tests/unit/governance/test_regime_ground_truth_boundary.py`: an AST scan of `src/**` (and the strategies submodule when it is checked out). Only `src/core/regimes/{attribution,scorecard}.py`, `src/mcp_server/analysis/regime_*.py` and the calendar build may import `src.core.regimes.ground_truth`, and only those may read ground-truth rows from the regime repository; the scan pins that set against the code. (2) `run_regime_filter_test` refuses `label_set="ground_truth"`. (3) `submit_backtest`, `submit_sweep` and `validate_config` are unchanged and gain no regime parameter. (4) `export_bars` does not export labels |
+| Ground-truth labels are **never** exported to a strategy, config, sweep or filter | (1) Governance unit test `tests/unit/governance/test_regime_ground_truth_boundary.py`: an AST scan of `src/**` (and the strategies submodule when it is checked out) that resolves relative imports (`from . import ground_truth`) as well as absolute ones. The permitted set is an explicit list of **named files**, never a glob: `src/core/regimes/attribution.py`, `src/core/regimes/scorecard.py`, `src/mcp_server/analysis/regime_calendar.py` (build and read) and `src/mcp_server/analysis/regime_reports.py`. Only these may import `src.core.regimes.ground_truth` or call the repository's ground-truth reader. `src/core/regimes/filter_test.py` and any filter-test glue are named as **forbidden**, and the filter-test entry point lives in its own module (`src/mcp_server/analysis/regime_filter.py`) so the test can tell it apart. The test pins the set against the code. (2) `run_regime_filter_test` refuses `label_set="ground_truth"`, and its glue reads detector versions only. (3) `submit_backtest`, `submit_sweep` and `validate_config` are unchanged and gain no regime parameter. (4) `export_bars` does not export labels |
 | Every report built from ground-truth labels is stamped "hindsight, not tradeable" | `hindsight: true` and `stamp: "hindsight, not tradeable"` at the top level of every tool payload, stored report and vault file that read a ground-truth version. `get_regime_labels(label_set="ground_truth")` carries the stamp too. A component test asserts it for each tool |
 | Detector labels are append-only | repository (no update or delete) + DB trigger (section 1) + integration test against Postgres (`tests/integration/db/`) |
 | A definition change creates a new version | `definition_hash` uniqueness. `build_regime_calendar` with a changed definition creates version n+1 and leaves version n untouched (integration test) |
@@ -522,7 +559,8 @@ while the dashboard runs, integration tier `--forked`.
   test-coverage` (src/core).
 - `src/db/models/regime.py`, `src/db/repositories/regime_repository_sync.py`, two migrations.
 - `src/mcp_server/analysis/regime_calendar.py` (build and read glue: catalog bars → core →
-  repository) and `regime_reports.py` (run inputs → core → stored report).
+  repository), `regime_reports.py` (run inputs → core → stored report) and `regime_filter.py`
+  (phase 6; detector versions only, kept separate for the boundary test in section 9).
 - `src/mcp_server/tools/regimes.py` (registration).
 - Each new file stays under 500 statement lines, and functions under 50. No baseline entry is
   expected.
@@ -577,4 +615,7 @@ while the dashboard runs, integration tier `--forked`.
     profile filed against a study add four entries to that study's trial ledger, or is a note
     in the record enough? The ledger today counts engine jobs only.
 12. **Stop-rule reading.** At the end of phase 2, the reading of "no dependence under the
-    ground-truth labels" is yours. Phases 3-6 start only on your explicit go-ahead.
+    ground-truth labels" is yours. Phases 3-6 start only on your explicit go-ahead. If a
+    family comes back `insufficient_evidence` (section 5.4), most likely for the
+    low-frequency Bollinger run, do you want more history or instruments first, or a
+    judgement on the daily-view numbers alone?

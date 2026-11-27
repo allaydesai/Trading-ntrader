@@ -4,10 +4,21 @@
 `run_regime_attribution` SHALL take one or more completed run ids and SHALL build each run's
 profile from that run's stored daily mark-to-market equity, its stored trades and the stored
 calendar rows. It SHALL compute no labels of its own. It SHALL refuse a run whose stored curve
-is not on the `mark_to_market` basis. With `label_set="detector"` (the default), the label in
-force on run day *d* SHALL be the one dated `lag_days` (default 1) reference sessions before
-*d*. With `label_set="ground_truth"`, the label SHALL be the one dated *d*, with no lag, and
-any `lag_days` SHALL be refused.
+is not on the `mark_to_market` basis. `lag_days` SHALL default to unset and SHALL resolve per
+label set. With `label_set="detector"` (the default), the label in force on run day *d* SHALL
+be the one dated `lag_days` (1 when unset) reference sessions before *d*. With
+`label_set="ground_truth"`, the label SHALL be the one dated *d*, with no lag, and any
+explicitly given `lag_days`, 0 included, SHALL be refused with `lag_not_allowed`.
+
+#### Scenario: ground truth without a lag argument
+- **WHEN** `run_regime_attribution` is called with `label_set="ground_truth"` and no
+  `lag_days`
+- **THEN** it runs with lag 0, and the report records `lag_days: 0`
+
+#### Scenario: ground truth with a lag argument
+- **WHEN** `run_regime_attribution` is called with `label_set="ground_truth"` and
+  `lag_days=1`
+- **THEN** it refuses with `lag_not_allowed`
 
 #### Scenario: realised-basis run
 - **WHEN** `run_regime_attribution` is called with a run whose `metrics_basis` is not
@@ -83,21 +94,33 @@ SHALL be a new row.
 - **THEN** the report lists `min_days: 40` under `overrides`
 
 ### Requirement: Stop rule after phase 2
-The phase 2 profile SHALL report, for each ground-truth label family, whether the run shows
-strong dependence: at least one sufficient bucket's interval entirely below zero and another's
-entirely above. Phases 3-6 SHALL NOT start until Allay has read the phase 2 profiles of the
-trend and mean-reversion baselines and given an explicit go-ahead.
+The phase 2 profile SHALL report one outcome for each ground-truth label family:
+- `strong_dependence`: at least one sufficient bucket's interval is entirely below zero and
+  another's is entirely above
+- `no_dependence`: at least two buckets are sufficient and that pattern does not hold
+- `insufficient_evidence`: fewer than two buckets are sufficient, with the shortfall counts
+
+Only `no_dependence` for every family of both baselines SHALL support "stop after phase 2".
+Phases 3-6 SHALL NOT start until Allay has read the phase 2 profiles of the trend and
+mean-reversion baselines and given an explicit go-ahead.
 
 #### Scenario: no dependence
-- **WHEN** neither baseline shows strong dependence at any ground-truth scale
+- **WHEN** both baselines report `no_dependence` for every ground-truth family
 - **THEN** the phase 2 record states the stop-rule outcome "stop after phase 2", and no phase
   3-6 task is started
 
+#### Scenario: too few trades is not "no dependence"
+- **WHEN** a low-frequency baseline has fewer than two buckets with 20 or more trades entered
+  in a family
+- **THEN** that family reports `insufficient_evidence` with the counts, and that family does
+  not count towards the stop outcome
+
 ### Requirement: Trade view, alignment and verdicts follow the spec's fixed rules
-The trade view SHALL bucket closed trades by the label in force on their entry day. Per bucket
-it SHALL report trades, win rate, average win and loss, expectancy and profit factor, and it
-SHALL count open trades separately. The bucketed closed trades SHALL sum to the run's
-`total_trades`. Each trade SHALL be tagged with-trend (a `BUY` entered under `up`, or a `SELL`
+The trade view SHALL bucket closed trades by the label in force on their entry day. Trades
+entered on a day with no label SHALL go in an `unlabelled` row. Per bucket it SHALL report
+trades, win rate, average win and loss, expectancy and profit factor, using the same metric
+definitions as the run's stored metrics, and it SHALL count open trades separately. The
+bucketed closed trades, `unlabelled` included, SHALL sum to the run's `total_trades`. Each trade SHALL be tagged with-trend (a `BUY` entered under `up`, or a `SELL`
 under `down`) or counter-trend for each trend definition. Verdicts SHALL be the spec's fixed
 rules (including the 70% / 30% concentration rule, the three-of-four panel rule, the
 direction-gate rule and the drift rule), with thresholds held as constants and not exposed as
