@@ -95,8 +95,13 @@ convention per series, read on the New York wall clock (so DST moves only the UT
 - 00:00 New York: the session date itself. FirstRate ETF **and futures** daily bars are
   stamped this way.
 - 17:00 New York: the CME session open, so the bar belongs to the next calendar day
-  (`D-1 17:00` → `D`; Sunday's open → Monday). This is the FX importer's stamp. A
-  Friday or Saturday 17:00 has no session and is refused; a holiday has no bar, so no date.
+  (`D-1 17:00` → `D`; Sunday's open → Monday), for a CME daily series stamped at its
+  session open (none is today). A Friday or Saturday 17:00 has no session and is refused; a
+  holiday has no bar, so no date. A 00:00 stamp on a Saturday or Sunday is refused too.
+
+FX has no regime calendar: its daily bars are `MID` (the calendar reads `1-DAY-LAST`), and
+the FX importer keeps out-of-session weekend bars, which this guard refuses by design. FX
+trade days use their own rule, `src/services/fx/sessions.py`.
 
 Any other stamp, or a series mixing both, is refused with `unsupported_session_stamp`,
 never keyed by its UTC date.

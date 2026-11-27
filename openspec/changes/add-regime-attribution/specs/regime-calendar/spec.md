@@ -26,8 +26,10 @@ The system SHALL key every label row by the session date its daily bar belongs t
 the bar's stamp on the New York wall clock. A bar stamped at 00:00 New York SHALL be its own
 session date. A bar stamped at 17:00 New York, the CME session open, SHALL be the next
 calendar day's session, so Sunday's open is Monday. A series SHALL use one convention. Any
-other stamp, a Friday or Saturday 17:00 open, or a series mixing conventions SHALL be refused
-with `unsupported_session_stamp` and nothing written. ES and NQ SHALL each get their own
+other stamp, a Friday or Saturday 17:00 open, a 00:00 stamp on a Saturday or Sunday, or a
+series mixing conventions SHALL be refused with `unsupported_session_stamp` and nothing
+written. Out-of-session bars are not dropped or remapped: the calendar is for exchange
+references (ETFs, CME futures), and FX keeps its own trade-day rule and has no calendar. ES and NQ SHALL each get their own
 versions in `firstrate-futures`, never SPY's labels.
 
 #### Scenario: futures session open across daylight saving
