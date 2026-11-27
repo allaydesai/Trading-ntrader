@@ -327,3 +327,18 @@ async def test_a_negative_seed_is_refused_with_a_fix(server, store, bars):
     run_id = seed_run(store, _run_days(bars["frame"], 300))
     data = await _call(server, "run_regime_attribution", {"run_ids": [run_id], "seed": -1})
     assert data["ok"] is False and data["error"]["code"] == "invalid_seed"
+
+
+async def test_a_changed_benchmark_bar_is_refused_not_silently_reread(server, store, bars):
+    """The benchmark closes are checked against the calendar's stored bar hashes, so a
+    rerun cannot pick up a corrected historical close while labels_hash still matches."""
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    first = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
+    assert first["ok"] is True
+    changed = bars["frame"].copy()
+    changed.iloc[450, changed.columns.get_loc("close")] *= 1.01
+    bars["frame"] = changed
+    again = await _call(server, "run_regime_attribution", {"run_ids": [run_id], "as_of_build": 1})
+    assert again["ok"] is False and again["error"]["code"] == "reference_bars_changed"
+    assert "new_revision" in again["error"]["fix"]

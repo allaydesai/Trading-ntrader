@@ -46,7 +46,7 @@ STAMP = "hindsight, not tradeable"
 MAX_LABEL_ROWS = 5000
 _EARLIEST = datetime(1970, 1, 1, tzinfo=timezone.utc)  # Nautilus times are unsigned ns
 _LATEST = datetime(2100, 1, 1, tzinfo=timezone.utc)
-_REBUILD_FIX = (
+REBUILD_FIX = (
     "Label the changed bars as a new input revision: build_regime_calendar(new_revision=true, "
     "revision_reason='reference_bars_changed'). The stored version is kept as it is."
 )
@@ -192,7 +192,7 @@ def _plan_existing(
             "reference_bars_changed",
             f"{version.reference} {plan.label_set} v{version.version}: the catalog's bars no "
             f"longer match the stored range ({diff['kind']} on {diff['date']}).",
-            fix=_REBUILD_FIX,
+            fix=REBUILD_FIX,
             details={**diff, "label_set": plan.label_set, "version": version.version},
         )
     computed = dict(zip(bars.index, _labels_for(plan, bars, version.frozen_stats)))

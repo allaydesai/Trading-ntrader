@@ -96,6 +96,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Downgrade schema (drops every stored regime report: only for a dev database)."""
+    """Downgrade schema; refused while any stored report exists (reports are never lost)."""
+    stored = op.get_bind().execute(sa.text("SELECT count(*) FROM regime_reports")).scalar()
+    if stored:
+        raise RuntimeError(
+            f"regime_reports holds {stored} stored report(s); a downgrade would delete them. "
+            "Export them first and empty the table deliberately if they really must go."
+        )
     op.drop_table("regime_reports")
     op.execute("DROP FUNCTION IF EXISTS regime_reports_append_only()")

@@ -35,7 +35,12 @@ from src.core.regimes.attribution import (
     profile,
 )
 from src.core.regimes.bootstrap import CONFIDENCE, MEAN_BLOCK
-from src.core.regimes.definition import LABEL_SETS, build_definition, definition_hash
+from src.core.regimes.definition import (
+    LABEL_SETS,
+    bar_hash,
+    build_definition,
+    definition_hash,
+)
 from src.core.regimes.trade_view import correlation
 from src.db.models.regime import RegimeCalendarVersion, RegimeReport
 from src.db.models.trade import Trade
@@ -45,6 +50,7 @@ from src.db.repositories.regime_repository_sync import (
 )
 from src.db.session_sync import get_sync_session
 from src.mcp_server.analysis.regime_calendar import (
+    REBUILD_FIX,
     STAMP,
     calendar_version_for,
     load_reference_bars,
@@ -82,6 +88,8 @@ class _Read:
     build: int
     calendar: Calendar
     labels_hash: str
+    #: Each session's stored OHLC fingerprint: the benchmark closes are checked against it.
+    bar_hashes: dict[date, str]
 
 
 def _resolve_lag(label_set: str, lag_days: int | None) -> int:
@@ -142,7 +150,37 @@ def _read_calendar(
     rows = [r for r in reader(version, as_of_build=build) if r.session_date <= data_end]
     calendar = Calendar(key[2], [r.session_date for r in rows], [r.labels for r in rows], data_end)
     digest = labels_hash([(r.session_date, r.labels) for r in rows])
-    return _Read(version, build, calendar, digest)
+    return _Read(version, build, calendar, digest, {r.session_date: r.bar_hash for r in rows})
+
+
+def _benchmark_closes(bars: pd.DataFrame, read: _Read) -> pd.Series:
+    """The reference's closes up to the build's ``data_end``, refused unless every session
+    matches the calendar's stored bar fingerprint, so a rerun as of a recorded build can
+    never read a changed historical close while its ``labels_hash`` still matches."""
+    inside = bars[bars.index <= read.calendar.data_end]
+    start = min(read.bar_hashes) if read.bar_hashes else read.calendar.data_end
+    inside = inside[inside.index >= start]
+    found = {
+        day: bar_hash(*row)
+        for day, row in zip(
+            inside.index, inside[["open", "high", "low", "close"]].itertuples(False)
+        )
+    }
+    differing = sorted(
+        day
+        for day in set(found) | set(read.bar_hashes)
+        if found.get(day) != read.bar_hashes.get(day)
+    )
+    if differing:
+        raise ToolFailure(
+            "reference_bars_changed",
+            f"{read.version.reference}'s bars in '{read.version.catalog}' no longer match "
+            f"calendar v{read.version.version} ({len(differing)} session(s), first "
+            f"{differing[0]}); the benchmark return would not reproduce.",
+            fix=REBUILD_FIX,
+            details={"first_date": differing[0], "sessions": len(differing)},
+        )
+    return inside["close"]
 
 
 def _trades(session: Session, sleeve: Sleeve) -> list[TradeRecord]:
@@ -302,8 +340,7 @@ def run_regime_attribution(
             SyncRegimeRepository(session), (reference, catalog, label_set),
             calendar_version, as_of_build,
         )  # fmt: skip
-    closes = load_reference_bars(catalog, reference)["close"]
-    closes = closes[closes.index <= read.calendar.data_end]
+    closes = _benchmark_closes(load_reference_bars(catalog, reference), read)
     params, overrides = _params([s.run_id for s in sleeves], label_set, lag, given, read)
     runs, frames = [], {}
     for sleeve in sleeves:
