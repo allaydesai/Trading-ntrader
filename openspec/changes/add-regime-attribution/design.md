@@ -708,7 +708,9 @@ Allay answered these on 2026-11-26. Each entry keeps the question and records th
     | 0.25 | 3,961 / 6,602 | 60.0% |
     | 0.30 | 4,598 / 6,602 | 69.6% (= stored v1) |
 
-    Everything else is unchanged (wave scales, ATR20, the volatility label and its frozen
-    median, data source and range). v1 stays stored as it is; the default definition is now
+    Everything else is unchanged (wave scales, ATR20, the volatility label, data source and
+    range). The v2 build re-froze the median over the same, unchanged catalog, and it was
+    checked equal to v1's (0.13723, 2000-01-03 → 2026-05-01); a later catalog would have made
+    that a re-cut, so the check is part of the build record. v1 stays stored as it is; the default definition is now
     0.2, and v1 is reached with `definition_overrides={"ground_truth": {"ranging_threshold":
     0.3}}`.

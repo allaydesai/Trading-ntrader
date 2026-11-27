@@ -36,8 +36,8 @@ updated or deleted. The wave-leg chart looks right to Allay.
     at the extreme's date.
   - Leg days are (trough, peak] and (peak, trough].
   - Days before the first and after the last turning point are `null`.
-  - Ranging uses the centred 21-session efficiency ratio < 0.3, `null` within 10 sessions of
-    either end.
+  - Ranging uses the centred 21-session efficiency ratio < `ranging_threshold` (0.3 in v1,
+    0.2 from v2, task 2.0), `null` within 10 sessions of either end.
   - Volatility is centred 21-session volatility against a frozen median.
   - Finality: appending bars never changes a label that is already set.
 - [x] 1.3 Implement `src/core/regimes/ground_truth.py` (pure).

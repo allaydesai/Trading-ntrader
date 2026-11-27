@@ -22,12 +22,17 @@ Definitions (`src/core/regimes/definition.py`) hold parameters only; the default
 pinned in `tests/unit/core/regimes/test_definition.py`. A changed parameter is a new version
 (`build_regime_calendar(definition_overrides={"detector": {"sma200": {"window": 150}}})`).
 
-Stored SPY versions (`firstrate-etf`):
+Stored SPY versions (`firstrate-etf`). Without `version`, `get_regime_labels` reads the
+default definition's calendar, which is v2 for ground truth since the 0.2 default; a database
+holding only v1 answers `no_calendar` until `build_regime_calendar()` is run once. Pass
+`version=1` to read v1. A new version freezes the volatility median over the catalog **as
+it is when the version is created**, so compare a new version's `frozen_stats` and range with
+the version it replaces before comparing labels.
 
 | Label set | Version | Definition | Note |
 |---|---|---|---|
 | `ground_truth` | 1 | `ranging_threshold` 0.3 (hash `5fc1c016…`) | phase 1; ranging on 70% of sessions. Extend or verify it with `definition_overrides={"ground_truth": {"ranging_threshold": 0.3}}` |
-| `ground_truth` | 2 | default, `ranging_threshold` 0.2 (hash `45e4389e…`) | phase 2 on (design.md Q14); same frozen median and range as v1 |
+| `ground_truth` | 2 | default, `ranging_threshold` 0.2 (hash `45e4389e…`) | phase 2 on (design.md Q14). Built 2026-11-27 from the unchanged catalog: frozen median (0.13723) and range checked equal to v1's |
 | `detector` | 1 | default (`sma200`) | unchanged by the ground-truth v2 |
 
 ## Rules
