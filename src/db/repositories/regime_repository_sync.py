@@ -15,11 +15,17 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.orm import Session
 
-from src.db.models.regime import RegimeCalendarBuild, RegimeCalendarVersion, RegimeLabel
+from src.db.models.regime import (
+    RegimeCalendarBuild,
+    RegimeCalendarVersion,
+    RegimeLabel,
+    RegimeReport,
+)
 
 
 @dataclass(frozen=True)
@@ -201,3 +207,35 @@ def _as_of(row: RegimeLabel, build: int | None) -> LabelRow:
             if set_at is not None and set_at > build:
                 labels[key], set_in[key] = None, None
     return LabelRow(row.session_date, labels, row.bar_hash, row.inserted_in_build, set_in)
+
+
+class UnknownCalendarBuild(ValueError):
+    """A report names a (version, build) pair the calendar has no record of."""
+
+
+class SyncRegimeReportRepository:
+    """Stored regime reports: insert and read only (the table is append-only)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def add_report(self, row: RegimeReport) -> RegimeReport:
+        """Insert a report after checking every (version, build) it names exists.
+
+        The ``regime_reports_append_only`` trigger enforces the same rule; this check
+        only turns its error into a typed one before anything is sent.
+        """
+        if not row.calendar_version_ids:
+            raise UnknownCalendarBuild("a report must name the calendar versions it read")
+        for entry in row.calendar_version_ids:
+            key = (int(entry["version_id"]), int(entry["build_no"]))
+            if self.session.get(RegimeCalendarBuild, key) is None:
+                raise UnknownCalendarBuild(f"no calendar build {key[1]} of version {key[0]}")
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def find_report(self, report_id: UUID) -> RegimeReport | None:
+        """A stored report by its public id."""
+        stmt = select(RegimeReport).where(RegimeReport.report_id == report_id)
+        return self.session.scalars(stmt).first()

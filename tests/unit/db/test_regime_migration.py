@@ -22,8 +22,11 @@ _MIGRATION = (
 )
 
 
-def _migration():
-    spec = importlib.util.spec_from_file_location("m_a7c3e91d5b20", _MIGRATION)
+_REPORTS_MIGRATION = _MIGRATION.with_name("c81e5a4d9f27_add_regime_reports_table.py")
+
+
+def _migration(path: Path = _MIGRATION):
+    spec = importlib.util.spec_from_file_location(f"m_{path.stem[:12]}", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -46,3 +49,16 @@ def test_trigger_sql_survives_ddl_formatting():
         for statement in statements:
             assert "%" not in statement
             assert "::" not in statement
+
+
+def test_reports_revision_follows_the_calendar_revision():
+    module = _migration(_REPORTS_MIGRATION)
+    assert module.revision == "c81e5a4d9f27"
+    assert module.down_revision == "a7c3e91d5b20"
+
+
+def test_reports_trigger_sql_matches_the_model():
+    assert _migration(_REPORTS_MIGRATION).REPORTS_TRIGGER_DDL == regime.REPORTS_TRIGGER_DDL
+    for _table, statements in regime.REPORTS_TRIGGER_DDL:
+        for statement in statements:
+            assert "%" not in statement and "::" not in statement
