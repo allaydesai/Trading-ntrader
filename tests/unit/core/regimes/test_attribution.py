@@ -17,6 +17,7 @@ from src.core.regimes.attribution import (
     benchmark_returns,
     carried_sides,
     daily_frame,
+    exposed_days,
     labels_in_force,
     profile,
 )
@@ -127,6 +128,20 @@ def test_exposure_counts_positions_carried_in_from_the_previous_close():
     ]
     sides = carried_sides(days, trades)
     assert list(sides) == [0, 0, 1, 1, 0, -1]
+    assert list(exposed_days(days, trades)) == [False, False, True, True, False, True]
+
+
+def test_a_same_day_round_trip_never_cancels_a_carried_position():
+    """A long carried in and a short opened and closed the same day: still exposed, and the
+    drift side is the carried long, not the net of the two."""
+    days = _sessions(4)
+    trades = [
+        TradeRecord(_at(days[0]), _at(days[2], 15), "BUY", 5.0),
+        TradeRecord(_at(days[2], 16), _at(days[2], 19), "SELL", 1.0),
+        TradeRecord(_at(days[3], 14), _at(days[3], 19), "BUY", 1.0),  # round trip only
+    ]
+    assert list(carried_sides(days, trades)) == [0, 1, 1, 0]
+    assert list(exposed_days(days, trades)) == [False, True, True, True]
 
 
 def test_benchmark_return_is_the_references_close_to_close_on_the_day():
@@ -216,7 +231,8 @@ def test_benchmark_and_drift_cover_the_buckets_days():
     in_up = np.array([v == "up" for v in labels])
     assert up["benchmark_ann_return"] == pytest.approx(np.nanmean(bench[in_up]) * 252, abs=1e-6)
     sides = carried_sides(list(frame.index), trades)
-    assert up["exposure"] == pytest.approx(np.mean(sides[in_up] != 0), abs=1e-4)
+    exposed = exposed_days(list(frame.index), trades)
+    assert up["exposure"] == pytest.approx(np.mean(exposed[in_up]), abs=1e-4)
     expected_drift = np.nanmean(np.where(np.isnan(bench), 0, bench)[in_up] * sides[in_up]) * 252
     assert up["drift_return"] == pytest.approx(expected_drift, abs=1e-6)
 

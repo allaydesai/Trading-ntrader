@@ -116,10 +116,11 @@ def _utc_date(stamp: datetime) -> date:
     return pd.Timestamp(stamp).tz_convert("UTC").date()
 
 
-def carried_sides(days: list[date], trades: list[TradeRecord]) -> np.ndarray:
-    """Per day: +1 long, -1 short, 0 flat, for positions carried in or round-tripped inside."""
-    if not trades or not days:
-        return np.zeros(len(days), dtype=int)
+def _positions(
+    days: list[date], trades: list[TradeRecord]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(carried, inside, sign)``: day x trade masks of positions carried in from the
+    previous close and of round trips opened and closed within the day, and each side."""
     day = np.array(days, dtype="datetime64[D]")[:, None]
     entry = np.array([_utc_date(t.entry) for t in trades], dtype="datetime64[D]")[None, :]
     far = np.datetime64("9999-12-31")
@@ -128,7 +129,25 @@ def carried_sides(days: list[date], trades: list[TradeRecord]) -> np.ndarray:
     carried = (entry < day) & (exit_ >= day)
     inside = (entry == day) & (exit_ == day)
     sign = np.array([1 if t.side.upper() == "BUY" else -1 for t in trades])[None, :]
-    return np.sign(((carried | inside) * sign).sum(axis=1)).astype(int)
+    return carried, inside, sign
+
+
+def carried_sides(days: list[date], trades: list[TradeRecord]) -> np.ndarray:
+    """Per day: +1 long, -1 short, 0 flat, from the positions carried in from the previous
+    close (the ones that earn the day's close-to-close move). A same-day round trip never
+    changes it, so it can never cancel a carried position."""
+    if not trades or not days:
+        return np.zeros(len(days), dtype=int)
+    carried, _, sign = _positions(days, trades)
+    return np.sign((carried * sign).sum(axis=1)).astype(int)
+
+
+def exposed_days(days: list[date], trades: list[TradeRecord]) -> np.ndarray:
+    """Per day: whether any position was carried in, or opened and closed within the day."""
+    if not trades or not days:
+        return np.zeros(len(days), dtype=bool)
+    carried, inside, _ = _positions(days, trades)
+    return (carried | inside).any(axis=1)
 
 
 def benchmark_returns(days: list[date], closes: pd.Series) -> np.ndarray:
@@ -145,7 +164,9 @@ def _rounded(value: float | None, places: int = 6) -> float | None:
     return round(float(value), places)
 
 
-def _metrics(pnl: np.ndarray, ret: np.ndarray, bench: np.ndarray, sides: np.ndarray) -> dict:
+def _metrics(
+    pnl: np.ndarray, ret: np.ndarray, bench: np.ndarray, sides: np.ndarray, exposed: np.ndarray
+) -> dict:
     n = len(ret)
     finite_bench = bench[np.isfinite(bench)]
     return {
@@ -158,7 +179,7 @@ def _metrics(pnl: np.ndarray, ret: np.ndarray, bench: np.ndarray, sides: np.ndar
         "sharpe": _rounded(sharpe(ret)),
         "worst_day": _rounded(float(ret.min()) if n else None),
         "mean_daily_return": _rounded(float(ret.mean()) if n else None, 8),
-        "exposure": _rounded(float(np.mean(sides != 0)) if n else None, 4),
+        "exposure": _rounded(float(np.mean(exposed)) if n else None, 4),
         "benchmark_ann_return": _rounded(
             float(finite_bench.mean()) * TRADING_DAYS if len(finite_bench) else None
         ),
@@ -174,8 +195,7 @@ def _entry_buckets(trades: list[TradeRecord], calendar: Calendar, key: str, lag:
 
 
 def _masked(arrays: tuple[np.ndarray, ...], mask: np.ndarray) -> dict[str, Any]:
-    pnl, ret, bench, sides = arrays
-    return _metrics(pnl[mask], ret[mask], bench[mask], sides[mask])
+    return _metrics(*(values[mask] for values in arrays))
 
 
 def _bucket_row(
@@ -227,7 +247,7 @@ def _family(
     """One label family's rows, unlabelled row, total row, reconciliation and outcome."""
     frame = inputs["frame"]
     pnl, ret = frame["pnl"].to_numpy(float), frame["ret"].to_numpy(float)
-    arrays = (pnl, ret, inputs["bench"], inputs["sides"])
+    arrays = (pnl, ret, inputs["bench"], inputs["sides"], inputs["exposed"])
     names = np.array([b or UNLABELLED for b in day_buckets], dtype=object)
     context: dict[str, Any] = {
         "entry_buckets": entry_buckets,
@@ -344,6 +364,7 @@ def profile(
         "initial": initial,
         "bench": benchmark_returns(days, closes),
         "sides": carried_sides(days, trades),
+        "exposed": exposed_days(days, trades),
         "trades": trades,
     }
     params = {"min_days": min_days, "min_trades": min_trades, "samples": samples, "seed": seed}
