@@ -21,8 +21,17 @@ READER = "ground_truth_labels"
 #: Ways past the named reader: the repository's untyped reader, the label model and the
 #: table name in raw SQL. Only the model and repository files may use them.
 RAW_ACCESS = ("_read_labels", "RegimeLabel", "regime_labels")
+#: The table right after a keyword, or later in a comma-separated FROM list
+#: (``FROM foo f, regime_labels l``; the list ends at the next clause keyword), optionally
+#: ``ONLY`` or ``ONLY (...)``, schema-qualified and quoted.
+_FROM_LIST_END = r"\b(?:where|group|order|having|limit|offset|union|intersect|except|returning)\b"
 RAW_SQL = re.compile(
-    r'\b(from|join|into|update|table)\s+(?:"?\w+"?\s*\.\s*)?"?regime_labels\b', re.IGNORECASE
+    r"(?:\b(?:from|join|into|update|table)\s+"
+    rf"|\bfrom\b(?:(?!{_FROM_LIST_END})[^;])*?,\s*)"
+    r"(?:only\s*\(?\s*)?"
+    r'(?:(?:"[^"]+"|\w+)\s*\.\s*)?'
+    r'(?:"regime_labels"|regime_labels\b)',
+    re.IGNORECASE,
 )
 RAW_OWNERS = frozenset(
     {
@@ -172,6 +181,13 @@ def test_filter_modules_are_forbidden_not_permitted():
         ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM regime_labels'\n"),
         ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM public.regime_labels'\n"),
         ("src/mcp_server/sneaky.py", 'Q = \'SELECT labels FROM "public"."regime_labels"\'\n'),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM foo, regime_labels'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM ONLY regime_labels'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM foo, ONLY (regime_labels)'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT labels FROM \"my-schema\".regime_labels'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT 1 FROM foo f, ONLY public.regime_labels l'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT l.labels FROM foo f, public.regime_labels l'\n"),
+        ("src/mcp_server/sneaky.py", "Q = 'SELECT 1 FROM foo AS f,\\n  \"regime_labels\" AS l'\n"),
     ],
 )
 def test_planted_modules_are_caught(tmp_path, relative, source):
@@ -182,6 +198,19 @@ def test_planted_modules_are_caught(tmp_path, relative, source):
         parents=True, exist_ok=True
     )
     assert list(violations(tmp_path)) == [relative]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT a, regime_labels FROM foo",  # a column named like the table, before FROM
+        "SELECT * FROM foo, regime_labels_archive",  # another table, same prefix
+        "SELECT * FROM foo ORDER BY id, regime_labels",  # a column in a later clause
+        'SELECT * FROM "regime_labels-old"',  # another quoted table, same prefix
+    ],
+)
+def test_sql_that_does_not_read_the_table_is_not_flagged(sql):
+    assert not RAW_SQL.search(sql)
 
 
 def test_planted_permitted_file_is_allowed(tmp_path):

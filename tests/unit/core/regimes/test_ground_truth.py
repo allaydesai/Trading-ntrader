@@ -135,7 +135,20 @@ class TestRanging:
         labels = label_ground_truth(frame, DEFAULT, frozen_median=0.2)
         er = efficiency_ratio(frame["close"].to_numpy(), 21)
         for i, row in enumerate(labels):
-            assert row["ranging"] == (None if np.isnan(er[i]) else bool(er[i] < 0.3))
+            assert row["ranging"] == (
+                None if np.isnan(er[i]) else bool(er[i] < DEFAULT.ranging_threshold)
+            )
+
+    def test_threshold_changes_only_the_ranging_flag(self):
+        frame = random_walk(400, seed=3)
+        median = volatility_median(frame, DEFAULT)
+        loose = GroundTruthDefinition(ranging_threshold=0.3)
+        low = label_ground_truth(frame, DEFAULT, median)
+        high = label_ground_truth(frame, loose, median)
+        assert [{**r, "ranging": None} for r in low] == [{**r, "ranging": None} for r in high]
+        # ER < 0.2 implies ER < 0.3, so the lower threshold flags a subset of the days.
+        assert all(h["ranging"] for lo, h in zip(low, high) if lo["ranging"])
+        assert sum(bool(r["ranging"]) for r in low) < sum(bool(r["ranging"]) for r in high)
 
 
 class TestVolatility:

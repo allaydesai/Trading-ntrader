@@ -13,13 +13,17 @@ from src.core.regimes.definition import (
 )
 
 #: Pinned. Changing a default parameter is a new calendar version, so it must be deliberate.
+#: Ranging moved from ER < 0.3 (SPY v1) to ER < 0.2 (v2), Allay, 2026-11-27.
 GROUND_TRUTH_JSON = (
     '{"annualisation":252,"atr_window":20,"efficiency_window":21,"label_set":"ground_truth",'
-    '"ranging_threshold":0.3,"scales":{"intermediate":6.0,"major":12.0,"minor":3.0},'
+    '"ranging_threshold":0.2,"scales":{"intermediate":6.0,"major":12.0,"minor":3.0},'
     '"volatility_window":21}'
 )
 DETECTOR_JSON = '{"label_set":"detector","sma200":{"window":200},"warmup_sessions":272}'
-GROUND_TRUTH_HASH = "5fc1c01619ad028b96de07cb7f7eba2a889cf5f8b29aea0ddbea8530fd58fedd"
+GROUND_TRUTH_HASH = "45e4389e332739006caca00ab666ea26a7e540299795f3faf45050c69eaa8228"
+#: The stored SPY ground-truth v1: the old default, now reached by this override.
+V1_OVERRIDES = {"ranging_threshold": 0.3}
+V1_HASH = "5fc1c01619ad028b96de07cb7f7eba2a889cf5f8b29aea0ddbea8530fd58fedd"
 DETECTOR_HASH = "7e31564b6a1766127500eb2ac9fec90ed462a9a39a6138fb1277342938f6d17f"
 
 
@@ -28,6 +32,13 @@ def test_default_definitions_are_pinned():
     assert canonical_json(default_definition("detector")) == DETECTOR_JSON
     assert definition_hash(default_definition("ground_truth")) == GROUND_TRUTH_HASH
     assert definition_hash(default_definition("detector")) == DETECTOR_HASH
+
+
+def test_v1_definition_is_still_reachable_by_its_override():
+    """Extending or re-verifying the stored v1 needs its exact hash, so it is pinned too."""
+    v1 = build_definition("ground_truth", V1_OVERRIDES)
+    assert definition_hash(v1) == V1_HASH
+    assert v1.model_dump() == {**default_definition("ground_truth").model_dump(), **V1_OVERRIDES}
 
 
 @pytest.mark.parametrize(

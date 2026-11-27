@@ -41,7 +41,9 @@ class GroundTruthDefinition(_Strict):
     atr_window: int = Field(default=20, ge=2)
     scales: WaveScales = Field(default_factory=WaveScales)
     efficiency_window: int = Field(default=21, ge=3)
-    ranging_threshold: float = Field(default=0.3, gt=0, lt=1)
+    #: ER below this is ``ranging``. 0.2 since SPY v2 (Allay, 2026-11-27); SPY ground-truth
+    #: v1 was built at 0.3 and is reached with ``{"ranging_threshold": 0.3}``.
+    ranging_threshold: float = Field(default=0.2, gt=0, lt=1)
     volatility_window: int = Field(default=21, ge=3)
     annualisation: int = Field(default=252, ge=1)
 

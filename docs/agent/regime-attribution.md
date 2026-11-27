@@ -14,13 +14,26 @@ Storage: `docs/agent/persistence.md`, "Regime Calendar".
 | Label set | Keys | Rule | Code |
 |---|---|---|---|
 | `ground_truth` (hindsight) | `leg_minor`, `leg_intermediate`, `leg_major` | directional change on closes; a peak (trough) is confirmed when a close falls (rises) 3 / 6 / 12 × ATR20 from it, using the ATR at the extreme's date; ATR20 is a simple mean of true range; days in (trough, peak] are `up`, (peak, trough] `down`, outside the first and last turning point `null` | `src/core/regimes/ground_truth.py` |
-| | `ranging` | efficiency ratio over the 21 sessions centred on the day < 0.3; `null` within 10 sessions of either end | |
+| | `ranging` | efficiency ratio over the 21 sessions centred on the day < 0.2 (`ranging_threshold`; v1 used 0.3); `null` within 10 sessions of either end | |
 | | `volatility` | centred 21-session realised volatility (annualised ×252) `high` above the version's **frozen** median (`frozen_stats`), else `low` | |
 | `detector` (past data only) | `sma200` | `up` when close > SMA200 of closes up to *t*; the first 272 sessions are `null` | `src/core/regimes/detectors.py` |
 
 Definitions (`src/core/regimes/definition.py`) hold parameters only; the default hashes are
 pinned in `tests/unit/core/regimes/test_definition.py`. A changed parameter is a new version
 (`build_regime_calendar(definition_overrides={"detector": {"sma200": {"window": 150}}})`).
+
+Stored SPY versions (`firstrate-etf`). Without `version`, `get_regime_labels` reads the
+default definition's calendar, which is v2 for ground truth since the 0.2 default; a database
+holding only v1 answers `no_calendar` until `build_regime_calendar()` is run once. Pass
+`version=1` to read v1. A new version freezes the volatility median over the catalog **as
+it is when the version is created**, so compare a new version's `frozen_stats` and range with
+the version it replaces before comparing labels.
+
+| Label set | Version | Definition | Note |
+|---|---|---|---|
+| `ground_truth` | 1 | `ranging_threshold` 0.3 (hash `5fc1c016…`) | phase 1; ranging on 70% of sessions. Extend or verify it with `definition_overrides={"ground_truth": {"ranging_threshold": 0.3}}` |
+| `ground_truth` | 2 | default, `ranging_threshold` 0.2 (hash `45e4389e…`) | phase 2 on (design.md Q14). Built 2026-11-27 from the unchanged catalog: frozen median (0.13723) and range checked equal to v1's |
+| `detector` | 1 | default (`sma200`) | unchanged by the ground-truth v2 |
 
 ## Rules
 

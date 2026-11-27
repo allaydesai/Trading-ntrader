@@ -223,6 +223,33 @@ async def test_changed_definition_is_a_new_version(server, store, bars):
     assert _snapshot(store, "detector", 1) == before
 
 
+async def test_lower_ranging_threshold_is_ground_truth_version_two(server, store, bars):
+    """SPY v1 was built at ER < 0.3; the default is now 0.2, so a plain build is v2."""
+    v1_args = {"definition_overrides": {"ground_truth": {"ranging_threshold": 0.3}}}
+    await _call(server, "build_regime_calendar", v1_args)
+    v1_before, detector_before = _snapshot(store, "ground_truth"), _snapshot(store, "detector")
+    data = await _call(server, "build_regime_calendar")
+    truth = data["versions"]["ground_truth"]
+    assert (truth["version"], truth["input_revision"], truth["action"]) == (2, 1, "created")
+    assert truth["definition"]["ranging_threshold"] == 0.2
+    assert data["versions"]["detector"]["action"] == "up_to_date"
+    v1 = await _call(server, "get_regime_labels", {"label_set": "ground_truth", "version": 1})
+    assert truth["frozen_stats"] == v1["calendar"]["frozen_stats"]
+    again = await _call(server, "build_regime_calendar")
+    assert {v["action"] for v in again["versions"].values()} == {"up_to_date"}
+    redo_v1 = await _call(server, "build_regime_calendar", v1_args)
+    assert redo_v1["versions"]["ground_truth"]["action"] == "up_to_date"
+    assert _snapshot(store, "ground_truth", 1) == v1_before
+    assert _snapshot(store, "detector") == detector_before
+    v2 = _snapshot(store, "ground_truth", 2)
+    assert [(d, {**lab, "ranging": None}, h) for d, lab, h, _ in v2] == [
+        (d, {**lab, "ranging": None}, h) for d, lab, h, _ in v1_before
+    ]
+    assert sum(bool(r[1]["ranging"]) for r in v2) < sum(bool(r[1]["ranging"]) for r in v1_before)
+    default = await _call(server, "get_regime_labels", {"label_set": "ground_truth", "limit": 1})
+    assert default["calendar"]["version"] == 2
+
+
 async def test_get_regime_labels_returns_dated_labels(server, store, bars):
     await _call(server, "build_regime_calendar")
     data = await _call(

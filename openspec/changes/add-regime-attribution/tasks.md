@@ -36,8 +36,8 @@ updated or deleted. The wave-leg chart looks right to Allay.
     at the extreme's date.
   - Leg days are (trough, peak] and (peak, trough].
   - Days before the first and after the last turning point are `null`.
-  - Ranging uses the centred 21-session efficiency ratio < 0.3, `null` within 10 sessions of
-    either end.
+  - Ranging uses the centred 21-session efficiency ratio < `ranging_threshold` (0.3 in v1,
+    0.2 from v2, task 2.0), `null` within 10 sessions of either end.
   - Volatility is centred 21-session volatility against a frozen median.
   - Finality: appending bars never changes a label that is already set.
 - [x] 1.3 Implement `src/core/regimes/ground_truth.py` (pure).
@@ -148,6 +148,16 @@ with `benchmark_symbol` and `catalog` set.
       thresholds read sensibly on futures.
 
 ## 2. Phase 2: regime profile, daily view (the stop-or-continue point)
+
+Decided 2026-11-27 before any profile (`design.md` Q7, Q8, Q14): wave scales stay 3 / 6 / 12 ×
+ATR20; ranging becomes ER < 0.2 as SPY ground-truth version 2; ORB is dropped from phase 2.
+
+- [x] 2.0 Ranging threshold: sensitivity of the SPY ranging share at ER 0.15 / 0.20 / 0.25 /
+      0.30 (`design.md` Q14). Default `ranging_threshold` 0.3 → 0.2 (new pinned hash in
+      `tests/unit/core/regimes/test_definition.py`, the v1 hash pinned beside it). Build SPY
+      ground truth v2; v1 rows untouched. Determinism:
+      `tests/integration/mcp_server/test_regime_calendar.py` builds v2 after v1 in one schema
+      and alone in another and compares a sha256 over every row.
 
 Acceptance: `run_regime_attribution` profiles one run under ground truth and under `sma200`.
 Bucket P&L sums to the run's total. Reports are stored, stamped and exportable. Both baselines
