@@ -66,6 +66,8 @@ def _table(rows: list[dict[str, Any]], columns: tuple[tuple[str, str], ...]) -> 
 def _family_lines(name: str, family: dict[str, Any], scaled: bool = False) -> list[str]:
     outcome = family["outcome"]
     title = f"#### {name}" + (f" (scale: {family['scale']})" if "scale" in family else "")
+    if family.get("exploratory"):
+        title += ", exploratory, not in the stop rule (design.md Q16)"
     lines = [title, "", f"Outcome: **{outcome['outcome']}** ({outcome['sufficient']} sufficient)"]
     columns = _SCALED if scaled else _DAILY
     lines += ["", *_table([*family["rows"], family["unlabelled"], family["total"]], columns), ""]
@@ -78,6 +80,15 @@ def _family_lines(name: str, family: dict[str, Any], scaled: bool = False) -> li
         aligned = [{**r, "bucket": r["group"]} for r in family["alignment"]]
         lines += ["Alignment:", "", *_table(aligned, _TRADES), ""]
     return lines
+
+
+def _stop_rule_line(rule: dict[str, Any]) -> str:
+    dependent = ", ".join(rule["dependent_families"]) or "none"
+    leads = ", ".join(f"{n} {r['outcome']}" for n, r in rule["exploratory"].items()) or "none"
+    return (
+        f"Stop rule (Q16): **{rule['verdict']}** (strong_dependence in: {dependent}; "
+        f"exploratory, not counted: {leads})"
+    )
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -105,6 +116,8 @@ def render_markdown(report: dict[str, Any]) -> str:
     for run in report["runs"]:
         lines += [f"## {run['strategy']} {run['symbol']} `{run['run_id']}`", ""]
         lines += [f"- {note}" for note in run["notes"]] + [""]
+        if "stop_rule" in run:
+            lines += [_stop_rule_line(run["stop_rule"]), ""]
         for name, family in run["families"].items():
             lines += _family_lines(name, family, scaled)
     return "\n".join(lines) + "\n"

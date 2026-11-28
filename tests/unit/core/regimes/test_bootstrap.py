@@ -14,6 +14,7 @@ from src.core.regimes.bootstrap import (
     bucket_intervals,
     dependence_outcome,
     draw_blocks,
+    stop_rule_reading,
 )
 
 pytestmark = pytest.mark.unit
@@ -189,3 +190,34 @@ def test_draws_are_chunked_so_memory_does_not_scale_with_samples(monkeypatch):
     labels = np.full(500, "up", dtype=object)
     bucket_intervals(np.zeros(500), labels, ["up"], samples=1000, seed=0)
     assert max(seen) <= bootstrap.CHUNK and sum(seen) == 1000
+
+
+# -- stop-rule reading (design.md Q16, report_version 2) --------------------------------
+
+
+def _families(**outcomes):
+    return {name: {"outcome": {"outcome": o}} for name, o in outcomes.items()}
+
+
+def test_a_single_family_with_strong_dependence_is_dependence():
+    out = stop_rule_reading(
+        _families(leg_minor="strong_dependence", ranging="no_dependence", cross="no_dependence")
+    )
+    assert out["verdict"] == "dependence"
+    assert out["deciding"] == {"leg_minor": "strong_dependence", "ranging": "no_dependence"}
+    assert out["dependent_families"] == ["leg_minor"]
+
+
+def test_strong_dependence_in_the_cross_alone_is_exploratory_not_dependence():
+    families = _families(leg_minor="no_dependence", volatility="no_dependence")
+    families["cross"] = {"outcome": {"outcome": "strong_dependence"}, "scale": "minor"}
+    out = stop_rule_reading(families)
+    assert out["verdict"] == "no_dependence"
+    assert "cross" not in out["deciding"] and out["dependent_families"] == []
+    assert out["exploratory"] == {"cross": {"outcome": "strong_dependence", "scale": "minor"}}
+
+
+def test_an_insufficient_family_without_dependence_is_insufficient_evidence():
+    out = stop_rule_reading(_families(leg_minor="insufficient_evidence", ranging="no_dependence"))
+    assert out["verdict"] == "insufficient_evidence"
+    assert out["insufficient_families"] == ["leg_minor"]

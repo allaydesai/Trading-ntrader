@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from src.core.regimes.attribution import (
     DRIFT_SCALINGS,
+    REPORT_VERSIONS,
     Calendar,
     TradeRecord,
     bucket_name,
@@ -77,12 +78,21 @@ DEFAULTS: dict[str, Any] = {
     "calendar_version": None,
     "as_of_build": None,
     "drift_scaling": "side",
+    "report_version": 1,
 }
 DETECTOR_LAG = 1
 #: Selectors, not settings: choosing the label set or a snapshot to rerun is no override.
 #: ``drift_scaling`` changes no label, bucket or interval, only the drift column, so it is
 #: recorded in ``params`` but declares no robustness check.
-_NOT_OVERRIDES = ("label_set", "as_of_build", "drift_scaling")
+#: ``report_version`` 2 adds the Q16 stop-rule reading and moves no number either.
+_NOT_OVERRIDES = ("label_set", "as_of_build", "drift_scaling", "report_version")
+_STOP_RULE = (
+    "report_version 2 (design.md Q16, Allay 2026-11-27): verdict over the single "
+    "ground-truth families (leg scales, ranging, volatility): dependence if any is "
+    "strong_dependence, else insufficient_evidence if any is, else no_dependence. The "
+    "cross (scale x volatility, scale picked from the data) is exploratory, a lead for "
+    "phase 4, and never counts"
+)
 _SIDE_DRIFT = (
     "benchmark daily return x the side held into each day (+1 long, -1 short, 0 flat), "
     "mean x252; position size is not scaled"
@@ -143,6 +153,15 @@ def _check_params(min_days: int, min_trades: int, samples: int, seed: int) -> No
         )
     if seed < 0:
         raise ToolFailure("invalid_seed", "seed must be 0 or more.", fix="Use 0 (the default).")
+
+
+def _check_report_version(report_version: int) -> None:
+    if report_version not in REPORT_VERSIONS:
+        raise ToolFailure(
+            "invalid_report_version",
+            f"Unknown report_version {report_version}.",
+            fix="Use 1 (the default, phase 2) or 2 (adds the Q16 stop-rule reading).",
+        )
 
 
 def _check_drift_scaling(drift_scaling: str) -> None:
@@ -336,6 +355,7 @@ def _run_profile(
         seed=params["seed"],
         initial_capital=fields["initial_capital"],
         drift_scaling=params.get("drift_scaling", DEFAULTS["drift_scaling"]),
+        report_version=params.get("report_version", DEFAULTS["report_version"]),
     )
     notes = [n for n in (_closing_note(fields, frame, sum(t.exit is None for t in trades)),) if n]
     if fields["symbol"].upper() != read.version.reference:
@@ -348,7 +368,8 @@ def _run_profile(
     after = sum(1 for d in frame.index if d > read.calendar.data_end)
     if after:
         notes.append(f"{after} run day(s) after the calendar's data_end are unlabelled.")
-    return {**fields, "families": result["families"], "notes": notes}, frame
+    extra = {"stop_rule": result["stop_rule"]} if "stop_rule" in result else {}
+    return {**fields, "families": result["families"], **extra, "notes": notes}, frame
 
 
 def _intraday_futures(sleeve: Sleeve) -> bool:
@@ -410,11 +431,13 @@ def run_regime_attribution(
     calendar_version: int | None = None,
     as_of_build: int | None = None,
     drift_scaling: str = "side",
+    report_version: int = 1,
 ) -> dict[str, Any]:
     """Profile runs against one stored calendar version; store and return the report."""
     lag = _resolve_lag(label_set, lag_days)
     _check_params(min_days, min_trades, bootstrap_samples, seed)
     _check_drift_scaling(drift_scaling)
+    _check_report_version(report_version)
     reference = benchmark_symbol.strip().upper()
     given = {
         "label_set": label_set, "benchmark_symbol": reference, "catalog": catalog,
@@ -424,6 +447,8 @@ def run_regime_attribution(
     }  # fmt: skip
     if drift_scaling != DEFAULTS["drift_scaling"]:  # absent by default: phase 2 reproduces
         given["drift_scaling"] = drift_scaling
+    if report_version != DEFAULTS["report_version"]:  # absent by default, as above
+        given["report_version"] = report_version
     with get_sync_session() as session:
         sleeves = load_sleeves(session, run_ids, minimum=1, maximum=MAX_RUNS)
         if drift_scaling == "position":  # refuse before any calendar or catalog read
@@ -479,6 +504,7 @@ def _payload(read: _Read, params: dict, overrides: dict, runs: list[dict]) -> di
             "definitions": _definitions(read, params),
         }
         | _scaling(params)
+        | _version(params)
     )
 
 
@@ -494,7 +520,14 @@ def _definitions(read: _Read, params: dict) -> dict[str, str]:
         "drift_return": _SIDE_DRIFT,
         "trades": "closed trades by the label in force on their entry day; open apart",
     }
-    return definitions | (_POSITION_DRIFT if _scaling(params) else {})
+    definitions |= _POSITION_DRIFT if _scaling(params) else {}
+    return definitions | ({"stop_rule": _STOP_RULE} if _version(params) else {})
+
+
+def _version(params: dict) -> dict[str, Any]:
+    """The top-level marker of a version 2 report; nothing for the default."""
+    version = params.get("report_version", DEFAULTS["report_version"])
+    return {} if version == DEFAULTS["report_version"] else {"report_version": version}
 
 
 def _scaling(params: dict) -> dict[str, Any]:

@@ -502,3 +502,68 @@ async def test_the_vault_note_names_position_scaled_drift_only_when_used(
     plain, scaled = ((folder / f"{s}.regime.md").read_text() for s in ("plain", "scaled"))
     assert "Pos. weight" not in plain and "position-scaled" not in plain
     assert "- drift: position-scaled" in scaled and "| Pos. weight |" in scaled
+
+
+# -- report_version 2: the Q16 stop-rule reading (design.md 13, Q16) ---------------------
+
+
+async def test_the_default_report_has_no_report_version_or_stop_rule(server, store, bars):
+    """Version 1 is the phase 2 payload: no new key, and an explicit 1 is the same report."""
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    args = {"run_ids": [run_id], "label_set": "ground_truth"}
+    default = await _call(server, "run_regime_attribution", args)
+    one = await _call(server, "run_regime_attribution", {**args, "report_version": 1})
+    for data in (default, one):
+        assert "report_version" not in data and "report_version" not in data["params"]
+        assert "stop_rule" not in data["runs"][0] and "stop_rule" not in data["definitions"]
+        assert "exploratory" not in data["runs"][0]["families"]["cross"]
+    assert one["runs"] == default["runs"] and one["params"] == default["params"]
+
+
+async def test_report_version_2_flags_the_cross_and_records_the_verdict(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    args = {"run_ids": [run_id], "label_set": "ground_truth"}
+    plain = await _call(server, "run_regime_attribution", args)
+    data = await _call(server, "run_regime_attribution", {**args, "report_version": 2})
+    assert data["ok"] is True and data["report_version"] == 2
+    assert data["params"]["report_version"] == 2
+    assert data["overrides"] == {} and data["declared_robustness_check"] is False
+    assert "Q16" in data["definitions"]["stop_rule"]
+    run = data["runs"][0]
+    assert run["families"]["cross"]["exploratory"] is True
+    assert run["stop_rule"]["verdict"] in ("dependence", "no_dependence", "insufficient_evidence")
+    assert "cross" not in run["stop_rule"]["deciding"]
+    old = plain["runs"][0]["families"]
+    assert {k: v for k, v in run["families"].items() if k != "cross"} == {
+        k: v for k, v in old.items() if k != "cross"
+    }
+    with store() as session:
+        stored = session.scalars(
+            select(RegimeReport).where(RegimeReport.report_id == data["report_id"])
+        ).one()
+        assert stored.params["report_version"] == 2
+
+
+async def test_an_unknown_report_version_is_refused_with_a_fix(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    data = await _call(server, "run_regime_attribution", {"run_ids": [run_id], "report_version": 3})
+    assert data["ok"] is False and data["error"]["code"] == "invalid_report_version"
+
+
+async def test_the_vault_note_marks_the_cross_exploratory_only_in_version_2(
+    server, store, bars, tmp_path
+):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    folder = tmp_path / "vault" / "Lab" / "results"
+    for slug, extra in (("v1", {}), ("v2", {"report_version": 2})):
+        args = {"run_ids": [run_id], "label_set": "ground_truth", **extra}
+        data = await _call(server, "run_regime_attribution", args)
+        await _call(server, "export_results", {"slug": slug, "regime_report": data["report_id"]})
+    v1, v2 = ((folder / f"{s}.regime.md").read_text() for s in ("v1", "v2"))
+    assert "exploratory" not in v1 and "Stop rule" not in v1
+    assert "Stop rule (Q16): **" in v2
+    assert "#### cross (scale: " in v2 and "exploratory, not in the stop rule" in v2

@@ -34,7 +34,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.core.regimes.bootstrap import bucket_intervals, dependence_outcome
+from src.core.regimes.bootstrap import (
+    EXPLORATORY_FAMILIES,
+    bucket_intervals,
+    dependence_outcome,
+    stop_rule_reading,
+)
 from src.core.regimes.definition import SCALES
 from src.core.regimes.trade_view import UNLABELLED, alignment, trade_view
 from src.core.robustness.bootstrap import TRADING_DAYS, sharpe
@@ -44,6 +49,9 @@ MIN_TRADES = 20
 #: ``side``: drift x the side held (+1/-1/0), phase 2. ``position``: x the carried notional
 #: over the previous equity.
 DRIFT_SCALINGS = ("side", "position")
+#: 1: the phase 2 payload. 2 (design.md Q16): the cross is marked exploratory and a ground-
+#: truth profile carries the stop-rule verdict over the single families.
+REPORT_VERSIONS = (1, 2)
 _CENT = 0.005
 #: Each label family: its key in the label payload, and the bucket order.
 GROUND_TRUTH_FAMILIES: dict[str, tuple[str, ...]] = {
@@ -396,12 +404,15 @@ def profile(
     seed: int = 0,
     initial_capital: float | None = None,
     drift_scaling: str = "side",
+    report_version: int = 1,
 ) -> dict[str, Any]:
     """Every family's daily-view table for one run under one calendar version."""
     if calendar.label_set == "ground_truth" and lag != 0:
         raise ValueError("ground-truth labels take no lag (lag_not_allowed)")
     if drift_scaling not in DRIFT_SCALINGS:
         raise ValueError(f"drift_scaling must be one of {DRIFT_SCALINGS}")
+    if report_version not in REPORT_VERSIONS:
+        raise ValueError(f"report_version must be one of {REPORT_VERSIONS}")
     if drift_scaling == "position" and any(not t.quantity > 0 for t in trades):
         raise ValueError("position-scaled drift needs every trade's quantity (> 0)")
     days = list(frame.index)
@@ -435,7 +446,21 @@ def profile(
         cross = _family("cross", CROSS_BUCKETS, day_buckets, entry_buckets, inputs, params)
         families["cross"] = {**cross, **choice}
     scaling = {"drift_scaling": drift_scaling} if drift_scaling != "side" else {}
-    return {"label_set": calendar.label_set, "lag_days": lag, **scaling, "families": families}
+    result = {"label_set": calendar.label_set, "lag_days": lag, **scaling, "families": families}
+    return result if report_version == 1 else _version_2(result)
+
+
+def _version_2(result: dict[str, Any]) -> dict[str, Any]:
+    """Q16: the exploratory families are flagged and a ground-truth profile gets the
+    stop-rule verdict; no row, interval or outcome moves."""
+    families = {
+        name: {**family, "exploratory": True} if name in EXPLORATORY_FAMILIES else family
+        for name, family in result["families"].items()
+    }
+    out = {**result, "report_version": 2, "families": families}
+    if result["label_set"] == "ground_truth":
+        out["stop_rule"] = stop_rule_reading(families)
+    return out
 
 
 def _drift_weights(

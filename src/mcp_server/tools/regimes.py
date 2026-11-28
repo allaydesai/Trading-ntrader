@@ -95,6 +95,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         calendar_version: int | None = None,
         as_of_build: int | None = None,
         drift_scaling: str = "side",
+        report_version: int = 1,
     ) -> dict[str, Any]:
         """Profile 1-10 stored runs by regime against the stored calendar; stores the report.
 
@@ -116,7 +117,9 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         actually carried in (quantity x previous close / previous equity; adds
         mean_position_weight) instead of +1/-1/0 by side; it needs the run to trade the
         reference itself, unlevered and USD-quoted, so not futures or FX
-        (drift_scaling_unavailable otherwise).
+        (drift_scaling_unavailable otherwise). report_version=2 (design.md Q16) marks
+        'cross' exploratory and adds each ground-truth run's stop_rule verdict over the
+        single families only; the default 1 is the phase 2 payload.
         """
         return await call(
             regime_reports.run_regime_attribution,
@@ -132,4 +135,5 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             calendar_version,
             as_of_build,
             drift_scaling,
+            report_version,
         )

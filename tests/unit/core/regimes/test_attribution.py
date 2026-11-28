@@ -358,6 +358,41 @@ def test_the_default_profile_is_unchanged_from_phase_2():
         assert digests == GOLDEN_SIDE_PROFILES
 
 
+def test_report_version_1_is_the_phase_2_profile():
+    """The Q16 option leaves the default output alone: version 1 is the golden profile."""
+    digests = {k: _digest(v) for k, v in _default_profiles(report_version=1).items()}
+    assert digests == GOLDEN_SIDE_PROFILES
+
+
+def test_report_version_2_marks_the_cross_exploratory_and_adds_the_stop_rule():
+    old, new = _default_profiles(), _default_profiles(report_version=2)
+    gt = new["ground_truth"]
+    assert gt["report_version"] == 2
+    assert gt["families"]["cross"]["exploratory"] is True
+    assert {k: v for k, v in gt["families"]["cross"].items() if k != "exploratory"} == (
+        old["ground_truth"]["families"]["cross"]
+    )
+    assert {k: v for k, v in gt["families"].items() if k != "cross"} == {
+        k: v for k, v in old["ground_truth"]["families"].items() if k != "cross"
+    }
+    assert set(gt["stop_rule"]["deciding"]) == {
+        "leg_minor", "leg_intermediate", "leg_major", "ranging", "volatility",
+    }  # fmt: skip
+    assert gt["stop_rule"]["exploratory"]["cross"]["scale"] == gt["families"]["cross"]["scale"]
+
+
+def test_report_version_2_of_a_detector_profile_changes_no_family():
+    old, new = _default_profiles(), _default_profiles(report_version=2)
+    detector = new["detector"]
+    assert detector["report_version"] == 2 and "stop_rule" not in detector
+    assert detector["families"] == old["detector"]["families"]
+
+
+def test_an_unknown_report_version_is_refused():
+    with pytest.raises(ValueError, match="report_version"):
+        _default_profiles(report_version=3)
+
+
 def test_position_weight_is_the_carried_notional_over_the_previous_equity():
     days = _sessions(6)
     closes = pd.Series([50.0, 50.0, 40.0, 40.0, 60.0, 60.0], index=days)

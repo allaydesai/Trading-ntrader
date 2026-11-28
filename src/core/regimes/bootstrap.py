@@ -214,3 +214,43 @@ def dependence_outcome(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "above_zero": above,
         "insufficient_buckets": [r["bucket"] for r in rows if r["insufficient"]],
     }
+
+
+#: Families read as leads, never as stop-rule evidence (design.md Q16, Allay 2026-11-27):
+#: the cross's scale is picked from the data, so its outcome is reported, not counted.
+EXPLORATORY_FAMILIES = ("cross",)
+
+
+def stop_rule_reading(families: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """One run's stop-rule verdict over its ground-truth families (design.md 5.4, Q16).
+
+    ``dependence`` when a single family has ``strong_dependence``; otherwise
+    ``insufficient_evidence`` when any single family lacks evidence (Q12: never read as no
+    dependence); otherwise ``no_dependence``. The exploratory families are listed apart and
+    move nothing.
+    """
+    deciding = {
+        name: family["outcome"]["outcome"]
+        for name, family in families.items()
+        if name not in EXPLORATORY_FAMILIES
+    }
+    dependent = [n for n, o in deciding.items() if o == "strong_dependence"]
+    insufficient = [n for n, o in deciding.items() if o == "insufficient_evidence"]
+    if dependent:
+        verdict = "dependence"
+    elif insufficient:
+        verdict = "insufficient_evidence"
+    else:
+        verdict = "no_dependence"
+    exploratory = {
+        name: {"outcome": family["outcome"]["outcome"], "scale": family.get("scale")}
+        for name, family in families.items()
+        if name in EXPLORATORY_FAMILIES
+    }
+    return {
+        "verdict": verdict,
+        "deciding": deciding,
+        "dependent_families": dependent,
+        "insufficient_families": insufficient,
+        "exploratory": exploratory,
+    }
