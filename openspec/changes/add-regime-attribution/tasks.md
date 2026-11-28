@@ -328,6 +328,61 @@ the cent.
       drift ≈ the bucket's return (|excess| ≤ 1.1% a year in every bucket, against up to
       ±75% with ±1 drift), so every bucket's P&L is the exposure held there; see Q15.
 
+## 2c. Allay's decisions and the last two evidence runs (Allay, 2026-11-27 7:31 PM ET)
+
+Allay: "Go with all five recommendations": (1) Q16, a scale × volatility result is not
+dependence for the stop rule on its own, only an exploratory lead for phase 4; (2) Q15,
+phase 4's `drift_not_edge` uses the run's average weight × each bucket's market return;
+(3) extend the long-only SMA run to 2001; (4) add IWM to settle the volatility effect;
+(5) GO for phases 3-6 after (3) and (4). Phase 3 is not started here.
+
+- [x] 2c.1 Record Q15 and Q16 in `design.md` (section 13; 5.4, 5.6b and the section 8 table)
+      and the spec delta. Q15 is a phase 4 rule: documented only.
+- [x] 2c.2 Q16 in code, opt-in: `run_regime_attribution(report_version=2)` adds each
+      ground-truth run's `stop_rule` verdict over the five single families and flags `cross`
+      `exploratory: true`; the vault note marks it. Tests: unit `test_bootstrap.py` (the
+      verdict, the cross never counts), `test_attribution.py` (version 1 = the golden phase
+      2 digest; version 2 moves no family but the cross flag; detector unchanged; unknown
+      version refused); integration `test_regime_attribution_tool.py` (no key by default,
+      recorded in `params`, not an override, `invalid_report_version`, the vault note).
+      Code `0e2e07f`. A rerun of the stored `de90d577` / `5072d9b1` at that code equals the
+      stored payloads byte for byte (rows `7d822649` / `013a4ff9`, kept, append-only).
+      Version 2 reports for the earlier baselines (ground truth): `8a12e455` `4575f1ac`,
+      `b9ead99e` `b6139ae8`, `c4c9c098` `276b63d0`, `614f5d10` `e8a736bc`, `0fb0d72f`
+      `4f3855ba`; their verdicts match the 2b reading below.
+- [x] 2c.3 **Long-only SPY 2001-2025.** Run **`e398e7d9-2470-4e71-a866-8d61ad02e0a1`**
+      through the CLI (`backtest run --symbol SPY --strategy sma_crossover_long_only
+      --catalog firstrate-etf --timeframe 1-day --start 2001-01-01 --end 2025-12-31`) from a
+      clean tree at `59250c6`, strategies `028db77`, the `b9ead99e` config (SMA 10 / 20,
+      `position_size_pct` 10, `portfolio_value` 10,000,000, `1-DAY-LAST`, fill seed 42,
+      `mark_to_market`): 150 closed trades, 0 open, +9.48% (+0.37% a year). Reports (code
+      `0e2e07f`): ground truth side `28fd557f`, position `4b5be7b8`, version 2 `5d8167ab`;
+      `sma200` side `2f95a596`, position `bb47f5d3`. **All five single families
+      `strong_dependence`**, with 25-46 trades entered in every down leg, so the 2015-2025
+      `insufficient_evidence` at minor and intermediate is resolved (Q12):
+      - minor: up +3.3% / down −5.0% a year; up − down +3.3 bp/day [+3.0, +3.6]
+      - intermediate: up +2.1% / down −3.1%; +2.1 bp [+1.7, +2.4]
+      - major: up +1.1% / down −1.6%; +1.1 bp [+0.7, +1.4]
+      - ranging: ranging −0.8% / not ranging +1.5%; −0.9 bp [−1.2, −0.6]
+      - volatility: high −1.0% / low +1.6%; **high − low −1.0 bp [−1.3, −0.8]**
+      - `cross` (minor × volatility, exploratory): `strong_dependence`; down/low insufficient
+        (5 trades)
+      - `sma200` (lag 1): `no_dependence` (up +0.4%, down +0.2%; 103 / 47 trades)
+      - drift, whole run: ±1 side +3.8% a year against +0.4% earned (bucket excess −30.9% …
+        +47.8%); position-scaled +0.4%, mean weight +0.062, excess ≈ 0 (−0.005% … −0.003%).
+        Circular, as 2b.1: the trend follower and the labels share the price path.
+- [ ] 2c.4 **IWM Bollinger baseline: pending** the strategies precision fix (strategies
+      PR #9; the rounding rule, `price_precision` or `price_increment`, is still being
+      decided). IWM calendar built: ground truth v1 / detector v1 of the default definitions
+      (see `docs/agent/regime-attribution.md`, "IWM data"). Then: run the `c4c9c098` config on
+      IWM from 2001-06-27 (its first `sma200` label) with the fixed, re-pinned submodule;
+      check first that `c4c9c098`'s window still reproduces; profile it against IWM's
+      calendar (side, position, version 2); state whether high − low holds.
+      **TODO: ignore run `5cbfad52-2985-442e-b6a3-d85836d93a63`**, a broken IWM run made at
+      strategies `028db77`: its bracket exits were rejected (2 dp prices on a 3 dp
+      instrument), so its single entry never closed.
+- [ ] 2c.5 Export the new reports to the vault, update the verdict tables, tick 2.13.
+
 > ### ⛔ PHASE-2 STOP RULE
 >
 > Stop after 2.12 and report the ground-truth profiles of the trend and mean-reversion
@@ -381,6 +436,32 @@ the cent.
         mean-reversion runs do too, in `cross` only (Q16). The long-only minor and
         intermediate scales are `insufficient_evidence`: per Q12, extend its history (SPY
         from 2001) or add an instrument before reading them as "no dependence".
+
+      _Draft reading with Allay's Q16 rule and the 2c evidence, 2026-11-27 (IWM pending;
+      2.13 stays unticked until the IWM step):_ S = `strong_dependence`, N =
+      `no_dependence`, I = `insufficient_evidence`; `cross` is exploratory (Q16) and is not
+      in the verdict, which is computed by `report_version=2`.
+
+      | Baseline | minor | interm. | major | ranging | vol | cross (expl.) | sma200 | Verdict |
+      |---|---|---|---|---|---|---|---|---|
+      | SMA short-only `8a12e455` | S | S | N | N | N | I (minor) | I | dependence |
+      | SMA long-only 2015-25 `b9ead99e` | I | I | S | S | S | I (major) | I | dependence |
+      | SMA long-only 2001-25 `e398e7d9` | S | S | S | S | S | S (minor) | N | dependence |
+      | Bollinger SPY 2015-25 `c4c9c098` | N | N | N | N | N | N (major) | N | no dependence |
+      | Bollinger SPY 2001-25 `614f5d10` | N | N | N | N | N | S (minor) | N | no dependence |
+      | Bollinger QQQ 2001-25 `0fb0d72f` | N | N | N | N | N | S (major) | N | no dependence |
+      | Bollinger IWM 2001-26 | pending (2c.4) | | | | | | | |
+
+      High − low volatility, mean daily return (90% interval): Bollinger SPY 2015-25 +2.5 bp
+      [+0.6, +4.5]; SPY 2001-25 +1.4 bp [+0.4, +2.4]; QQQ −0.1 bp [−1.2, +1.0]; IWM pending.
+      Long-only 2001-25 −1.0 bp [−1.3, −0.8] (trend, circular).
+
+      - **Stop rule: does not fire.** Every trend baseline shows dependence in single
+        families (circular in part). Under Q16 the mean-reversion runs show **no
+        dependence**: their only `strong_dependence` was the exploratory cross, a lead for
+        phase 4. The Bollinger volatility difference holds on SPY and not on QQQ; IWM
+        settles it.
+      - Remaining before ticking 2.13 ("GO per Allay, Nov 27 2026 7:31 PM ET"): 2c.4, 2c.5.
 
 
 ## 3. Phase 3: detector panel and scorecard (gated on 2.13 = go)

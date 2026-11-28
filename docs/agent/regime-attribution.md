@@ -79,6 +79,22 @@ QQQ's own frozen volatility median 0.1778 (SPY 0.1372). Detector labels start 20
 Legs (up / down, median sessions): minor 98 / 99, 22; intermediate 37 / 38, 76; major 8 / 9,
 289. Ranging share 47.9%.
 
+## IWM data
+
+`firstrate-etf` IWM daily bars run 2000-05-30 → 2026-05-01 (6,520 sessions, stamped like
+SPY's). Unlike SPY and QQQ (2 dp), they are priced to **3 dp** (TQQQ 4 dp). IWM ground truth
+v1 and detector v1 (built 2026-11-27, phase 2c, at `59250c6`; a second build is
+`up_to_date`) are the default definitions, the SPY v2 / v1 hashes, with IWM's own frozen
+volatility median 0.19065. Detector labels start 2001-06-27. Legs (up / down, median
+sessions): minor 105 / 105, 23; intermediate 36 / 37, 77; major 8 / 9, 284. Ranging share
+50.9%.
+
+**Broken run, ignore it:** `5cbfad52-2985-442e-b6a3-d85836d93a63` (Bollinger Reversal on
+IWM, 2001-06-27 → 2026-05-01, strategies `028db77`). The strategy rounds equity bracket
+prices to 2 dp, so Nautilus rejected both exits ("Invalid trigger price precision ... was 2
+when IWM.ARCA price precision is 3") and its one entry stayed open for 25 years. It stays in
+the append-only DB; the IWM baseline waits on the strategies precision fix (tasks.md 2c.4).
+
 ## Futures data (ES, NQ)
 
 `firstrate-futures` holds FirstRate's **back-adjusted continuous** series only (no
@@ -186,6 +202,14 @@ only).
   sufficient bucket's interval is entirely below zero and another's entirely above;
   `no_dependence` with ≥ 2 sufficient buckets otherwise; `insufficient_evidence` with < 2.
   The difference intervals are reported beside it; they do not change the outcome.
+- **Stop-rule verdict (phase 2c, opt-in).** `report_version=2` adds each ground-truth run's
+  `stop_rule`: `dependence` when any single family (the three leg scales, ranging,
+  volatility) is `strong_dependence`, else `insufficient_evidence` when any is, else
+  `no_dependence`. `cross` keeps its rows and outcome but gets `exploratory: true` and never
+  counts (design.md Q16, Allay 2026-11-27); the vault note says so on the cross heading and
+  prints the verdict line. A default call (version 1) stores exactly the phase 2 payload,
+  with no `report_version` key. Like `drift_scaling`, it is recorded in `params`, not as an
+  override.
 - **Descriptive extras** (no verdict reads them in phase 2; the fixed verdicts are phase 4):
   trade view (closed trades by entry-day label, open counted apart), with / counter-trend /
   unclassified split for trend families, and for 2+ runs Pearson correlation on shared days,
