@@ -713,6 +713,8 @@ calendar version, build and `labels_hash`, so `calendar_version` + `as_of_build`
 exactly; `export_results(slug, regime_report=<id>)` writes `<slug>.regime.json` and
 `<slug>.regime.md`. `drift_scaling="position"` weights the drift by the position actually
 carried in (quantity × previous close / previous equity) instead of +1 / −1 / 0 by side.
+`report_version=2` adds each ground-truth run's stop-rule verdict over the single families
+and marks the scale × volatility cross exploratory (design.md Q16); the default is unchanged.
 
 A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
 for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →

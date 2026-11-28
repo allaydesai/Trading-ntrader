@@ -172,6 +172,25 @@ mean-reversion baselines and given an explicit go-ahead.
 - **THEN** that family reports `insufficient_evidence` with the counts, and that family does
   not count towards the stop outcome
 
+#### Scenario: the crossed family is exploratory (Q16)
+- **WHEN** a baseline reports `strong_dependence` only in `cross` (scale × volatility)
+- **THEN** that is reported as an exploratory lead for phase 4 and does not count as
+  dependence for the stop outcome
+
+### Requirement: The stop-rule verdict is computed on request
+`run_regime_attribution` SHALL take `report_version`, `1` by default (the phase 2 payload,
+unchanged byte for byte, with no `report_version` key) or `2`. Version 2 SHALL add, to each
+ground-truth run, a `stop_rule` verdict over the single ground-truth families only
+(`dependence` if any is `strong_dependence`, else `insufficient_evidence` if any is, else
+`no_dependence`), mark `cross` `exploratory: true`, and change no row, interval or outcome. It
+SHALL be recorded in `params` without declaring a robustness check; any other value SHALL be
+refused with `invalid_report_version`.
+
+#### Scenario: version 2 leaves the numbers alone
+- **WHEN** a run is profiled under ground truth with `report_version=2`
+- **THEN** every family equals the default report's apart from `cross`'s `exploratory` flag,
+  and the run's `stop_rule` lists the five single families as deciding and `cross` apart
+
 ### Requirement: Trade view, alignment and verdicts follow the spec's fixed rules
 The trade view SHALL bucket closed trades by the label in force on their entry day. Trades
 entered on a day with no label SHALL go in an `unlabelled` row. Per bucket it SHALL report

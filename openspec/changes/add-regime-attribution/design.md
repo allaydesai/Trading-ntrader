@@ -479,6 +479,13 @@ The phase 2 stop-rule reading has **three** outcomes per ground-truth label fami
 - `insufficient_evidence`: fewer than two buckets in the family are sufficient.
 
 Only `no_dependence` at every family and for both baselines supports "stop after phase 2".
+The crossed family (scale × volatility) is **not** one of those families: its scale is picked
+from the data, so its outcome is a lead for phase 4, never stop-rule evidence (Q16, Allay
+2026-11-27). `report_version=2` (opt-in, phase 2c) computes the per-run verdict this way:
+`dependence` when any single ground-truth family (the three leg scales, ranging, volatility)
+is `strong_dependence`; otherwise `insufficient_evidence` when any is (Q12); otherwise
+`no_dependence`. The cross stays in the report with `exploratory: true`. The default
+(version 1) payload is the phase 2 payload, so stored reports reproduce.
 `insufficient_evidence` is reported as such, with the counts that fell short. A low-frequency
 strategy (for example `c4c9c098`, 117 trades in 11 years) can then never read as "regime does
 not matter" just because it trades rarely. Allay decides what to do with it: more history,
@@ -536,8 +543,8 @@ weigh nothing, as in 5.5. Each row also gets `mean_position_weight`.
   (|excess| ≤ 1.1% a year on all five phase 2b baselines). It confirms that a bucket's P&L is
   the exposure the strategy chose to hold there. It cannot separate timing skill inside a
   bucket from beta; the spec's `drift_not_edge` rule (phase 4) needs a different comparator
-  for that, such as the run's *average* weight × the bucket's benchmark return. That is an
-  open question for Allay (section 13).
+  for that. **Decided by Allay 2026-11-27 (Q15):** the run's *average* weight × the bucket's
+  benchmark return, implemented in phase 4, not here.
 
 ### 5.7 Trade view and alignment (phase 4)
 
@@ -642,6 +649,7 @@ job). The benchmark parameter is `benchmark_symbol` plus `catalog`, as in
 | `lag_days`, `min_days`, `min_trades`, `bootstrap_samples` | kept. `lag_days: int \| None = None` (detector → 1; refused if given with ground truth, section 2). Others default 60, 20, 1000 | 2 | kept. `seed` (default 0) added for reproducible intervals, as `run_monte_carlo` has |
 | (new) `calendar_version` | optional int; latest by default | 2 | a report can pin an older version |
 | (new) `drift_scaling` | `"side"` (default, phase 2) or `"position"` (section 5.6b) | 2b | opt-in, so phase 2 reports reproduce |
+| (new) `report_version` | `1` (default, phase 2 payload) or `2` (adds `stop_rule` per ground-truth run and flags `cross` `exploratory`, Q16) | 2c | opt-in, so phase 2 reports reproduce; not an override (no number moves) |
 | (vault file) | `export_results(slug, regime_report=<report_id>)` writes `<slug>.regime.json` and `<slug>.regime.md` | 2 | additive option on the existing vault writer, so `NTRADER_MCP_EXPORT_FOLDERS` still governs writes |
 
 **Existing tools stay as they are.** `get_regime_breakdown` and `get_sleeve_correlation` keep
@@ -788,14 +796,20 @@ Allay answered these on 2026-11-26. Each entry keeps the question and records th
     that a re-cut, so the check is part of the build record. v1 stays stored as it is; the default definition is now
     0.2, and v1 is reached with `definition_overrides={"ground_truth": {"ranging_threshold":
     0.3}}`.
-15. **Drift comparator for `drift_not_edge` (phase 4). OPEN (raised 2026-11-27, phase 2b).**
+15. **Drift comparator for `drift_not_edge` (phase 4). RESOLVED (Allay, 2026-11-27 7:31 PM
+    ET): option (a), the run's average position weight × each bucket's market return.**
+    Raised in phase 2b.
     Position-scaled drift (5.6b) is the strategy's own close-to-close P&L for a run that trades
     the reference, so "return no higher than drift" is near-identity and can't flag edge.
     Options: (a) the run's average position weight over the whole run × the bucket's benchmark
     return (static beta: whatever beats it came from timing the exposure); (b) a buy-and-hold
     run of the reference at the same average weight; (c) keep the ±1 side drift and accept that
-    it overstates sized strategies.
-16. **Crossed family at the stop rule. OPEN (raised 2026-11-27, phase 2b).** The extended
+    it overstates sized strategies. Phase 4 implements (a) for `drift_not_edge`; nothing in
+    phase 2 changes.
+16. **Crossed family at the stop rule. RESOLVED (Allay, 2026-11-27 7:31 PM ET): a scale ×
+    volatility result does not count as dependence for the stop rule on its own.** It is
+    reported as exploratory, a lead for phase 4. Implemented as the opt-in
+    `report_version=2` (section 5.4). Raised in phase 2b: The extended
     Bollinger runs show `strong_dependence` only in `cross`, whose scale is picked from the
     data (widest up − down gap, minor on SPY, major on QQQ), never in a single family. Does a
     data-picked cross count as "dependence" for the stop rule, or only as a lead for phase 4?
