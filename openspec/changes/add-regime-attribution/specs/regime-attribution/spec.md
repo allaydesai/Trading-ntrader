@@ -126,6 +126,30 @@ as-of boundary.
 - **WHEN** a profile is computed with `min_days=40`
 - **THEN** the report lists `min_days: 40` under `overrides`
 
+### Requirement: Drift can be scaled by position size, opt-in
+`run_regime_attribution` SHALL take `drift_scaling`, `"side"` by default (drift = the
+reference's daily return × +1 / −1 / 0 by the side carried in) or `"position"` (× the signed
+quantity carried in × the reference's previous close / the previous equity, with each bucket's
+`mean_position_weight`). Only the drift columns SHALL differ between the two. A default call
+SHALL store exactly the payload phase 2 stored, so earlier reports reproduce. `"position"` SHALL
+be recorded in `params` without declaring a robustness check, and SHALL be refused with
+`drift_scaling_unavailable` for a run that does not trade the reference itself, or whose
+instrument record (not its catalog name) is futures, FX, non-USD or missing, including a run
+not read from a catalog.
+
+#### Scenario: a phase 2 report reruns unchanged
+- **WHEN** a stored phase 2 report is rerun with its recorded parameters and no `drift_scaling`
+- **THEN** the result equals the stored result byte for byte, with no `drift_scaling` key
+
+#### Scenario: position-scaled drift
+- **WHEN** a SPY run is profiled with `drift_scaling="position"`
+- **THEN** each bucket's drift is the mean of the reference return × the carried position
+  weight, ×252, and buckets, P&L, intervals and outcomes equal the default report's
+
+#### Scenario: another instrument
+- **WHEN** a QQQ run is profiled against SPY's calendar with `drift_scaling="position"`
+- **THEN** it is refused with `drift_scaling_unavailable` and a `fix`
+
 ### Requirement: Stop rule after phase 2
 The phase 2 profile SHALL report one outcome for each ground-truth label family:
 - `strong_dependence`: at least one sufficient bucket's interval is entirely below zero and

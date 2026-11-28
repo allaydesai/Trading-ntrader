@@ -8,6 +8,7 @@ from it by ``build_regime_calendar``.
 """
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -21,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from src.config import get_settings
 from src.db.base import Base
 from src.db.models.backtest import BacktestRun, PerformanceMetrics, RunEquityCurve
+from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.regime import (
     RegimeCalendarBuild,
     RegimeCalendarVersion,
@@ -43,6 +45,7 @@ TABLES = [
     for t in (
         BacktestRun, PerformanceMetrics, TradingSession, Trade, RunEquityCurve,
         RegimeCalendarVersion, RegimeLabel, RegimeCalendarBuild, RegimeReport,
+        CatalogInstrument,
     )
 ]  # fmt: skip
 INITIAL = 1_000_000.0
@@ -58,6 +61,10 @@ def store(request, monkeypatch):
         conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
         conn.execute(text(f"CREATE SCHEMA {schema}"))
         Base.metadata.create_all(conn, tables=TABLES, checkfirst=False)
+        conn.execute(  # SPY as the real catalog records it: an ETF, no multiplier
+            CatalogInstrument.__table__.insert(),
+            {"ticker": "SPY", "catalog_name": "firstrate-etf", "asset_class": "ETF"},
+        )
     maker = sessionmaker(engine, expire_on_commit=False)
 
     @contextmanager
@@ -107,14 +114,21 @@ def _stamp(day: date) -> int:
     return int(datetime.combine(day, time(), tzinfo=timezone.utc).timestamp())
 
 
-def seed_run(store, days: list[date], *, basis: str = "mark_to_market") -> str:
+def seed_run(
+    store,
+    days: list[date],
+    *,
+    basis: str = "mark_to_market",
+    symbol: str = "SPY",
+    data_source: str = "catalog:firstrate-etf",
+) -> str:
     """A stored SPY run over ``days``: a drifting curve, a few trades, one still open."""
     values = [INITIAL * (1 + 0.0004 * (i % 37) - 0.0002 * (i % 11)) for i in range(len(days))]
     run = BacktestRun(
         run_id=uuid4(), strategy_name="Fixture", strategy_type="fixture",
-        instrument_symbol="SPY", start_date=datetime.combine(days[0], time(), timezone.utc),
+        instrument_symbol=symbol, start_date=datetime.combine(days[0], time(), timezone.utc),
         end_date=datetime.combine(days[-1], time(), timezone.utc),
-        initial_capital=Decimal(str(INITIAL)), data_source="catalog:firstrate-etf",
+        initial_capital=Decimal(str(INITIAL)), data_source=data_source,
         execution_status="success", execution_duration_seconds=Decimal("1"),
         config_snapshot={"metrics_basis": basis, "config": {}},
     )  # fmt: skip
@@ -342,3 +356,149 @@ async def test_a_changed_benchmark_bar_is_refused_not_silently_reread(server, st
     again = await _call(server, "run_regime_attribution", {"run_ids": [run_id], "as_of_build": 1})
     assert again["ok"] is False and again["error"]["code"] == "reference_bars_changed"
     assert "new_revision" in again["error"]["fix"]
+
+
+#: The phase 2 drift definition, verbatim: a default report must keep it.
+SIDE_DRIFT_TEXT = (
+    "benchmark daily return x the side held into each day (+1 long, -1 short, 0 flat), "
+    "mean x252; position size is not scaled"
+)
+
+
+async def test_the_default_payload_is_the_phase_2_payload(server, store, bars):
+    """No drift_scaling key anywhere unless asked for, and an explicit 'side' is the same
+    report, so every stored phase 2 report reproduces."""
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    default = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
+    side = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "side"}
+    )
+    for data in (default, side):
+        assert "drift_scaling" not in data and "drift_scaling" not in data["params"]
+        assert data["definitions"]["drift_return"] == SIDE_DRIFT_TEXT
+        assert data["overrides"] == {}
+    assert side["runs"] == default["runs"] and side["params"] == default["params"]
+    assert "mean_position_weight" not in default["runs"][0]["families"]["sma200"]["rows"][0]
+    with store() as session:
+        rows = session.scalars(select(RegimeReport)).all()
+        assert all("drift_scaling" not in r.params for r in rows)
+
+
+async def test_position_scaled_drift_is_recorded_and_moves_only_the_drift(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    plain = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
+    data = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+    )
+    assert data["ok"] is True and data["drift_scaling"] == "position"
+    assert data["params"]["drift_scaling"] == "position"
+    assert data["overrides"] == {} and data["declared_robustness_check"] is False
+    assert "position" in data["definitions"]["drift_return"]
+    assert "mean_position_weight" in data["definitions"]
+    rows = data["runs"][0]["families"]["sma200"]["rows"]
+    before = plain["runs"][0]["families"]["sma200"]["rows"]
+    drift = ("drift_return", "excess_vs_drift", "mean_position_weight")
+    for row, old in zip(rows, before):
+        assert "mean_position_weight" in row
+        assert {k: v for k, v in row.items() if k not in drift} == {
+            k: v for k, v in old.items() if k not in drift
+        }
+    with store() as session:
+        stored = session.scalars(
+            select(RegimeReport).where(RegimeReport.report_id == data["report_id"])
+        ).one()
+        assert stored.params["drift_scaling"] == "position"
+
+
+async def test_position_scaled_drift_needs_the_reference_to_be_the_traded_symbol(
+    server, store, bars
+):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300), symbol="QQQ")
+    data = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+    )
+    assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
+    assert "QQQ" in data["error"]["message"] and data["error"]["fix"]
+    plain = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
+    assert plain["ok"] is True
+
+
+async def test_position_scaled_drift_refuses_fx_and_futures_runs(server, store, bars):
+    """Quantity x close is not USD notional for a pair quoted in another currency, and no
+    futures multiplier is stored with a trade. A run from a catalog with no instrument row,
+    or from no catalog at all (its own instrument cannot be verified), is refused too:
+    eligibility is never guessed from a name."""
+    await _call(server, "build_regime_calendar")
+    with store() as session:
+        session.add_all([
+            CatalogInstrument(ticker="SPY", catalog_name="fut", asset_class="FUTURES",
+                              multiplier=Decimal("50"), currency="USD"),
+            CatalogInstrument(ticker="SPY", catalog_name="pairs", asset_class="FX",
+                              multiplier=Decimal("1"), currency="JPY"),
+        ])  # fmt: skip
+    for source in ("catalog:fut", "catalog:pairs", "catalog:unlisted", "ibkr"):
+        run_id = seed_run(store, _run_days(bars["frame"], 300), data_source=source)
+        data = await _call(
+            server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+        )
+        assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
+
+
+async def test_a_futures_reference_is_refused_whatever_its_catalog_is_called(server, store, bars):
+    """The calendar's own catalog is judged by its instrument row, not by a '-futures'
+    suffix: here 'firstrate-etf' records SPY as a 50x future."""
+    await _call(server, "build_regime_calendar")
+    with store() as session:
+        row = session.scalars(select(CatalogInstrument)).one()
+        row.asset_class, row.multiplier = "FUTURES", Decimal("50")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    data = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+    )
+    assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
+
+
+async def test_an_unsized_trade_is_a_structured_refusal(server, store, bars, monkeypatch):
+    """The trades table refuses a non-positive quantity (CHECK positive_quantity), so an
+    unsized record is simulated at the reader; the tool still answers with a code and fix."""
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    read = regime_reports._trades
+    monkeypatch.setattr(
+        regime_reports,
+        "_trades",
+        lambda session, sleeve: [replace(t, quantity=0.0) for t in read(session, sleeve)],
+    )
+    data = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "position"}
+    )
+    assert data["ok"] is False and data["error"]["code"] == "drift_scaling_unavailable"
+    assert data["error"]["fix"]
+    plain = await _call(server, "run_regime_attribution", {"run_ids": [run_id]})
+    assert plain["ok"] is True
+
+
+async def test_an_unknown_drift_scaling_is_refused_with_a_fix(server, store, bars):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    data = await _call(
+        server, "run_regime_attribution", {"run_ids": [run_id], "drift_scaling": "notional"}
+    )
+    assert data["ok"] is False and data["error"]["code"] == "invalid_drift_scaling"
+
+
+async def test_the_vault_note_names_position_scaled_drift_only_when_used(
+    server, store, bars, tmp_path
+):
+    await _call(server, "build_regime_calendar")
+    run_id = seed_run(store, _run_days(bars["frame"], 300))
+    folder = tmp_path / "vault" / "Lab" / "results"
+    for slug, extra in (("plain", {}), ("scaled", {"drift_scaling": "position"})):
+        data = await _call(server, "run_regime_attribution", {"run_ids": [run_id], **extra})
+        await _call(server, "export_results", {"slug": slug, "regime_report": data["report_id"]})
+    plain, scaled = ((folder / f"{s}.regime.md").read_text() for s in ("plain", "scaled"))
+    assert "Pos. weight" not in plain and "position-scaled" not in plain
+    assert "- drift: position-scaled" in scaled and "| Pos. weight |" in scaled

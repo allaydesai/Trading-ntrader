@@ -711,7 +711,8 @@ with/counter-trend split and, for several runs, correlation overall and per buck
 family's P&L sums to the run's. The report is stored append-only (`regime_reports`) with the
 calendar version, build and `labels_hash`, so `calendar_version` + `as_of_build` rerun it
 exactly; `export_results(slug, regime_report=<id>)` writes `<slug>.regime.json` and
-`<slug>.regime.md`.
+`<slug>.regime.md`. `drift_scaling="position"` weights the drift by the position actually
+carried in (quantity × previous close / previous equity) instead of +1 / −1 / 0 by side.
 
 A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
 for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →

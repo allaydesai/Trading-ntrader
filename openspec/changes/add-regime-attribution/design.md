@@ -121,6 +121,9 @@ the `ts_event` column of the Parquet files under `data/catalogs/`. Nothing was w
 | 2024-01-01 | 6,037 | yes |
 
 The same catalog has QQQ (from 2000-02-28), IWM (from 2000-05-30), TLT and GLD daily bars.
+QQQ got its own calendar in phase 2b (2026-11-27): ground truth v1 and detector v1 of the
+default definitions (the SPY v2 / v1 hashes), frozen volatility median 0.1778, detector labels
+from 2001-03-27 (`docs/agent/regime-attribution.md`, "QQQ data").
 `firstrate-futures` has ES and NQ daily bars from 2008-01-02. **No catalog has VIX.** The bars
 end at 2026-05-01, so any run past that date has unlabelled tail days. Whether the ETF bars are
 split- and dividend-adjusted is not recorded in the catalog. Phase 1 task 1.1 checks it, since
@@ -498,6 +501,44 @@ the same price series the strategy traded. If task 1.1 finds the ETF bars unadju
 dividends, both sides exclude dividends, so the drift comparison stays like for like. The
 report states which.
 
+### 5.6b Position-scaled drift (phase 2b, approved by Allay 2026-11-27)
+
+Phase 2's drift multiplied the reference's daily return by the side carried in (+1 / −1 / 0),
+whatever the size. A strategy holding 10% of equity was charged 100% of the market's move, so
+its `excess_vs_drift` was large and meaningless. The option `drift_scaling="position"` weights
+each day by the position actually carried in from the previous close:
+
+`w(d) = Σ_carried sign × quantity × close(d−1) / E(d−1)`, drift = mean(`r_ref(d)` × `w(d)`) × 252
+
+`close(d−1)` is the reference's last session close before *d* (a weekend carries Friday's).
+`E(d−1)` is the previous day's equity (initial capital on the first day). Same-day round trips
+weigh nothing, as in 5.5. Each row also gets `mean_position_weight`.
+
+- **Opt-in, so phase 2 reproduces.** The default stays `"side"`, and a default call writes no
+  `drift_scaling` key anywhere. A golden digest of the default `profile()` output, pinned from
+  `b6581df`, and a rerun of the six stored phase 2 reports (byte for byte) prove it. A
+  `"position"` report records `drift_scaling` in `params` and at the top level, swaps the
+  drift definition, and shows a "Pos. weight" column in the vault note. It is not an override:
+  no label, bucket, interval or outcome moves.
+- **Scope.** The quantity is marked at the reference's close, so the run must trade the
+  reference itself. A futures multiplier is not stored with the trade, and quantity × close of
+  an FX pair is in its quote currency (and levered). Eligibility is read from
+  `catalog_instruments` (the reference's row in the calendar's catalog and in the run's own:
+  ETF, STOCK or CRYPTO, multiplier 1 or none, USD or no quote currency), never from a catalog
+  name. A run on another symbol, on futures, on FX, without an instrument row or not read
+  from a catalog is refused
+  (`drift_scaling_unavailable`), and so is a trade without a quantity. `quantity` is the stored trade's, Nautilus's
+  peak size, so a position scaled in or out is overweighted on its smaller days (none of the
+  phase 2b baselines does; the report's definition says so).
+- **What it can and cannot say.** For a strategy that trades the reference, `w(d) × r_ref(d)`
+  *is* its close-to-close P&L on a carried day. Position-scaled drift therefore ≈ the
+  bucket's own return, and `excess_vs_drift` ≈ 0 apart from entry/exit-day fills and costs
+  (|excess| ≤ 1.1% a year on all five phase 2b baselines). It confirms that a bucket's P&L is
+  the exposure the strategy chose to hold there. It cannot separate timing skill inside a
+  bucket from beta; the spec's `drift_not_edge` rule (phase 4) needs a different comparator
+  for that, such as the run's *average* weight × the bucket's benchmark return. That is an
+  open question for Allay (section 13).
+
 ### 5.7 Trade view and alignment (phase 4)
 
 - **Trade view**: closed trades bucketed by the label in force on the entry day, using the
@@ -600,6 +641,7 @@ job). The benchmark parameter is `benchmark_symbol` plus `catalog`, as in
 | `label_set` | `label_set`: `"detector"` (default) or `"ground_truth"` | 2 | kept |
 | `lag_days`, `min_days`, `min_trades`, `bootstrap_samples` | kept. `lag_days: int \| None = None` (detector → 1; refused if given with ground truth, section 2). Others default 60, 20, 1000 | 2 | kept. `seed` (default 0) added for reproducible intervals, as `run_monte_carlo` has |
 | (new) `calendar_version` | optional int; latest by default | 2 | a report can pin an older version |
+| (new) `drift_scaling` | `"side"` (default, phase 2) or `"position"` (section 5.6b) | 2b | opt-in, so phase 2 reports reproduce |
 | (vault file) | `export_results(slug, regime_report=<report_id>)` writes `<slug>.regime.json` and `<slug>.regime.md` | 2 | additive option on the existing vault writer, so `NTRADER_MCP_EXPORT_FOLDERS` still governs writes |
 
 **Existing tools stay as they are.** `get_regime_breakdown` and `get_sleeve_correlation` keep
@@ -746,3 +788,14 @@ Allay answered these on 2026-11-26. Each entry keeps the question and records th
     that a re-cut, so the check is part of the build record. v1 stays stored as it is; the default definition is now
     0.2, and v1 is reached with `definition_overrides={"ground_truth": {"ranging_threshold":
     0.3}}`.
+15. **Drift comparator for `drift_not_edge` (phase 4). OPEN (raised 2026-11-27, phase 2b).**
+    Position-scaled drift (5.6b) is the strategy's own close-to-close P&L for a run that trades
+    the reference, so "return no higher than drift" is near-identity and can't flag edge.
+    Options: (a) the run's average position weight over the whole run × the bucket's benchmark
+    return (static beta: whatever beats it came from timing the exposure); (b) a buy-and-hold
+    run of the reference at the same average weight; (c) keep the ±1 side drift and accept that
+    it overstates sized strategies.
+16. **Crossed family at the stop rule. OPEN (raised 2026-11-27, phase 2b).** The extended
+    Bollinger runs show `strong_dependence` only in `cross`, whose scale is picked from the
+    data (widest up − down gap, minor on SPY, major on QQQ), never in a single family. Does a
+    data-picked cross count as "dependence" for the stop rule, or only as a lead for phase 4?

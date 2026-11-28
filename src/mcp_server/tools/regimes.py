@@ -94,6 +94,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         seed: int = 0,
         calendar_version: int | None = None,
         as_of_build: int | None = None,
+        drift_scaling: str = "side",
     ) -> dict[str, Any]:
         """Profile 1-10 stored runs by regime against the stored calendar; stores the report.
 
@@ -111,7 +112,11 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         output is hindsight: hindsight: true and stamp "hindsight, not tradeable". The
         report records calendar version, build_no and labels_hash; pass calendar_version
         and as_of_build to rerun it as of that snapshot. export_results(regime_report=...)
-        files it in the vault.
+        files it in the vault. drift_scaling='position' weights the drift by the position
+        actually carried in (quantity x previous close / previous equity; adds
+        mean_position_weight) instead of +1/-1/0 by side; it needs the run to trade the
+        reference itself, unlevered and USD-quoted, so not futures or FX
+        (drift_scaling_unavailable otherwise).
         """
         return await call(
             regime_reports.run_regime_attribution,
@@ -126,4 +131,5 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             seed,
             calendar_version,
             as_of_build,
+            drift_scaling,
         )
